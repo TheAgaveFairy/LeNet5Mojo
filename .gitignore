@@ -1,0 +1,11 @@
+
+# pixi environments
+.pixi
+*.egg-info
+
+models/
+scripts/
+results/*.csv
+*.save
+*.bak
+main
