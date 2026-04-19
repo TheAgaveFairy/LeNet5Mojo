@@ -4,31 +4,39 @@ from std.memory import memcpy
 from std.sys import stderr, simd_width_of, size_of
 from std.algorithm.functional import vectorize
 
-from lenet import IMAGE_SIZE, PADDED_SIZE, PADDING, ftype, sftype
+from lenet import IMAGE_SIZE, PADDED_SIZE, PADDING, ftype, sftype, nelts
 from arena import Allocator, BumpArenaAllocator as Arena
 
-comptime nelts = simd_width_of[ftype]()
 
 struct Image(ImplicitlyCopyable):
     """
     We need the images normalized and possibly padded from raw UInt8.
     """
+
     comptime PixelLayout = Layout.row_major(IMAGE_SIZE, IMAGE_SIZE)
-    comptime PixelStorage = InlineArray[UInt8, Self.PixelLayout.size()] # raw bytes
+    comptime PixelStorage = InlineArray[
+        UInt8, Self.PixelLayout.size()
+    ]  # raw bytes
 
     comptime DataLayout = Layout.row_major(PADDED_SIZE, PADDED_SIZE)
-    comptime DataTensor = LayoutTensor[ftype, Self.DataLayout, MutAnyOrigin] # normalized into ftype and padded
-    
-    var pixels: Self.DataTensor
-    var label: UInt8 # digits [0, 9] MNIST, could store as "Int"
+    comptime DataTensor = LayoutTensor[
+        ftype, Self.DataLayout, MutAnyOrigin
+    ]  # normalized into ftype and padded
 
-    def __init__(out self, raw: Self.PixelStorage, label: UInt8, mut arena: Arena):#Some[Allocator]):
-        comptime layout_size = Self.DataLayout.size() # materialize
+    var pixels: Self.DataTensor
+    var label: UInt8  # digits [0, 9] MNIST, could store as "Int"
+
+    def __init__(
+        out self, raw: Self.PixelStorage, label: UInt8, mut arena: Arena
+    ):  # Some[Allocator]):
+        comptime layout_size = Self.DataLayout.size()  # materialize
 
         if label > 9:
-            print("Error with image label:", label, file = stderr) # could raise
+            print("Error with image label:", label, file=stderr)  # could raise
         self.label = label
-        self.pixels = Self.DataTensor(arena.alloc[sftype](layout_size)).fill(0.0)
+        self.pixels = Self.DataTensor(arena.alloc[sftype](layout_size)).fill(
+            0.0
+        )
 
         # normalize
         Self._normalize(raw, self.pixels)
@@ -42,7 +50,9 @@ struct Image(ImplicitlyCopyable):
         self.label = copy.label
 
     @staticmethod
-    def _normalize[padded: Bool = True](raw: Self.PixelStorage, tensor: Self.DataTensor):
+    def _normalize[
+        padded: Bool = True
+    ](raw: Self.PixelStorage, tensor: Self.DataTensor):
         var sum: UInt64 = 0
         var std_sum: UInt64 = 0
 
@@ -68,4 +78,6 @@ struct Image(ImplicitlyCopyable):
             for c in range(IMAGE_SIZE):
                 var idx = r * IMAGE_SIZE + c
                 var curr = Float64(Int(raw[idx]))
-                tensor[r + PADDING, c + PADDING] = ((curr - mean) / std).cast[ftype]()
+                tensor[r + PADDING, c + PADDING] = ((curr - mean) / std).cast[
+                    ftype
+                ]()

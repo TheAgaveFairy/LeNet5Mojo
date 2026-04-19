@@ -3,6 +3,11 @@
 .pixi
 *.egg-info
 
+# thank you for the refactor help, Claude Opus 4.7
+.agents/
+.claude/
+
+ignoreme/
 models/
 scripts/
 results/*.csv

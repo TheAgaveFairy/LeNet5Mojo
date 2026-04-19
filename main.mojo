@@ -4,22 +4,24 @@ from std.sys import stderr
 from std.time import perf_counter_ns
 import std.os as os
 import std.benchmark as benchmark
-from gpu.host import DeviceContext
+from std.gpu.host import DeviceContext
 
 from image import Image
-from lenet import LeNet5, ftype, training, testing
-from lenetgpu import (
-    LeNet5GPU,
-    conv1FusedKernel,
-    conv2FusedKernel,
-    conv3FusedKernel,
-    maxPool1Kernel,
-    maxPool2Kernel,
-    matMulFusedKernel,
-    batchedForward,
-)
+from lenet import LeNet5, ftype
+from ops import training, testing
 
-from helpers import showProgress, reLu
+# from lenetgpu import (
+#     LeNet5GPU,
+#     conv1FusedKernel,
+#     conv2FusedKernel,
+#     conv3FusedKernel,
+#     maxPool1Kernel,
+#     maxPool2Kernel,
+#     matMulFusedKernel,
+#     batchedForward,
+# )
+
+from helpers import showProgress
 from dataloader import MNISTDataRepository
 from resultlogger import MultiFileLogger
 
@@ -35,14 +37,16 @@ def main():
     var data_repo = MNISTDataRepository()
     var logger = MultiFileLogger("results/")
 
-    ref train_data = data_repo.train_data # List[Image]
+    ref train_data = data_repo.train_data  # List[Image]
     ref test_data = data_repo.test_data
 
     var batch_sizes = [100]  # , 300, 600, 1000]
     print(len(batch_sizes), "Batch size test[s] to run")
     for b_sz in batch_sizes:  # range(tests_to_run):
         print("\tBatch size:", b_sz)
-        seed(0)  # for random, we could search for a better seed for our shuffleData
+        seed(
+            0
+        )  # for random, we could search for a better seed for our shuffleData
         data_repo.shuffleData(
             train_data, COUNT_TRAIN
         )  # "hope" for a golden ticket
@@ -90,6 +94,7 @@ def main():
         "CPU", elapsed, correct, COUNT_TRAIN, 1, saved_model_dtype
     )
 
+    _ = """
     var modelGPUfromCPU = LeNet5GPU(modelCPU)
 
     # print("Kernel Length:", LENGTH_KERNEL)
@@ -102,7 +107,8 @@ def main():
             print(
                 "\nDevice found:",
                 device_name,
-                ". Compiling kernels and testing...")
+                ". Compiling kernels and testing...",
+            )
             comptime batch_size = 50  # more than ~75 fails "uses too much parameter space"
 
             var conv1 = ctx.compile_function[
@@ -141,5 +147,7 @@ def main():
                 device_name, elapsed, correct, COUNT_TRAIN, batch_size, ftype
             )
     except e:
-        print("ERROR IN MAIN", e, file = stderr)
+        print("ERROR IN MAIN", e, file=stderr)
         # don't forget to tell "raise" what to raise, compiler doesn't handle that well
+    """
+    return

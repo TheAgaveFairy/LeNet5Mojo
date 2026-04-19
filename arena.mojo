@@ -17,6 +17,7 @@ from std.sys.info import size_of, align_of
 from std.testing import assert_equal, TestSuite
 from std.os import abort
 
+
 trait Allocator:
     def alloc[
         T: AnyType
