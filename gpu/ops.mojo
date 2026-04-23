@@ -5,27 +5,17 @@ from std.gpu.host import DeviceContext, DeviceFunction
 from std.gpu import thread_idx, block_idx, block_dim, barrier
 from std.gpu.memory import AddressSpace
 
-import lenet
-from lenet import LeNet5, ftype, sftype, act_fn
-from lenet import (
+from cpu.model import LeNet5
+from constants import (
+    ftype, sftype, act_fn,
     LENGTH_KERNEL,
-    LENGTH_FEATURE0,
-    LENGTH_FEATURE1,
-    LENGTH_FEATURE2,
-    LENGTH_FEATURE3,
-    LENGTH_FEATURE4,
-    LENGTH_FEATURE5,
-    INPUT,
-    LAYER1,
-    LAYER2,
-    LAYER3,
-    LAYER4,
-    LAYER5,
-    OUTPUT,
+    LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2,
+    LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5,
+    INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT,
     PADDED_SIZE,
 )
 from image import Image
-from lenetgpu import LeNet5GPU, FeatureGPU, FeatureGPUBuffers
+from gpu.model import LeNet5GPU, FeatureGPU, FeatureGPUBuffers
 
 comptime div_chans_conv2 = 8  # any lower uses too many resources
 comptime div_chans_conv3 = 8  # needs to be a factor of 120

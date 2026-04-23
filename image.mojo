@@ -4,8 +4,8 @@ from std.memory import memcpy
 from std.sys import stderr, simd_width_of, size_of
 from std.algorithm.functional import vectorize
 
-from lenet import IMAGE_SIZE, PADDED_SIZE, PADDING, ftype, sftype, nelts
-from arena import Allocator, BumpArenaAllocator as Arena
+from constants import IMAGE_SIZE, PADDED_SIZE, PADDING, ftype, sftype, nelts
+from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as Arena
 
 
 struct Image(ImplicitlyCopyable):

@@ -9,7 +9,7 @@ from std.testing import (
 )
 from std.random import seed, randn
 
-from lenet import ftype, sftype, nelts
+from constants import ftype, sftype, nelts
 
 
 # comptime activation_fn = fn(sftype) -> sftype # if was scalar

@@ -2,7 +2,7 @@ from std.python import Python, PythonObject
 from std.random import random_ui64
 
 from dataloader import MNISTDataRepository
-from lenet import PADDED_SIZE
+from constants import PADDED_SIZE
 
 
 # CLAUDE CODE VIBE CODED FILE 4.7 OPUS I THINK?

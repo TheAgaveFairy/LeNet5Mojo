@@ -14,45 +14,19 @@ from std.gpu import thread_idx, block_idx, block_dim, barrier
 from image import Image
 from resultlogger import MultiFileLogger, LeNet5Logger
 from helpers import showProgress  # , reLu, reLuGrad
-from arena import BumpArenaAllocator as Arena
-from activation_fn import ActivationFunction, ReLU
-
-# struct ModelParams():
-comptime LENGTH_KERNEL = 5
-comptime LENGTH_KERNEL_SQ = LENGTH_KERNEL * LENGTH_KERNEL
-
-comptime LENGTH_FEATURE0 = 32
-comptime LENGTH_FEATURE1 = (LENGTH_FEATURE0 - LENGTH_KERNEL + 1)
-comptime LENGTH_FEATURE2 = (LENGTH_FEATURE1 >> 1)
-comptime LENGTH_FEATURE3 = (LENGTH_FEATURE2 - LENGTH_KERNEL + 1)
-comptime LENGTH_FEATURE4 = (LENGTH_FEATURE3 >> 1)
-comptime LENGTH_FEATURE5 = (LENGTH_FEATURE4 - LENGTH_KERNEL + 1)
-
-comptime INPUT = 1
-comptime LAYER1 = 6
-comptime LAYER2 = LAYER1
-comptime LAYER3 = 16
-comptime LAYER4 = LAYER3
-comptime LAYER5 = 120
-comptime OUTPUT = 10
-
-comptime NUM_WEIGHTS = 51902  # can be calculated but we're just hardcoding for some easier checks at load/save
-
-comptime ALPHA = 0.5
-comptime PADDING = 2
-
-comptime IMAGE_SIZE = 28  # as we read it in from the file, its padded to LENGTH_FEATURE0 (a.k.a. PADDED_SIZE)
-comptime PADDED_SIZE = IMAGE_SIZE + 2 * PADDING  # 32 x 32 is what we want eventually # this should equal LENGTH_FEATURE0
-
-# try changing this to float64 or bf16, etc
-comptime ftype = DType.float32  # model's internal float type
-comptime sftype = Scalar[ftype]
-comptime nelts = simd_width_of[ftype]()
-
-comptime act_fn: ActivationFunction = ReLU
+from cpu.arena import CPUBumpArenaAllocator as CPUArena
+from activation_fn import ActivationFunction
+from constants import (
+    ftype, sftype, nelts, act_fn,
+    LENGTH_KERNEL, LENGTH_KERNEL_SQ,
+    LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2,
+    LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5,
+    INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT,
+    NUM_WEIGHTS, ALPHA, PADDING, IMAGE_SIZE, PADDED_SIZE,
+)
 
 
-struct LeNet5(Copyable):
+struct LeNet5[Allocator: CPUAllocator = CPUArena](Copyable):
     """
     The LeNet5 model. In the actual LeCun et al implementation, there is some
     notable sparsity in final layers that is not in this version, as well as
@@ -62,7 +36,7 @@ struct LeNet5(Copyable):
     the stack.
     """
 
-    var arena: Arena
+    var arena: Self.Allocator # might not actually be an 'arena' per se, but that's the default
 
     # WEIGHTS
     comptime w01_layout = Layout.row_major(
@@ -121,7 +95,7 @@ struct LeNet5(Copyable):
         to zeroes.
         """
         var num_bytes = Self._calcArenaSize()
-        self.arena = Arena(num_bytes)
+        self.arena = Allocator(num_bytes)
 
         # weights
         self.weight0_1 = LayoutTensor[ftype, Self.w01_layout, MutAnyOrigin](
@@ -336,13 +310,13 @@ struct LeNet5(Copyable):
             return model^
 
 
-struct Feature:
+struct Feature[Allocator: CPUAllocator = CPUArena]():
     """
     These buffers hold intermediate results. Wish it could easily be on the stack
     instead of heap, not sure about how to make that happen.
     """
 
-    var arena: Arena
+    var arena: Self.Allocator
 
     comptime input_layout = Layout.row_major(
         INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0
@@ -401,7 +375,7 @@ struct Feature:
         """
         Needs to start as all zeros.
         """
-        self.arena = Arena(Self._calcArenaSize())
+        self.arena = Self.Allocator(Self._calcArenaSize())
 
         self.input = LayoutTensor[ftype, Self.input_layout, MutAnyOrigin](
             self.arena.alloc[sftype](comptime (Self.input_layout.size()))

@@ -7,8 +7,9 @@ import std.benchmark as benchmark
 from std.gpu.host import DeviceContext
 
 from image import Image
-from lenet import LeNet5, ftype
-from ops import training, testing
+from cpu.model import LeNet5
+from constants import ftype
+from cpu.ops import training, testing
 
 # from lenetgpu import (
 #     LeNet5GPU,
@@ -48,7 +49,7 @@ def main():
             0
         )  # for random, we could search for a better seed for our shuffleData
         data_repo.shuffleData(
-            train_data, COUNT_TRAIN
+                train_data, COUNT_TRAIN # doesnt want to turn list into a Span #FIXME: here
         )  # "hope" for a golden ticket
 
         var model = LeNet5()

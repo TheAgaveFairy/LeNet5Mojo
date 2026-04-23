@@ -4,9 +4,8 @@ from std.memory import memcpy
 from std.sys import size_of, stderr
 
 from image import Image
-from arena import Allocator, BumpArenaAllocator as Arena
-from lenet import ftype, sftype
-
+from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as Arena
+from constants import ftype, sftype
 
 struct MNISTDataRepository:
     comptime COUNT_TRAIN = 60000

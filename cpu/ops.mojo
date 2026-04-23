@@ -2,7 +2,12 @@ from layout import LayoutTensor, Layout
 from std.math import exp, sqrt, log
 from std.algorithm.functional import vectorize
 
-from lenet import LeNet5, Feature, ftype, sftype, nelts, act_fn, PADDED_SIZE
+from std.time import perf_counter_ns
+from helpers import showProgress
+from resultlogger import LeNet5Logger
+
+from cpu.model import LeNet5, Feature
+from constants import ftype, sftype, nelts, act_fn, PADDED_SIZE, ALPHA
 from image import Image
 
 
@@ -646,7 +651,7 @@ def training[
     T: LeNet5Logger
 ](
     mut model: LeNet5,
-    data: UnsafePointer[Image],
+    data: UnsafePointer[Image, _],
     batch_size: Int,
     total_size: Int,
     mut logger: T,
@@ -671,7 +676,7 @@ def training[
 
 def training(
     mut model: LeNet5,
-    data: UnsafePointer[Image],
+    data: UnsafePointer[Image, _],
     batch_size: Int,
     total_size: Int,
 ):
@@ -681,7 +686,7 @@ def training(
         _ = trainBatch(model, data + i, batch_size)
 
 
-def testing(model: LeNet5, data: UnsafePointer[Image], total_size: Int) -> Int:
+def testing(model: LeNet5, data: UnsafePointer[Image, _], total_size: Int) -> Int:
     var correct = 0
     for i in range(total_size):
         var pred = predict(model, data[i])

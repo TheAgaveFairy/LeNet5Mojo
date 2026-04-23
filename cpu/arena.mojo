@@ -8,7 +8,7 @@ from std.reflection import (
 )
 
 # from attention import Weights, ModelParams
-from lenet import ftype, sftype  # , token_itype
+from constants import ftype, sftype
 
 # for allocation arena
 from std.memory import memset_zero
@@ -18,7 +18,7 @@ from std.testing import assert_equal, TestSuite
 from std.os import abort
 
 
-trait Allocator:
+trait CPUAllocator:
     def alloc[
         T: AnyType
     ](mut self, count: Int) -> UnsafePointer[T, MutAnyOrigin]:
@@ -31,7 +31,7 @@ trait Allocator:
         ...
 
 
-struct BumpArenaAllocator(Allocator, Copyable, ImplicitlyCopyable):
+struct CPUBumpArenaAllocator(CPUAllocator, Copyable, ImplicitlyCopyable):
     comptime __copyinit__is_trivial = True
     comptime __moveinit__is_trivial = True
     # TODO: return Spans?
@@ -136,7 +136,7 @@ def printTypeInfo[T: DType]():
 
 def test_allocator_offsets() raises:
     var size_in_bytes = 12 * size_of[sftype]() + size_of[sitype]() * 3
-    var c_arena = BumpArenaAllocator(size_in_bytes)
+    var c_arena = CPUBumpArenaAllocator(size_in_bytes)
     try:
         var p0 = c_arena.alloc[sftype](5)
         var p1 = c_arena.alloc[sftype](7)
@@ -168,7 +168,7 @@ def test_allocation_failure() raises:
 
 
 def test_allocator_clear() raises:
-    var arena = BumpArenaAllocator(128)
+    var arena = CPUBumpArenaAllocator(128)
     var ptr = arena.alloc[sitype](10)
     for i in range(10):
         ptr[i] = 69
@@ -178,7 +178,7 @@ def test_allocator_clear() raises:
 
 
 def test_allocator_reset() raises:
-    var arena = BumpArenaAllocator(128)
+    var arena = CPUBumpArenaAllocator(128)
     var ptr0 = arena.alloc[UInt8](128)
     arena.reset()
     var ptr1 = arena.alloc[UInt8](128)
@@ -187,14 +187,14 @@ def test_allocator_reset() raises:
 
 def test_nested_arena():
     var tc = TestContainer()  # allocates Arena itself
-    var tw_arena = BumpArenaAllocator(7 * size_of[sftype]())
+    var tw_arena = CPUBumpArenaAllocator(7 * size_of[sftype]())
     var tw = TestWeights(tw_arena)
 
     print(tw.a.ptr, tc.a.ptr, tc.sub_weights.a.ptr)
 
 
 struct TestWeights(Weights):
-    var arena: BumpArenaAllocator
+    var arena: CPUBumpArenaAllocator
 
     comptime layout = Layout.row_major(7)
     var a: LayoutTensor[ftype, Self.layout, MutAnyOrigin]
@@ -211,7 +211,7 @@ struct TestWeights(Weights):
 
     @staticmethod
     def initRandom(
-        out self: Self, arena: BumpArenaAllocator, std: Float64 = 0.02
+        out self: Self, arena: CPUBumpArenaAllocator, std: Float64 = 0.02
     ):
         self = Self(arena)
         _ = self.a.fill(1.0)
@@ -221,7 +221,7 @@ struct TestWeights(Weights):
 
 
 struct TestContainer:
-    var arena: BumpArenaAllocator
+    var arena: CPUBumpArenaAllocator
 
     comptime layout = Layout.row_major(5)
     var a: LayoutTensor[ftype, Self.layout, MutAnyOrigin]

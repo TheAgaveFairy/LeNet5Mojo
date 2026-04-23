@@ -4,23 +4,13 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.builtin.device_passable import DevicePassable
 from std.reflection import get_type_name
 
-from lenet import LeNet5, ftype, sftype
-from lenet import (
-    LENGTH_KERNEL,
-    LENGTH_KERNEL_SQ,
-    LENGTH_FEATURE0,
-    LENGTH_FEATURE1,
-    LENGTH_FEATURE2,
-    LENGTH_FEATURE3,
-    LENGTH_FEATURE4,
-    LENGTH_FEATURE5,
-    INPUT,
-    LAYER1,
-    LAYER2,
-    LAYER3,
-    LAYER4,
-    LAYER5,
-    OUTPUT,
+from cpu.model import LeNet5
+from constants import (
+    ftype, sftype,
+    LENGTH_KERNEL, LENGTH_KERNEL_SQ,
+    LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2,
+    LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5,
+    INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT,
     PADDED_SIZE,
 )
 from image import Image
