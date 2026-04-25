@@ -52,7 +52,7 @@ struct LeNet5(Copyable):
     the stack.
     """
 
-    #var arena: Self.Allocator  # might not actually be an 'arena' per se, but that's the default
+    # var arena: Self.Allocator  # might not actually be an 'arena' per se, but that's the default
     var used_external_allocator: Bool
 
     # WEIGHTS
@@ -134,17 +134,16 @@ struct LeNet5(Copyable):
             alloc[sftype](comptime (Self.b56_layout.size()))
         ).fill(0.0)
 
-
-    def __init__(out self, mut arena: Some[CPUAllocator]): # raises
+    def __init__(out self, mut arena: Some[CPUAllocator]):  # raises
         """
         Initialize to all zeros, for training you'll want to randomizeWeights(),
         or for inference, read in from a file. Only biases really need to be set
         to zeroes.
         """
-        #var num_bytes = Self._calcArenaSize()
-        #if (arena.capacity - arena.offset) < num_bytes:
+        # var num_bytes = Self._calcArenaSize()
+        # if (arena.capacity - arena.offset) < num_bytes:
         #    raise Error("Arena not large enough")
-        #arena = Self.Allocator(num_bytes)
+        # arena = Self.Allocator(num_bytes)
 
         self.used_external_allocator = True
         # weights
@@ -174,6 +173,9 @@ struct LeNet5(Copyable):
             arena.alloc[sftype](comptime (Self.b56_layout.size()))
         ).fill(0.0)
 
+    def zero(mut self):
+        self.weight0_1.fill(0.0) #TODO: finish
+
     def __init__(out self, *, copy: Self):
         print("model shallow copy")
         self.used_external_allocator = copy.used_external_allocator
@@ -187,7 +189,7 @@ struct LeNet5(Copyable):
         self.bias5_6 = copy.bias5_6
 
     def __del__(deinit self):
-        #print("Model __del__")
+        # print("Model __del__")
         if not self.used_external_allocator:
             self.weight0_1.ptr.free()
             self.weight2_3.ptr.free()
@@ -198,9 +200,14 @@ struct LeNet5(Copyable):
             self.bias4_5.ptr.free()
             self.bias5_6.ptr.free()
 
-
     @staticmethod
-    def _accumHelper[x: Layout](accum: LayoutTensor[ftype, x, MutAnyOrigin], other: LayoutTensor[ftype, x, _], lr: sftype):
+    def _accumHelper[
+        x: Layout
+    ](
+        accum: LayoutTensor[ftype, x, MutAnyOrigin],
+        other: LayoutTensor[ftype, x, _],
+        lr: sftype,
+    ):
         comptime N = x.size()
         _ = """
         var a = accum.ptr
@@ -208,16 +215,20 @@ struct LeNet5(Copyable):
         for i in range(N):
             a[i] += (b[i] * lr)
         """
+
         @parameter
         def vectorize_closure[width: Int](i: Int) unified {read}:
             var lrs = SIMD[ftype, width](lr)
-            var a_nums = accum.ptr.load[width = width](i)
-            var b_nums = other.ptr.load[width = width](i)
+            var a_nums = accum.ptr.load[width=width](i)
+            var b_nums = other.ptr.load[width=width](i)
             var result = a_nums + b_nums * lrs
-            accum.ptr.store[width = width](i, result)
+            accum.ptr.store[width=width](i, result)
+
         vectorize[nelts](comptime (N), vectorize_closure)
 
-    def accumulateFromOther(mut self, other: Self, lr: sftype): # TODO: needs compiler / stdlib fix
+    def accumulateFromOther(
+        mut self, other: Self, lr: sftype
+    ):  # TODO: needs compiler / stdlib fix
         """
         For taking in errors / deltas during backward pass with learning rate.
         self.weight0_1 += other.weight0_1 * lr # EXPLODES COMPILE TIMES
@@ -240,18 +251,20 @@ struct LeNet5(Copyable):
         var data = Span(ptr=tensor.ptr, length=comptime (N))
         rand(data, min=-1.0, max=1.0)  # uniform distribution
         # FIXME: compile times might slow down from these LayoutTensor math ops
-        #tensor *= sftype(sqrt(6.0)) / scale  # from the paper
+        # tensor *= sftype(sqrt(6.0)) / scale  # from the paper
         _ = """
         for i in range(comptime(tensor.layout.size())):
             tensor.ptr[i] *= sftype(sqrt(6.0)) / scale
         """
+
         @parameter
         def vectorize_closure[width: Int](i: Int) unified {read}:
             comptime sixes = SIMD[ftype, width](6.0)
             var scales = SIMD[ftype, width](scale)
-            var nums = tensor.ptr.load[width = width](i)
+            var nums = tensor.ptr.load[width=width](i)
             var result = nums * sqrt(sixes / scales)
-            tensor.ptr.store[width = width](i, result)
+            tensor.ptr.store[width=width](i, result)
+
         vectorize[nelts](comptime (N), vectorize_closure)
 
     def randomizeWeights(mut self):
@@ -283,10 +296,12 @@ struct LeNet5(Copyable):
         ]()  # 4 bytes for Float32, 8 for F64, etc
         comptime num_elems = num_bytes // f_sz
 
-        comptime assert num_elems == tensor.layout.size(), "FATAL ERROR CONVERTING BYTES TO TENSOR"
+        comptime assert (
+            num_elems == tensor.layout.size()
+        ), "FATAL ERROR CONVERTING BYTES TO TENSOR"
 
         # FIXME: comptime unrolling might slow compilation for a large LayoutTensor
-        for i in range(comptime(tensor.layout.size())):
+        for i in range(comptime (tensor.layout.size())):
             var buffer = InlineArray[Byte, size_of[Scalar[filetype]]()](fill=0)
             comptime for bi in range(f_sz):
                 var temp_idx = i * f_sz + bi
@@ -326,9 +341,13 @@ struct LeNet5(Copyable):
                     var buffer = InlineArray[
                         Scalar[DType.uint8], bytes_to_read
                     ](uninitialized=True)
-                    #for i in range(bytes_to_read):
+                    # for i in range(bytes_to_read):
                     #    buffer[i] = bytes[i]  # memcpy
-                    memcpy(src = bytes.unsafe_ptr(), dest = buffer.unsafe_ptr(), count = bytes_to_read)
+                    memcpy(
+                        src=bytes.unsafe_ptr(),
+                        dest=buffer.unsafe_ptr(),
+                        count=bytes_to_read,
+                    )
                     Self.bytesToFType[filetype, bytes_to_read, layout](
                         buffer, weights
                     )
@@ -346,7 +365,7 @@ struct LeNet5(Copyable):
             print("error at reading lenet5 from file", e)
 
 
-struct Feature():
+struct Feature:
     """
     These buffers hold intermediate results.
     """
@@ -396,7 +415,6 @@ struct Feature():
             + Self.output_layout.size()
         )
         return n * size_of[ftype]()
-
 
     def __init__(out self):
         """
@@ -450,6 +468,5 @@ struct Feature():
             arena.alloc[sftype](comptime (Self.output_layout.size()))
         ).fill(0.0)
 
-    #def __del__(deinit self):
+    # def __del__(deinit self):
     #    pass
-

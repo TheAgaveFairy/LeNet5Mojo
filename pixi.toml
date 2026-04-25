@@ -9,6 +9,7 @@ version = "0.2.0"
 formatall = "mojo format *.mojo; mojo format cpu/*.mojo; mojo format gpu/*mojo"
 
 [dependencies]
-mojo = ">=0.26.3.0.dev2026041520,<0.27"
+#mojo = ">=0.26.3.0.dev2026041520,<0.27"
 matplotlib = "*"
 numpy = "*"
+mojo = ">=1.0.0b1.dev2026042405,<2"

@@ -36,7 +36,9 @@ struct MNISTDataRepository:
         comptime image_size_in_bytes = size_of[
             ftype
         ]() * Image.DataTensor.layout.size()
-        self.pixel_arena = Arena(image_size_in_bytes * (Self.COUNT_TRAIN + Self.COUNT_TEST))
+        self.pixel_arena = Arena(
+            image_size_in_bytes * (Self.COUNT_TRAIN + Self.COUNT_TEST)
+        )
         self.test_data = List[Image](capacity=Self.COUNT_TEST)
         self.train_data = List[Image](capacity=Self.COUNT_TRAIN)
         try:

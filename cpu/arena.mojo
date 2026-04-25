@@ -35,8 +35,8 @@ trait CPUAllocator(Copyable, ImplicitlyCopyable):
 
 
 struct CPUBumpArenaAllocator(CPUAllocator):
-    comptime __copyinit__is_trivial = True
-    comptime __moveinit__is_trivial = True
+    #comptime __copyinit__is_trivial = True
+    #comptime __moveinit__is_trivial = True
     # TODO: return Spans?
     """
     Simple bump allocator. Minor design help from Claude 4.5.

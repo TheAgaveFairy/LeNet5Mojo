@@ -247,27 +247,34 @@ def convoluteBackward[
 
 
 def convoluteValid[
-        #feat_size: Int,
-        #kernel_size: Int,
-        k_layout: Layout,
-        i_layout: Layout,
-        r_layout: Layout
+    # feat_size: Int,
+    # kernel_size: Int,
+    k_layout: Layout,
+    i_layout: Layout,
+    r_layout: Layout,
 ](
-    kernel: LayoutTensor[ftype, k_layout, _], # (kernel_size, kernel_size)
-    image: LayoutTensor[ftype, i_layout, _], # (feat_size, feat_size)
+    kernel: LayoutTensor[ftype, k_layout, _],  # (kernel_size, kernel_size)
+    image: LayoutTensor[ftype, i_layout, _],  # (feat_size, feat_size)
     result: LayoutTensor[
         ftype,
         r_layout,
         MutAnyOrigin,
-    ], # (out_size, out_size) == (feat - kern + 1, feat - kern + 1)
+    ],  # (out_size, out_size) == (feat - kern + 1, feat - kern + 1)
 ) -> None:
-    comptime assert kernel.shape[0]() == kernel.shape[1](), "Kernel shape incorrect."
-    comptime assert image.shape[0]() == image.shape[1](), "Image shape incorrect."
-    comptime assert result.shape[0]() == result.shape[1](), "Result shape incorrect."
+    comptime assert (
+        kernel.shape[0]() == kernel.shape[1]()
+    ), "Kernel shape incorrect."
+    comptime assert (
+        image.shape[0]() == image.shape[1]()
+    ), "Image shape incorrect."
+    comptime assert (
+        result.shape[0]() == result.shape[1]()
+    ), "Result shape incorrect."
     comptime kernel_size = kernel.shape[0]()
     comptime feat_size = image.shape[1]()
-    comptime assert result.shape[0]() == (feat_size - kernel_size + 1), "Incorrect shapes."
-
+    comptime assert result.shape[0]() == (
+        feat_size - kernel_size + 1
+    ), "Incorrect shapes."
 
     comptime for i in range(result.shape[0]()):  # each output pixel row
         comptime for j in range(result.shape[1]()):  # each output pixel column
@@ -281,26 +288,30 @@ def convoluteValid[
 
 
 def convoluteFull[
-        k_layout: Layout,
-        i_layout: Layout,
-        r_layout: Layout
+    k_layout: Layout, i_layout: Layout, r_layout: Layout
 ](
-    kernel: LayoutTensor[ftype, k_layout, _], # (kernel_size, kernel_size)
+    kernel: LayoutTensor[ftype, k_layout, _],  # (kernel_size, kernel_size)
     image: LayoutTensor[
         ftype,
-        i_layout, # (feat - kern + 1, feat - kern + 1)
+        i_layout,  # (feat - kern + 1, feat - kern + 1)
         _,
     ],
-    result: LayoutTensor[
-        ftype, r_layout, MutAnyOrigin # (feat, feat)
-    ],
+    result: LayoutTensor[ftype, r_layout, MutAnyOrigin],  # (feat, feat)
 ) -> None:
-    comptime assert kernel.shape[0]() == kernel.shape[1](), "Kernel shape incorrect."
-    comptime assert image.shape[0]() == image.shape[1](), "Image shape incorrect."
-    comptime assert result.shape[0]() == result.shape[1](), "Result shape incorrect."
+    comptime assert (
+        kernel.shape[0]() == kernel.shape[1]()
+    ), "Kernel shape incorrect."
+    comptime assert (
+        image.shape[0]() == image.shape[1]()
+    ), "Image shape incorrect."
+    comptime assert (
+        result.shape[0]() == result.shape[1]()
+    ), "Result shape incorrect."
     comptime feat_size = result.shape[0]()
     comptime kernel_size = kernel.shape[0]()
-    comptime assert image.shape[0]() == (feat_size - kernel_size + 1), "Incorrect shapes."
+    comptime assert image.shape[0]() == (
+        feat_size - kernel_size + 1
+    ), "Incorrect shapes."
 
     comptime for i in range(image.shape[0]()):  # each input pixel row
         for j in range(image.shape[1]()):  # each input pixel column
@@ -381,9 +392,7 @@ def convoluteForward[
                 )  # FIXME: submit bug report (docs expect IndexList, not Int)
             )
 
-            convoluteValid(
-                kern_slice, image_slice, result_slice
-            )
+            convoluteValid(kern_slice, image_slice, result_slice)
 
     # activation function (named "action")
     comptime for c in range(result.shape[0]()):
@@ -564,8 +573,12 @@ def matmulForward[
 
 
 def loadInput(features: Feature, image: Image):
-    memcpy(src = image.pixels.ptr, dest = features.input.ptr, count = PADDED_SIZE * PADDED_SIZE)
-    #for i in range(PADDED_SIZE):
+    memcpy(
+        src=image.pixels.ptr,
+        dest=features.input.ptr,
+        count=PADDED_SIZE * PADDED_SIZE,
+    )
+    # for i in range(PADDED_SIZE):
     #    for j in range(PADDED_SIZE):
     #        features.input[0, i, j] = image.pixels[i, j]
 
@@ -675,8 +688,8 @@ def trainBatch(
     var feat_arena = CPUArena(Feature._calcArenaSize() * 2)
     var delta_arena = CPUArena(LeNet5._calcArenaSize())
     # zero out the arenas
-    #feat_arena.clear()
-    #delta_arena.clear()
+    # feat_arena.clear()
+    # delta_arena.clear()
 
     var feat = Feature(feat_arena)
     var errors = Feature(feat_arena)
@@ -695,7 +708,7 @@ def trainBatch(
         loadTarget(feat, errors, the_label)
         backward(model, deltas, errors, feat)
         buffer.accumulateFromOther(deltas, 1.0)
-        
+
         feat_arena.clear()
         delta_arena.clear()
 
@@ -707,7 +720,12 @@ def trainBatch(
     return Tuple[Int, Float32](correct, avg_loss)
 
 
-def training(mut model: LeNet5, data: List[Image], batch_size: Int, mut logger: Some[LeNet5Logger]):
+def training(
+    mut model: LeNet5,
+    data: List[Image],
+    batch_size: Int,
+    mut logger: Some[LeNet5Logger],
+):
     # print("Training")
     var total_size = len(data)
     for i in range(0, total_size, batch_size):

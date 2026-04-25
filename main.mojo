@@ -40,17 +40,15 @@ def main():
     var data_repo = MNISTDataRepository()
     var logger = MultiFileLogger("results/")
 
-    var batch_sizes = [10]  # 100, 300, 600, 1000]
+    var batch_sizes = [100]  # 100, 300, 600, 1000]
     print(len(batch_sizes), "Batch size test[s] to run")
     for b_sz in batch_sizes:  # range(tests_to_run):
         print("\tBatch size:", b_sz)
-        seed(
-            0
-        )  # seeds 'random', we could 'search' for a better seed
+        seed(0)  # seeds 'random', we could 'search' for a better seed
         data_repo.shuffle()
 
         var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
-        var model = LeNet5(arena)
+        var model = LeNet5()#arena)
         model.randomizeWeights()
 
         var start_time = perf_counter_ns()
