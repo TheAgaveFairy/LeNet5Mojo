@@ -3,9 +3,9 @@ from std.testing import assert_equal, assert_true, TestSuite
 from std.sys.info import size_of
 from std.math import abs
 
-from lenet import ftype, sftype
-from arena import BumpArenaAllocator as Arena
-from ops import (
+from constants import ftype, sftype
+from cpu import CPUBumpArenaAllocator as Arena
+from cpu.ops import (
     argMax,
     crossEntropyLoss,
     crossEntropyLossSIMD,

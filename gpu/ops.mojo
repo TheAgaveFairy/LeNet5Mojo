@@ -7,11 +7,23 @@ from std.gpu.memory import AddressSpace
 
 from cpu.model import LeNet5
 from constants import (
-    ftype, sftype, act_fn,
+    ftype,
+    sftype,
+    act_fn,
     LENGTH_KERNEL,
-    LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2,
-    LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5,
-    INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT,
+    LENGTH_FEATURE0,
+    LENGTH_FEATURE1,
+    LENGTH_FEATURE2,
+    LENGTH_FEATURE3,
+    LENGTH_FEATURE4,
+    LENGTH_FEATURE5,
+    INPUT,
+    LAYER1,
+    LAYER2,
+    LAYER3,
+    LAYER4,
+    LAYER5,
+    OUTPUT,
     PADDED_SIZE,
 )
 from image import Image

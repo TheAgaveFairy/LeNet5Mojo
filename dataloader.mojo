@@ -7,6 +7,7 @@ from image import Image
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as Arena
 from constants import ftype, sftype
 
+
 struct MNISTDataRepository:
     comptime COUNT_TRAIN = 60000
     comptime COUNT_TEST = 10000
@@ -35,10 +36,7 @@ struct MNISTDataRepository:
         comptime image_size_in_bytes = size_of[
             ftype
         ]() * Image.DataTensor.layout.size()
-        self.pixel_arena = Arena(
-            image_size_in_bytes * (Self.COUNT_TRAIN + Self.COUNT_TEST)
-        )
-
+        self.pixel_arena = Arena(image_size_in_bytes * (Self.COUNT_TRAIN + Self.COUNT_TEST))
         self.test_data = List[Image](capacity=Self.COUNT_TEST)
         self.train_data = List[Image](capacity=Self.COUNT_TRAIN)
         try:
@@ -99,8 +97,12 @@ struct MNISTDataRepository:
         except e:
             print("Error with input binary files:", e, file=stderr)
 
+    # Shuffle helpers
+
+    comptime seed_default = 69
+
     @staticmethod
-    def shuffleData(mut data: Span[Image, MutAnyOrigin], seed: Int = 69):
+    def _shuffleData(mut data: List[Image], seed: Int = Self.seed_default):
         """
         Not needed, but I / Claude wrote it just to play around and learn.
         """
@@ -116,3 +118,7 @@ struct MNISTDataRepository:
             var temp = data[i]
             data[i] = data[j]
             data[j] = temp
+
+    def shuffle(mut self, seed: Int = Self.seed_default):
+        Self._shuffleData(self.train_data, seed)
+        # Self.shuffleData(self.test_data, seed) # not sure why you'd want to

@@ -18,7 +18,10 @@ from std.testing import assert_equal, TestSuite
 from std.os import abort
 
 
-trait CPUAllocator:
+trait CPUAllocator(Copyable, ImplicitlyCopyable):
+    def __init__(out self, capacity_bytes: Int):
+        ...
+
     def alloc[
         T: AnyType
     ](mut self, count: Int) -> UnsafePointer[T, MutAnyOrigin]:
@@ -31,7 +34,7 @@ trait CPUAllocator:
         ...
 
 
-struct CPUBumpArenaAllocator(CPUAllocator, Copyable, ImplicitlyCopyable):
+struct CPUBumpArenaAllocator(CPUAllocator):
     comptime __copyinit__is_trivial = True
     comptime __moveinit__is_trivial = True
     # TODO: return Spans?
@@ -42,25 +45,32 @@ struct CPUBumpArenaAllocator(CPUAllocator, Copyable, ImplicitlyCopyable):
     var capacity: Int
     var offset: Int
 
+    def __init__(out self, capacity_bytes: Int):
+        self.buffer = alloc[UInt8](capacity_bytes)
+        self.capacity = capacity_bytes
+        self.offset = 0
+
     def __init__(
-        out self, capacity_bytes: Int, extra_space_factor: Float64 = 0.0
-    ):
+        out self, capacity_bytes: Int, extra_space_factor: Float64
+    ) raises:
         if extra_space_factor < 0.0:
             print("ARENA INIT ERROR! extra_space_factor < 0.0", file=stderr)
-            # TODO: Abort?
+            raise Error("Arena init error. extra_space_factor < 0.0")
 
         var expanded_size = capacity_bytes + Int(
             Float64(capacity_bytes) * extra_space_factor
         )
-        self.buffer = alloc[UInt8](expanded_size)
-        self.capacity = capacity_bytes
-        self.offset = 0
+        return Self(expanded_size)
+
+        # self.buffer = alloc[UInt8](expanded_size)
+        # self.capacity = capacity_bytes
+        # self.offset = 0
 
     def __del__(deinit self):
         # TODO: I think we can reinstate the self-clearing
-        # print("BumpArenaAllocator __del__()")
+        # print("BumpArenaAllocator __del__()"
+        self.buffer.free()
         pass
-        # self.buffer.free()
 
     def alloc[
         T: AnyType

@@ -10,6 +10,7 @@ from image import Image
 from cpu.model import LeNet5
 from constants import ftype
 from cpu.ops import training, testing
+from cpu.arena import CPUBumpArenaAllocator
 
 # from lenetgpu import (
 #     LeNet5GPU,
@@ -34,68 +35,74 @@ comptime COUNT_TEST = MNISTDataRepository.COUNT_TEST
 
 
 def main():
+    print("claude --resume whatonearth")
     print("CPU Testing")  # , num_logical_cores())
     var data_repo = MNISTDataRepository()
     var logger = MultiFileLogger("results/")
 
-    ref train_data = data_repo.train_data  # List[Image]
-    ref test_data = data_repo.test_data
-
-    var batch_sizes = [100]  # , 300, 600, 1000]
+    var batch_sizes = [10]  # 100, 300, 600, 1000]
     print(len(batch_sizes), "Batch size test[s] to run")
     for b_sz in batch_sizes:  # range(tests_to_run):
         print("\tBatch size:", b_sz)
         seed(
             0
-        )  # for random, we could search for a better seed for our shuffleData
-        data_repo.shuffleData(
-                train_data, COUNT_TRAIN # doesnt want to turn list into a Span #FIXME: here
-        )  # "hope" for a golden ticket
+        )  # seeds 'random', we could 'search' for a better seed
+        data_repo.shuffle()
 
-        var model = LeNet5()
+        var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
+        var model = LeNet5(arena)
         model.randomizeWeights()
 
         var start_time = perf_counter_ns()
-        training(model, train_data, b_sz, COUNT_TRAIN, logger)
+        training(model, data_repo.train_data, b_sz, logger)
         var training_time = perf_counter_ns()
         var elapsed = training_time - start_time
         print(
             "\n\tTraining done in", elapsed // 1_000_000, "ms. Now testing..."
         )
 
-        var correct = testing(model, test_data, COUNT_TEST)
+        var correct = testing(model, data_repo.test_data)
         var end_time = perf_counter_ns()
         elapsed = end_time - training_time
-        logger.logInferenceResult("CPU", elapsed, correct, COUNT_TEST, 1, ftype)
-        print(
-            "\t",
-            correct,
-            "/",
-            COUNT_TEST,
-            "correct\n\t",
-            elapsed // 1_000_000,
-            "ms for testing.",
-        )
+        try:
+            logger.logInferenceResult(
+                "CPU", elapsed, correct, COUNT_TEST, 1, ftype
+            )
+            print(
+                "\t",
+                correct,
+                "/",
+                COUNT_TEST,
+                "correct\n\t",
+                elapsed // 1_000_000,
+                "ms for testing.",
+            )
+        except e:
+            print(e, file=stderr)
         # TODO: SAVE THE MODEL TO A FILE
 
     # TESTING A PRETRAINED VERSION FROM OLD FILE
 
+    _ = """
     comptime model_name = "models/model_f64.dat"
     comptime saved_model_dtype = DType.float64
 
     print("Loading and testing a saved model: '" + model_name + "'")
-    var modelCPU = LeNet5.fromFile[saved_model_dtype](model_name)
+    var modelCPU = LeNet5()
+    modelCPU.loadFromFile[saved_model_dtype](model_name)
     start_time = perf_counter_ns()
-    var correct = testing(modelCPU, train_data, COUNT_TRAIN)
+    var correct = testing(modelCPU, data_repo.train_data)
     end_time = perf_counter_ns()
     print("\t", correct, "/", COUNT_TRAIN, "correct")
     elapsed = end_time - start_time  # // 1_000_000
     print("\t", elapsed // 1_000_000, "ms")
-    logger.logInferenceResult(
-        "CPU", elapsed, correct, COUNT_TRAIN, 1, saved_model_dtype
-    )
+    try:
+        logger.logInferenceResult(
+            "CPU", elapsed, correct, COUNT_TRAIN, 1, saved_model_dtype
+        )
+    except e:
+        print(e, file=stderr)
 
-    _ = """
     var modelGPUfromCPU = LeNet5GPU(modelCPU)
 
     # print("Kernel Length:", LENGTH_KERNEL)

@@ -18,9 +18,7 @@ comptime TILE_SIZE = ROWS * COLS
 
 
 trait GPUAllocator:
-    def alloc[
-        dtype: DType
-        ](mut self, count: Int) -> DeviceBuffer[dtype]:
+    def alloc[dtype: DType](mut self, count: Int) -> DeviceBuffer[dtype]:
         ...
 
     def reset(mut self):
@@ -29,14 +27,16 @@ trait GPUAllocator:
     def clear(mut self):
         ...
 
+
 struct GPUBumpArenaAllocator(GPUAllocator):
     """Host-side GPU bump allocator backed by one byte-level DeviceBuffer.
     Tracks offset in bytes — alloc[dtype](count) handles alignment padding
     and returns a typed sub-buffer via create_sub_buffer.
     """
+
     var buffer: DeviceBuffer[DType.uint8]
     var capacity: Int  # bytes
-    var offset: Int    # bytes
+    var offset: Int  # bytes
 
     def __init__(out self, ctx: DeviceContext, capacity_bytes: Int) raises:
         self.buffer = ctx.enqueue_create_buffer[DType.uint8](capacity_bytes)
@@ -70,6 +70,7 @@ struct GPUBumpArenaAllocator(GPUAllocator):
 
 # Tests
 
+
 def work(
     input: LayoutTensor[mut=False, ftype, layout, ImmutAnyOrigin],
     output: LayoutTensor[mut=True, ftype, layout, MutAnyOrigin],
@@ -95,10 +96,24 @@ def test_gpu_arena_offsets(ctx: DeviceContext) raises:
     var elem_bytes = size_of[sftype]()
 
     print("sub0 @ addr:", addr0)
-    print("sub1 @ addr:", addr1, " delta:", addr1 - addr0,
-          " (expected", 5 * elem_bytes, "bytes)")
-    print("sub2 @ addr:", addr2, " delta:", addr2 - addr1,
-          " (expected", 7 * elem_bytes, "bytes)")
+    print(
+        "sub1 @ addr:",
+        addr1,
+        " delta:",
+        addr1 - addr0,
+        " (expected",
+        5 * elem_bytes,
+        "bytes)",
+    )
+    print(
+        "sub2 @ addr:",
+        addr2,
+        " delta:",
+        addr2 - addr1,
+        " (expected",
+        7 * elem_bytes,
+        "bytes)",
+    )
 
     assert_equal(addr1 - addr0, 5 * elem_bytes)
     assert_equal(addr2 - addr1, 7 * elem_bytes)
@@ -159,11 +174,22 @@ def test_gpu_arena_mixed_dtype(ctx: DeviceContext) raises:
     var addr_c = Int(f32_c.unsafe_ptr())
 
     print("f32[5] @ addr:", addr_a)
-    print("f64[4] @ addr:", addr_b,
-          " delta from f32:", addr_b - addr_a, "(padded to 8-align)")
-    print("f32[3] @ addr:", addr_c,
-          " delta from f64:", addr_c - addr_b,
-          " (expected", 4 * size_of[Scalar[DType.float64]](), ")")
+    print(
+        "f64[4] @ addr:",
+        addr_b,
+        " delta from f32:",
+        addr_b - addr_a,
+        "(padded to 8-align)",
+    )
+    print(
+        "f32[3] @ addr:",
+        addr_c,
+        " delta from f64:",
+        addr_c - addr_b,
+        " (expected",
+        4 * size_of[Scalar[DType.float64]](),
+        ")",
+    )
 
     assert_equal(addr_b % 8, 0)
     assert_equal(addr_c - addr_b, 4 * size_of[Scalar[DType.float64]]())
@@ -194,8 +220,13 @@ def test_gpu_arena_work_kernel(ctx: DeviceContext) raises:
     var out_buf = arena.alloc[ftype](TILE_SIZE)
     print("Input  device addr:", Int(in_buf.unsafe_ptr()))
     print("Output device addr:", Int(out_buf.unsafe_ptr()))
-    print("Offset between:    ", Int(out_buf.unsafe_ptr()) - Int(in_buf.unsafe_ptr()),
-          "bytes (expected", TILE_SIZE * size_of[sftype](), ")")
+    print(
+        "Offset between:    ",
+        Int(out_buf.unsafe_ptr()) - Int(in_buf.unsafe_ptr()),
+        "bytes (expected",
+        TILE_SIZE * size_of[sftype](),
+        ")",
+    )
 
     in_buf.enqueue_fill(1.0)
     out_buf.enqueue_fill(2.0)

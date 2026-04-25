@@ -30,19 +30,19 @@ trait LogEntry:
 struct InferenceResult(LogEntry):
     var timestamp: String
     var device: String
-    var elapsed_ns: UInt
-    var correct: UInt
-    var test_size: UInt
-    var batch_size: UInt
+    var elapsed_ns: UInt  # perf_counter_ns() -> UInt
+    var correct: Int
+    var test_size: Int
+    var batch_size: Int
     var ftype: DType
 
     def __init__(
         out self,
         device: String,
         elapsed_ns: UInt,
-        correct: UInt,
-        test_size: UInt,
-        batch_size: UInt,
+        correct: Int,
+        test_size: Int,
+        batch_size: Int,
         ftype: DType,
     ):
         try:
@@ -86,10 +86,10 @@ struct InferenceResult(LogEntry):
 struct TrainingResult(LogEntry):
     var timestamp: String
     var device: String
-    var epoch: UInt
+    var epoch: Int
     var elapsed_ns: UInt
-    var correct: UInt
-    var test_size: UInt  # kinda just gonna be the batch_size since CPU only for now # TODO:
+    var correct: Int
+    var test_size: Int  # kinda just gonna be the batch_size since CPU only for now # TODO:
     var loss: Float32
     var learning_rate: Float32
     var ftype: DType
@@ -97,10 +97,10 @@ struct TrainingResult(LogEntry):
     def __init__(
         out self,
         device: String,
-        epoch: UInt,
+        epoch: Int,
         elapsed_ns: UInt,
-        correct: UInt,
-        test_size: UInt,
+        correct: Int,
+        test_size: Int,
         loss: Float32,
         learning_rate: Float32,
         ftype: DType,
@@ -154,9 +154,9 @@ trait MyLogger:
         mut self,
         device: String,
         elapsed_ns: UInt,
-        correct: UInt,
-        test_size: UInt,
-        batch_size: UInt,
+        correct: Int,
+        test_size: Int,
+        batch_size: Int,
         ftype: DType,
     ) raises -> None:
         ...
@@ -164,10 +164,10 @@ trait MyLogger:
     def logTrainingEpoch(
         mut self,
         device: String,
-        epoch: UInt,
+        epoch: Int,
         elapsed_ns: UInt,
-        correct: UInt,
-        test_size: UInt,
+        correct: Int,
+        test_size: Int,
         loss: Float32,
         learning_rate: Float32,
         ftype: DType,
@@ -206,9 +206,9 @@ struct ResultLogger(LeNet5Logger):
         mut self,
         device: String,
         elapsed_ns: UInt,
-        correct: UInt,
-        test_size: UInt,
-        batch_size: UInt,
+        correct: Int,
+        test_size: Int,
+        batch_size: Int,
         ftype: DType,
     ) raises -> None:
         var result = InferenceResult(
@@ -219,10 +219,10 @@ struct ResultLogger(LeNet5Logger):
     def logTrainingEpoch(
         mut self,
         device: String,
-        epoch: UInt,
+        epoch: Int,
         elapsed_ns: UInt,
-        correct: UInt,
-        test_size: UInt,
+        correct: Int,
+        test_size: Int,
         loss: Float32,
         learning_rate: Float32,
         ftype: DType,
@@ -300,9 +300,9 @@ struct MultiFileLogger(LeNet5Logger):
         mut self,
         device: String,
         elapsed_ns: UInt,
-        correct: UInt,
-        test_size: UInt,
-        batch_size: UInt,
+        correct: Int,
+        test_size: Int,
+        batch_size: Int,
         ftype: DType,
     ) raises -> None:
         self.inference_logger.logInferenceResult(
@@ -312,10 +312,10 @@ struct MultiFileLogger(LeNet5Logger):
     def logTrainingEpoch(
         mut self,
         device: String,
-        epoch: UInt,
+        epoch: Int,
         elapsed_ns: UInt,
-        correct: UInt,
-        test_size: UInt,
+        correct: Int,
+        test_size: Int,
         loss: Float32,
         learning_rate: Float32,
         ftype: DType,

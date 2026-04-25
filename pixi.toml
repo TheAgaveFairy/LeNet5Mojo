@@ -6,6 +6,7 @@ platforms = ["linux-64"]
 version = "0.2.0"
 
 [tasks]
+formatall = "mojo format *.mojo; mojo format cpu/*.mojo; mojo format gpu/*mojo"
 
 [dependencies]
 mojo = ">=0.26.3.0.dev2026041520,<0.27"

@@ -1,14 +1,25 @@
 from layout import LayoutTensor, Layout
 from std.math import exp, sqrt, log
 from std.algorithm.functional import vectorize
+from std.utils.index import IndexList
+from std.memory import memcpy
 
 from std.time import perf_counter_ns
 from helpers import showProgress
 from resultlogger import LeNet5Logger
 
 from cpu.model import LeNet5, Feature
-from constants import ftype, sftype, nelts, act_fn, PADDED_SIZE, ALPHA
+from constants import (
+    ftype,
+    sftype,
+    nelts,
+    act_fn,
+    LENGTH_KERNEL,
+    PADDED_SIZE,
+    ALPHA,
+)
 from image import Image
+from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena
 
 
 def argMax[layout: Layout](output: LayoutTensor[ftype, layout, _]) -> Int:
@@ -147,7 +158,7 @@ def convoluteBackward[
             ](
                 inerror.slice[
                     Slice(0, feat_size), Slice(0, feat_size), IndexList[2](1, 2)
-                ](IndexList[2](x))
+                ](IndexList[1](x))
             )
 
             var weight_slice = rebind[
@@ -175,12 +186,17 @@ def convoluteBackward[
                     Slice(0, out_feat_size),
                     Slice(0, out_feat_size),
                     IndexList[2](1, 2),
-                ](IndexList[2](y))
+                ](IndexList[1](y))
             )
             convoluteFull(weight_slice, outerror_slice, inerror_slice)
 
     act_fn.backward(input, inerror, inerror)
-
+    _ = """
+    for c in range(in_chan): # each element gets "actiongrad"
+        for m in range(feat_size):
+            for n in range(feat_size):
+                inerror[c, m, n] *= 1 if input[c, m, n] > 0 else 0
+    """
     comptime for c in range(out_chan):
         comptime for i in range(out_feat_size):
             comptime for j in range(out_feat_size):
@@ -196,7 +212,7 @@ def convoluteBackward[
             ](
                 input.slice[
                     Slice(0, feat_size), Slice(0, feat_size), IndexList[2](1, 2)
-                ](IndexList[2](x))
+                ](IndexList[1](x))
             )
 
             var wdeltas_slice = rebind[
@@ -224,26 +240,35 @@ def convoluteBackward[
                     Slice(0, out_feat_size),
                     Slice(0, out_feat_size),
                     IndexList[2](1, 2),
-                ](IndexList[2](y))
+                ](IndexList[1](y))
             )
 
             convoluteValid(outerror_slice, input_slice, wdeltas_slice)
 
 
 def convoluteValid[
-    feat_size: Int,
-    kernel_size: Int,
+        #feat_size: Int,
+        #kernel_size: Int,
+        k_layout: Layout,
+        i_layout: Layout,
+        r_layout: Layout
 ](
-    kernel: LayoutTensor[ftype, Layout.row_major(kernel_size, kernel_size), _],
-    image: LayoutTensor[ftype, Layout.row_major(feat_size, feat_size), _],
+    kernel: LayoutTensor[ftype, k_layout, _], # (kernel_size, kernel_size)
+    image: LayoutTensor[ftype, i_layout, _], # (feat_size, feat_size)
     result: LayoutTensor[
         ftype,
-        Layout.row_major(
-            feat_size - kernel_size + 1, feat_size - kernel_size + 1
-        ),
+        r_layout,
         MutAnyOrigin,
-    ],
+    ], # (out_size, out_size) == (feat - kern + 1, feat - kern + 1)
 ) -> None:
+    comptime assert kernel.shape[0]() == kernel.shape[1](), "Kernel shape incorrect."
+    comptime assert image.shape[0]() == image.shape[1](), "Image shape incorrect."
+    comptime assert result.shape[0]() == result.shape[1](), "Result shape incorrect."
+    comptime kernel_size = kernel.shape[0]()
+    comptime feat_size = image.shape[1]()
+    comptime assert result.shape[0]() == (feat_size - kernel_size + 1), "Incorrect shapes."
+
+
     comptime for i in range(result.shape[0]()):  # each output pixel row
         comptime for j in range(result.shape[1]()):  # each output pixel column
             comptime for a in range(
@@ -256,21 +281,27 @@ def convoluteValid[
 
 
 def convoluteFull[
-    feat_size: Int,
-    kernel_size: Int,
+        k_layout: Layout,
+        i_layout: Layout,
+        r_layout: Layout
 ](
-    kernel: LayoutTensor[ftype, Layout.row_major(kernel_size, kernel_size), _],
+    kernel: LayoutTensor[ftype, k_layout, _], # (kernel_size, kernel_size)
     image: LayoutTensor[
         ftype,
-        Layout.row_major(
-            feat_size - kernel_size + 1, feat_size - kernel_size + 1
-        ),
+        i_layout, # (feat - kern + 1, feat - kern + 1)
         _,
     ],
     result: LayoutTensor[
-        ftype, Layout.row_major(feat_size, feat_size), MutAnyOrigin
+        ftype, r_layout, MutAnyOrigin # (feat, feat)
     ],
 ) -> None:
+    comptime assert kernel.shape[0]() == kernel.shape[1](), "Kernel shape incorrect."
+    comptime assert image.shape[0]() == image.shape[1](), "Image shape incorrect."
+    comptime assert result.shape[0]() == result.shape[1](), "Result shape incorrect."
+    comptime feat_size = result.shape[0]()
+    comptime kernel_size = kernel.shape[0]()
+    comptime assert image.shape[0]() == (feat_size - kernel_size + 1), "Incorrect shapes."
+
     comptime for i in range(image.shape[0]()):  # each input pixel row
         for j in range(image.shape[1]()):  # each input pixel column
             for a in range(
@@ -329,8 +360,10 @@ def convoluteForward[
             ](
                 image.slice[
                     Slice(0, feat_size), Slice(0, feat_size), IndexList[2](1, 2)
-                ](x)
-            )  # might be wrong final arg
+                ](
+                    IndexList[1](x)
+                )  # FIXME: submit API / syntax bug report
+            )
 
             var result_slice = rebind[
                 LayoutTensor[
@@ -343,10 +376,12 @@ def convoluteForward[
                     Slice(0, out_feat_size),
                     Slice(0, out_feat_size),
                     IndexList[2](1, 2),
-                ](y)
+                ](
+                    IndexList[1](y)
+                )  # FIXME: submit bug report (docs expect IndexList, not Int)
             )
 
-            convoluteValid[feat_size, kernel_size](
+            convoluteValid(
                 kern_slice, image_slice, result_slice
             )
 
@@ -477,6 +512,12 @@ def matmulBackward[
             inerror[ie_i, ie_j, ie_k] += outerror[y] * weight[x, y]
 
     act_fn.backward(input, inerror, inerror)
+    _ = """
+    for i in range(num_chan):
+        for j in range(feat_size):
+            for k in range(feat_size):
+                inerror[i, j, k] *= 1 if input[i, j, k] > 0 else 0
+    """
 
     comptime for i in range(output_size):
         bdeltas[i] += outerror[i]
@@ -523,9 +564,10 @@ def matmulForward[
 
 
 def loadInput(features: Feature, image: Image):
-    for i in range(PADDED_SIZE):
-        for j in range(PADDED_SIZE):
-            features.input[0, i, j] = image.pixels[i, j]
+    memcpy(src = image.pixels.ptr, dest = features.input.ptr, count = PADDED_SIZE * PADDED_SIZE)
+    #for i in range(PADDED_SIZE):
+    #    for j in range(PADDED_SIZE):
+    #        features.input[0, i, j] = image.pixels[i, j]
 
 
 def forward(lenet: LeNet5, features: Feature):
@@ -569,7 +611,9 @@ def backward(
     )
     # l5, lf5, output
 
-    convoluteBackward(
+    convoluteBackward[
+        kernel_size=LENGTH_KERNEL
+    ](  # not sure why this needs specifying now #FIXME:
         features.layer4,
         errors.layer4,
         errors.layer5,
@@ -582,7 +626,9 @@ def backward(
     maxPoolBackward(features.layer3, errors.layer3, errors.layer4)
     # l3 lf3 lf4
 
-    convoluteBackward(
+    convoluteBackward[
+        kernel_size=LENGTH_KERNEL
+    ](  # not sure why this needs specifying now #FIXME:
         features.layer2,
         errors.layer2,
         errors.layer3,
@@ -595,7 +641,9 @@ def backward(
     maxPoolBackward(features.layer1, errors.layer1, errors.layer2)
     # l1 lf1 lf2
 
-    convoluteBackward(
+    convoluteBackward[
+        kernel_size=LENGTH_KERNEL
+    ](  # not sure why this needs specifying now #FIXME:
         features.input,
         errors.input,
         errors.layer1,
@@ -615,17 +663,26 @@ def predict(lenet: LeNet5, image: Image) -> Int:
 
 
 def trainBatch(
-    mut model: LeNet5, inputs: UnsafePointer[Image], batch_size: Int
-) -> Tuple[UInt, Float32]:
-    # TODO: Probably could be a method of LeNet5. "correct" ultimately unused
-    var buffer = LeNet5()
+    mut model: LeNet5, inputs: Span[mut=False, Image, _]
+) -> Tuple[Int, Float32]:
+    var batch_size = len(inputs)
     var correct = 0
     var total_loss: Float32 = 0.0
 
+    var buffer_arena = CPUArena(LeNet5._calcArenaSize())
+    var buffer = LeNet5(buffer_arena)
+
+    var feat_arena = CPUArena(Feature._calcArenaSize() * 2)
+    var delta_arena = CPUArena(LeNet5._calcArenaSize())
+    # zero out the arenas
+    #feat_arena.clear()
+    #delta_arena.clear()
+
+    var feat = Feature(feat_arena)
+    var errors = Feature(feat_arena)
+    var deltas = LeNet5(delta_arena)
+
     for i in range(batch_size):
-        var feat = Feature()
-        var errors = Feature()
-        var deltas = LeNet5()
         loadInput(feat, inputs[i])
         forward(model, feat)
         var pred = argMax(feat.output)
@@ -638,29 +695,25 @@ def trainBatch(
         loadTarget(feat, errors, the_label)
         backward(model, deltas, errors, feat)
         buffer.accumulateFromOther(deltas, 1.0)
+        
+        feat_arena.clear()
+        delta_arena.clear()
 
-    var k: sftype = sftype(ALPHA) / batch_size
+    var k: sftype = sftype(ALPHA) / sftype(batch_size)
     model.accumulateFromOther(buffer, k)
 
-    var avg_loss = total_loss / batch_size
+    var avg_loss = total_loss / Float32(batch_size)
 
-    return Tuple[UInt, Float32](correct, avg_loss)
+    return Tuple[Int, Float32](correct, avg_loss)
 
 
-def training[
-    T: LeNet5Logger
-](
-    mut model: LeNet5,
-    data: UnsafePointer[Image, _],
-    batch_size: Int,
-    total_size: Int,
-    mut logger: T,
-):
+def training(mut model: LeNet5, data: List[Image], batch_size: Int, mut logger: Some[LeNet5Logger]):
     # print("Training")
+    var total_size = len(data)
     for i in range(0, total_size, batch_size):
         showProgress(i, total_size)
         var start_time = perf_counter_ns()
-        var results_tuple = trainBatch(model, data + i, batch_size)
+        var results_tuple = trainBatch(model, data[i : i + batch_size])
         var correct = results_tuple[0]
         var avg_loss = results_tuple[1]
         var end_time = perf_counter_ns()
@@ -676,19 +729,20 @@ def training[
 
 def training(
     mut model: LeNet5,
-    data: UnsafePointer[Image, _],
+    data: List[Image],
     batch_size: Int,
-    total_size: Int,
+    # total_size: Int,
 ):
     # print("Training")
+    var total_size = len(data)
     for i in range(0, total_size, batch_size):
         showProgress(i, total_size)
-        _ = trainBatch(model, data + i, batch_size)
+        _ = trainBatch(model, data[i : i + batch_size])
 
 
-def testing(model: LeNet5, data: UnsafePointer[Image, _], total_size: Int) -> Int:
+def testing(model: LeNet5, data: List[Image]) -> Int:
     var correct = 0
-    for i in range(total_size):
+    for i in range(len(data)):
         var pred = predict(model, data[i])
         var actual = Int(data[i].label)
         correct += 1 if pred == actual else 0
