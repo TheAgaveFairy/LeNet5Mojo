@@ -3,6 +3,7 @@ from std.math import exp, sqrt, log
 from std.algorithm.functional import vectorize
 from std.utils.index import IndexList
 from std.memory import memcpy
+import std.benchmark as benchmark
 
 from std.time import perf_counter_ns
 from helpers import showProgress
@@ -669,11 +670,16 @@ def backward(
 
 def predict(lenet: LeNet5, image: Image) -> Int:
     # TODO: Probably could be a method of LeNet5.
-    var feat = Feature()
+    var feat_arena = CPUArena(Feature._calcArenaSize())
+    var feat = Feature(feat_arena)
     loadInput(feat, image)
     forward(lenet, feat)
     return argMax(feat.output)
 
+def predictNew(lenet: LeNet5, feat: Feature, image: Image) -> Int:
+    loadInput(feat, image)
+    forward(lenet, feat)
+    return argMax(feat.output)
 
 def trainBatch(
     mut model: LeNet5, inputs: Span[mut=False, Image, _]
@@ -685,17 +691,18 @@ def trainBatch(
     var buffer_arena = CPUArena(LeNet5._calcArenaSize())
     var buffer = LeNet5(buffer_arena)
 
-    var feat_arena = CPUArena(Feature._calcArenaSize() * 2)
+    var feat_arena = CPUArena(Feature._calcArenaSize())
+    var error_arena = CPUArena(Feature._calcArenaSize())
     var delta_arena = CPUArena(LeNet5._calcArenaSize())
-    # zero out the arenas
-    # feat_arena.clear()
-    # delta_arena.clear()
 
     var feat = Feature(feat_arena)
-    var errors = Feature(feat_arena)
+    var errors = Feature(error_arena)
     var deltas = LeNet5(delta_arena)
 
     for i in range(batch_size):
+        #var feat = Feature()
+        #var errors = Feature()
+        #var deltas = LeNet5()
         loadInput(feat, inputs[i])
         forward(model, feat)
         var pred = argMax(feat.output)
@@ -710,12 +717,18 @@ def trainBatch(
         buffer.accumulateFromOther(deltas, 1.0)
 
         feat_arena.clear()
+        error_arena.clear()
         delta_arena.clear()
 
     var k: sftype = sftype(ALPHA) / sftype(batch_size)
     model.accumulateFromOther(buffer, k)
 
     var avg_loss = total_loss / Float32(batch_size)
+
+    benchmark.keep(buffer_arena)
+    benchmark.keep(delta_arena)
+    benchmark.keep(feat_arena)
+    benchmark.keep(error_arena)
 
     return Tuple[Int, Float32](correct, avg_loss)
 
@@ -760,9 +773,13 @@ def training(
 
 def testing(model: LeNet5, data: List[Image]) -> Int:
     var correct = 0
+    var feat_arena = CPUArena(Feature._calcArenaSize())
+    var feat = Feature(feat_arena)
     for i in range(len(data)):
-        var pred = predict(model, data[i])
+        #var pred = predict(model, data[i])
+        var pred = predictNew(model, feat, data[i])
+        feat_arena.clear()
         var actual = Int(data[i].label)
         correct += 1 if pred == actual else 0
-
+    benchmark.keep(feat_arena)
     return correct

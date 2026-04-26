@@ -275,8 +275,6 @@ struct LeNet5(Copyable):
         Self._randHelper(self.weight4_5, LENGTH_KERNEL_SQ * (LAYER4 + LAYER5))
         Self._randHelper(self.weight5_6, (LAYER5 + OUTPUT))
 
-        print(t"rand results: {self.weight0_1.ptr[0]} {self.weight5_6.ptr[0]}")
-
     @staticmethod
     def bytesToFType[
         filetype: DType, num_bytes: Int, layout: Layout
@@ -325,7 +323,7 @@ struct LeNet5(Copyable):
 
                 def helper[
                     layout: Layout
-                ](weights: LayoutTensor[ftype, layout, MutAnyOrigin]) unified {
+                ](weights: LayoutTensor[ftype, layout, MutAnyOrigin]) {
                     mut
                 }:
                     comptime size_of_layer = layout.size()

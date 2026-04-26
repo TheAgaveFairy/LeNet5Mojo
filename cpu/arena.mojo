@@ -18,7 +18,7 @@ from std.testing import assert_equal, TestSuite
 from std.os import abort
 
 
-trait CPUAllocator(Copyable, ImplicitlyCopyable):
+trait CPUAllocator():
     def __init__(out self, capacity_bytes: Int):
         ...
 
@@ -35,8 +35,6 @@ trait CPUAllocator(Copyable, ImplicitlyCopyable):
 
 
 struct CPUBumpArenaAllocator(CPUAllocator):
-    #comptime __copyinit__is_trivial = True
-    #comptime __moveinit__is_trivial = True
     # TODO: return Spans?
     """
     Simple bump allocator. Minor design help from Claude 4.5.
@@ -50,31 +48,12 @@ struct CPUBumpArenaAllocator(CPUAllocator):
         self.capacity = capacity_bytes
         self.offset = 0
 
-    def __init__(
-        out self, capacity_bytes: Int, extra_space_factor: Float64
-    ) raises:
-        if extra_space_factor < 0.0:
-            print("ARENA INIT ERROR! extra_space_factor < 0.0", file=stderr)
-            raise Error("Arena init error. extra_space_factor < 0.0")
-
-        var expanded_size = capacity_bytes + Int(
-            Float64(capacity_bytes) * extra_space_factor
-        )
-        return Self(expanded_size)
-
-        # self.buffer = alloc[UInt8](expanded_size)
-        # self.capacity = capacity_bytes
-        # self.offset = 0
-
     def __del__(deinit self):
-        # TODO: I think we can reinstate the self-clearing
-        # print("BumpArenaAllocator __del__()"
         self.buffer.free()
-        pass
 
     def alloc[
         T: AnyType
-    ](mut self, count: Int = 1) -> UnsafePointer[T, MutAnyOrigin]:
+        ](mut self, count: Int = 1) -> UnsafePointer[T, MutAnyOrigin]:#, origin_of(self)]:
         """Allocate space for `count` items of type T."""
         var size = size_of[T]() * count
         var alignment = align_of[T]()
@@ -90,7 +69,7 @@ struct CPUBumpArenaAllocator(CPUAllocator):
         self.offset = aligned_offset + size
 
         # print("allocating", String(count), get_type_name[T](), "begin", Int(ptr), "->", Int(ptr + count))
-        return ptr
+        return ptr#.unsafe_origin_cast[origin_of(self)]()
 
     def reset(mut self):
         """Free all allocations at once by resetting the offset."""

@@ -9,10 +9,10 @@ from std.gpu.host import DeviceContext
 from image import Image
 from cpu.model import LeNet5
 from constants import ftype
-from cpu.ops import training, testing
+from cpu.ops import training, testing, trainBatch
 from cpu.arena import CPUBumpArenaAllocator
-
-# from lenetgpu import (
+#
+# from accel import (
 #     LeNet5GPU,
 #     conv1FusedKernel,
 #     conv2FusedKernel,
@@ -35,7 +35,6 @@ comptime COUNT_TEST = MNISTDataRepository.COUNT_TEST
 
 
 def main():
-    print("claude --resume whatonearth")
     print("CPU Testing")  # , num_logical_cores())
     var data_repo = MNISTDataRepository()
     var logger = MultiFileLogger("results/")
@@ -53,12 +52,14 @@ def main():
 
         var start_time = perf_counter_ns()
         training(model, data_repo.train_data, b_sz, logger)
+        #for _ in range(10):
+        #    _ = trainBatch(model, data_repo.train_data[:b_sz])
         var training_time = perf_counter_ns()
         var elapsed = training_time - start_time
         print(
             "\n\tTraining done in", elapsed // 1_000_000, "ms. Now testing..."
         )
-
+    
         var correct = testing(model, data_repo.test_data)
         var end_time = perf_counter_ns()
         elapsed = end_time - training_time
@@ -78,10 +79,11 @@ def main():
         except e:
             print(e, file=stderr)
         # TODO: SAVE THE MODEL TO A FILE
-
-    # TESTING A PRETRAINED VERSION FROM OLD FILE
+        benchmark.keep(arena)
 
     _ = """
+    # TESTING A PRETRAINED VERSION FROM OLD FILE
+        
     comptime model_name = "models/model_f64.dat"
     comptime saved_model_dtype = DType.float64
 
@@ -100,8 +102,7 @@ def main():
         )
     except e:
         print(e, file=stderr)
-
-    var modelGPUfromCPU = LeNet5GPU(modelCPU)
+    
 
     # print("Kernel Length:", LENGTH_KERNEL)
     # print("Feature 0->5:", LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2, LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5)
@@ -109,6 +110,7 @@ def main():
 
     try:
         with DeviceContext() as ctx:
+            var modelGPUfromCPU = LeNet5GPU(ctx, modelCPU)
             var device_name = ctx.name()
             print(
                 "\nDevice found:",
@@ -156,4 +158,3 @@ def main():
         print("ERROR IN MAIN", e, file=stderr)
         # don't forget to tell "raise" what to raise, compiler doesn't handle that well
     """
-    return

@@ -14,3 +14,9 @@ results/*.csv
 *.save
 *.bak
 main
+*.out
+
+#flamegraphing
+out.*
+perf.*
+flamegraph.svg
