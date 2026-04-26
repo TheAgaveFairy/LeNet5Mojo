@@ -216,8 +216,7 @@ struct LeNet5(Copyable):
             a[i] += (b[i] * lr)
         """
 
-        @parameter
-        def vectorize_closure[width: Int](i: Int) unified {read}:
+        def vectorize_closure[width: Int](i: Int) {read}:
             var lrs = SIMD[ftype, width](lr)
             var a_nums = accum.ptr.load[width=width](i)
             var b_nums = other.ptr.load[width=width](i)
@@ -257,8 +256,7 @@ struct LeNet5(Copyable):
             tensor.ptr[i] *= sftype(sqrt(6.0)) / scale
         """
 
-        @parameter
-        def vectorize_closure[width: Int](i: Int) unified {read}:
+        def vectorize_closure[width: Int](i: Int) {read}:
             comptime sixes = SIMD[ftype, width](6.0)
             var scales = SIMD[ftype, width](scale)
             var nums = tensor.ptr.load[width=width](i)

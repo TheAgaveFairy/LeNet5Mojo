@@ -62,8 +62,7 @@ struct Image(ImplicitlyCopyable):
         comptime for i in range(raw.size):
             temp_buffer[i] = UInt64(raw[i])
 
-        @parameter
-        def sum_closure[width: Int](i: Int) unified {mut}:
+        def sum_closure[width: Int](i: Int) {mut}:
             var nums = temp_buffer.unsafe_ptr().load[width=width](i)
             sum += nums.reduce_add()
             std_sum += (nums * nums).reduce_add()

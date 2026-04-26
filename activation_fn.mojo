@@ -54,8 +54,7 @@ struct ReLU(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
-        @parameter
-        def vectorize_closure[width: Int](i: Int) unified {read}:
+        def vectorize_closure[width: Int](i: Int) {read}:
             var nums = x.ptr.load[width=width](i)
             comptime zeros = SIMD[ftype, width](0)
             var mask = nums.gt(zeros)
@@ -78,7 +77,7 @@ struct ReLU(ActivationFunction):
         SIMD enhanced.
         """
 
-        def closure[width: Int](i: Int) unified {read}:
+        def closure[width: Int](i: Int) {read}:
             comptime zeros = SIMD[ftype, width](0.0)
             var xvec = x.ptr.load[width](i)
             var mask = xvec.gt(zeros)
@@ -111,8 +110,7 @@ struct GELU(ActivationFunction):
     def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
         comptime sqrt2 = sqrt(2.0)
 
-        @parameter
-        def vectorize_closure[width: Int](i: Int) unified {read}:
+        def vectorize_closure[width: Int](i: Int) {read}:
             var nums = x.ptr.load[width=width](i)
             # var nums_cubed = nums * nums * nums
             # comptime scaling = SIMD[ftype, width](0.44715)
@@ -151,8 +149,7 @@ struct GELU(ActivationFunction):
         comptime sqrt2 = sqrt(2.0)
         comptime sqrttau = sqrt(tau)  # math.pi * 2.0
 
-        @parameter
-        def vectorize_closure[width: Int](i: Int) unified {read}:
+        def vectorize_closure[width: Int](i: Int) {read}:
             var nums = x.ptr.load[width=width](i)
             comptime sqrt2_vec = SIMD[ftype, width](sqrt2)
             comptime sqrttau_vec = SIMD[ftype, width](sqrttau)
@@ -206,8 +203,7 @@ struct GELUTanh(ActivationFunction):
     def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
         comptime term = sftype(sqrt(2.0 / pi))
 
-        @parameter
-        def vectorize_closure[width: Int](i: Int) unified {read}:
+        def vectorize_closure[width: Int](i: Int) {read}:
             var nums = x.ptr.load[width=width](i)
             var nums_cubed = nums * nums * nums
             comptime scaling = SIMD[ftype, width](0.044715)
@@ -243,8 +239,7 @@ struct GELUTanh(ActivationFunction):
         comptime k = sqrt(2.0 / pi)
         comptime c = 0.044715
 
-        @parameter
-        def vectorize_closure[width: Int](i: Int) unified {read}:
+        def vectorize_closure[width: Int](i: Int) {read}:
             var nums = x.ptr.load[width=width](i)
             comptime ks = SIMD[ftype, width](k)
             comptime cs = SIMD[ftype, width](c)
@@ -314,8 +309,7 @@ struct GELUFast(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
-        @parameter
-        def vectorize_closure[width: Int](i: Int) unified {read}:
+        def vectorize_closure[width: Int](i: Int) {read}:
             var nums = x.ptr.load[width=width](i)
             comptime scaling = SIMD[ftype, width](1.702)
             var gelu = nums * Self._sigmoid(scaling * nums)
@@ -339,8 +333,7 @@ struct GELUFast(ActivationFunction):
         """
         comptime alpha = sftype(1.702)
 
-        @parameter
-        def vectorize_closure[width: Int](i: Int) unified {read}:
+        def vectorize_closure[width: Int](i: Int) {read}:
             comptime alphas = SIMD[ftype, width](alpha)
             comptime ones = SIMD[ftype, width](1.0)
             var nums = x.ptr.load[width=width](i)

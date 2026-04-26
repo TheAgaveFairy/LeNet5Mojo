@@ -48,7 +48,7 @@ def main():
         data_repo.shuffle()
 
         var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
-        var model = LeNet5()#arena)
+        var model = LeNet5(arena)
         model.randomizeWeights()
 
         var start_time = perf_counter_ns()
