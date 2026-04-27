@@ -1,6 +1,7 @@
 from layout import LayoutTensor, Layout
 from std.math import exp, sqrt, log
 from std.algorithm.functional import vectorize
+from std.algorithm import parallelize
 from std.utils.index import IndexList
 from std.memory import memcpy
 import std.benchmark as benchmark
@@ -681,6 +682,66 @@ def predictNew(lenet: LeNet5, feat: Feature, image: Image) -> Int:
     forward(lenet, feat)
     return argMax(feat.output)
 
+def trainBatchParallel(mut model: LeNet5, inputs: Span[mut = False, Image, _]) -> Tuple[Int, Float32]:
+    var batch_size = len(inputs)
+
+    var buffer_arena = CPUArena(LeNet5._calcArenaSize())
+    var buffer = LeNet5(buffer_arena)
+
+    var arena_size = batch_size * (Feature._calcArenaSize() * 2 + LeNet5._calcArenaSize())
+    var intermediate_arena = CPUArena(arena_size) # will abort if too big
+
+    var features = alloc[Feature](batch_size)
+    var errors = alloc[Feature](batch_size)
+    var deltas = alloc[LeNet5](batch_size)
+
+    # could have uninitialized
+    var losses = List[Float32](length = batch_size, fill = 0.0) # reduce add -> total_loss
+    var corrects = List[Int](length = batch_size, fill = 0) # reduce add, effectively bools
+
+    for i in range(batch_size):
+        features[i] = Feature()#intermediate_arena)
+        errors[i] = Feature()#intermediate_arena)
+        deltas[i] = LeNet5()#intermediate_arena)
+    
+    def work(tid: Int) {read, mut intermediate_arena, mut corrects, mut losses}:
+        print(t"{tid},{features[tid].input.ptr},{errors[tid].input.ptr},{deltas[tid].weight0_1.ptr}")
+        loadInput(features[tid], inputs[tid])
+        forward(model, features[tid])
+        var pred = argMax(features[tid].output)
+        var the_label = Int(inputs[tid].label)
+        if pred == the_label:
+            corrects[tid] += 1
+
+        var loss = crossEntropyLoss(features[tid].output, the_label)
+        losses[tid] += loss
+        loadTarget(features[tid], errors[tid], the_label)
+        backward(model, deltas[tid], errors[tid], features[tid])
+    
+    #parallelize(work, batch_size) # num_items, num_threads 
+
+    var correct = 0
+    var total_loss = Float32(0.0)
+    # TODO: single threaded / atomic / critical
+    for i in range(batch_size):
+        buffer.accumulateFromOther(deltas[i], 1.0)
+        correct += corrects[i]
+        total_loss += losses[i]
+
+    var k: sftype = sftype(ALPHA) / sftype(batch_size)
+    model.accumulateFromOther(buffer, k)
+
+    var avg_loss = total_loss / Float32(batch_size)
+
+    benchmark.keep(buffer_arena)
+    benchmark.keep(intermediate_arena)
+    #features.free()
+    #errors.free()
+    #deltas.free()
+
+    return Tuple[Int, Float32](correct, avg_loss)
+
+
 def trainBatch(
     mut model: LeNet5, inputs: Span[mut=False, Image, _]
 ) -> Tuple[Int, Float32]:
@@ -757,6 +818,16 @@ def training(
             print("logging error during CPU training:", e)
         # LOSS, LR
 
+
+def trainingParallel(
+    mut model: LeNet5,
+    data: List[Image],
+    batch_size: Int,
+):
+    var total_size = len(data)
+    for i in range(0, total_size, batch_size):
+        showProgress(i, total_size)
+        _ = trainBatchParallel(model, data[i : i + batch_size])
 
 def training(
     mut model: LeNet5,

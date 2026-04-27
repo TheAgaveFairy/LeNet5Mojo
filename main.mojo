@@ -9,7 +9,7 @@ from std.gpu.host import DeviceContext
 from image import Image
 from cpu.model import LeNet5
 from constants import ftype
-from cpu.ops import training, testing, trainBatch
+from cpu.ops import training, trainingParallel, testing, trainBatch
 from cpu.arena import CPUBumpArenaAllocator
 #
 # from accel import (
@@ -51,9 +51,7 @@ def main():
         model.randomizeWeights()
 
         var start_time = perf_counter_ns()
-        training(model, data_repo.train_data, b_sz, logger)
-        #for _ in range(10):
-        #    _ = trainBatch(model, data_repo.train_data[:b_sz])
+        trainingParallel(model, data_repo.train_data, b_sz)#, logger)
         var training_time = perf_counter_ns()
         var elapsed = training_time - start_time
         print(
