@@ -140,11 +140,6 @@ struct LeNet5(Copyable):
         or for inference, read in from a file. Only biases really need to be set
         to zeroes.
         """
-        # var num_bytes = Self._calcArenaSize()
-        # if (arena.capacity - arena.offset) < num_bytes:
-        #    raise Error("Arena not large enough")
-        # arena = Self.Allocator(num_bytes)
-
         self.used_external_allocator = True
         # weights
         self.weight0_1 = LayoutTensor[ftype, Self.w01_layout, MutAnyOrigin](
@@ -174,7 +169,14 @@ struct LeNet5(Copyable):
         ).fill(0.0)
 
     def zero(mut self):
-        self.weight0_1.fill(0.0) #TODO: finish
+        self.weight0_1.fill(0.0) 
+        self.weight2_3.fill(0.0) 
+        self.weight4_5.fill(0.0) 
+        self.weight5_6.fill(0.0) 
+        self.bias0_1.fill(0.0) 
+        self.bias2_3.fill(0.0) 
+        self.bias4_5.fill(0.0) 
+        self.bias5_6.fill(0.0) 
 
     def __init__(out self, *, copy: Self):
         print("model shallow copy")
@@ -189,7 +191,7 @@ struct LeNet5(Copyable):
         self.bias5_6 = copy.bias5_6
 
     def __del__(deinit self):
-        # print("Model __del__")
+        print("Model __del__")
         if not self.used_external_allocator:
             self.weight0_1.ptr.free()
             self.weight2_3.ptr.free()
