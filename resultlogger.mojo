@@ -280,7 +280,11 @@ struct MultiFileLogger(LeNet5Logger):
     var training_logger: ResultLogger
 
     def __init__(
-        out self, base_path: String, format: LogFormat = LogFormat.CSV
+        out self,
+        base_path: String = "results/",
+        inference_name: String = "inference",
+        training_name: String = "training",
+        format: LogFormat = LogFormat.CSV,
     ):
         self.base_path = base_path
         self.format_type = format.copy()
@@ -290,10 +294,10 @@ struct MultiFileLogger(LeNet5Logger):
         )
 
         self.inference_logger = ResultLogger(
-            base_path + "inference" + ext, format
+            base_path + inference_name + ext, format
         )
         self.training_logger = ResultLogger(
-            base_path + "training" + ext, format
+            base_path + training_name + ext, format
         )
 
     def logInferenceResult(

@@ -18,7 +18,7 @@ from std.testing import assert_equal, TestSuite
 from std.os import abort
 
 
-trait CPUAllocator():
+trait CPUAllocator:
     def __init__(out self, capacity_bytes: Int):
         ...
 
@@ -27,10 +27,9 @@ trait CPUAllocator():
     ](mut self, count: Int) -> UnsafePointer[T, MutAnyOrigin]:
         ...
 
-    def reset(mut self):
-        ...
-
-    def clear(mut self):
+    def free_all(mut self):
+        # Bump arena: resets offset so slab can be reused (no system free).
+        # System allocator: calls free() on every tracked pointer.
         ...
 
 
@@ -53,7 +52,9 @@ struct CPUBumpArenaAllocator(CPUAllocator):
 
     def alloc[
         T: AnyType
-        ](mut self, count: Int = 1) -> UnsafePointer[T, MutAnyOrigin]:#, origin_of(self)]:
+    ](mut self, count: Int = 1) -> UnsafePointer[
+        T, MutAnyOrigin
+    ]:  # , origin_of(self)]:
         """Allocate space for `count` items of type T."""
         var size = size_of[T]() * count
         var alignment = align_of[T]()
@@ -69,17 +70,48 @@ struct CPUBumpArenaAllocator(CPUAllocator):
         self.offset = aligned_offset + size
 
         # print("allocating", String(count), get_type_name[T](), "begin", Int(ptr), "->", Int(ptr + count))
-        return ptr#.unsafe_origin_cast[origin_of(self)]()
+        return ptr  # .unsafe_origin_cast[origin_of(self)]()
 
-    def reset(mut self):
-        """Free all allocations at once by resetting the offset."""
+    def free_all(mut self):
+        """Reset bump offset — slab stays alive, memory is reusable."""
         self.offset = 0
-        # Memory is still there, just reusable
 
-    def clear(mut self):
-        """Reset and zero out memory."""
+    def wipe(mut self):
+        """Zero the slab and reset the offset. Arena-specific; not in trait."""
         memset_zero(self.buffer, self.capacity)
         self.offset = 0
+
+    def zero(mut self):
+        memset_zero(self.buffer, self.capacity)
+
+
+struct CPUSystemAllocator(CPUAllocator):
+    """
+    Pass-through to the system allocator. Tracks all allocations so
+    free_all() / __del__ can bulk-free them. Mirrors the arena API so
+    callsites are identical regardless of allocator choice.
+    """
+
+    var _allocations: List[UnsafePointer[UInt8, MutAnyOrigin]]
+
+    def __init__(out self, capacity_bytes: Int):
+        self._allocations = List[UnsafePointer[UInt8, MutAnyOrigin]]()
+
+    def __del__(deinit self):
+        self.free_all()
+
+    def alloc[
+        T: AnyType
+    ](mut self, count: Int = 1) -> UnsafePointer[T, MutAnyOrigin]:
+        var ptr = alloc[T](count)
+        self._allocations.append(ptr.bitcast[UInt8]())
+        return ptr
+
+    def free_all(mut self):
+        """Call free() on every tracked pointer."""
+        for i in range(len(self._allocations)):
+            self._allocations[i].free()
+        self._allocations.clear()
 
 
 def main() raises:
@@ -99,8 +131,8 @@ def main() raises:
     var suite = TestSuite()
     suite.test[test_allocator_offsets]()
     # suite.test[test_allocation_failure]() # now panics/aborts instead of raises
-    suite.test[test_allocator_clear]()
-    suite.test[test_allocator_reset]()
+    suite.test[test_allocator_wipe]()
+    suite.test[test_allocator_free_all]()
     suite^.run()
 
 
@@ -156,20 +188,20 @@ def test_allocation_failure() raises:
     assert_equal(0, 0)
 
 
-def test_allocator_clear() raises:
+def test_allocator_wipe() raises:
     var arena = CPUBumpArenaAllocator(128)
     var ptr = arena.alloc[sitype](10)
     for i in range(10):
         ptr[i] = 69
-    arena.clear()
+    arena.wipe()
     for i in range(10):
         assert_equal(ptr[i], 0)
 
 
-def test_allocator_reset() raises:
+def test_allocator_free_all() raises:
     var arena = CPUBumpArenaAllocator(128)
     var ptr0 = arena.alloc[UInt8](128)
-    arena.reset()
+    arena.free_all()
     var ptr1 = arena.alloc[UInt8](128)
     assert_equal(ptr0, ptr1)
 

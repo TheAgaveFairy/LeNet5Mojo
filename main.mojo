@@ -11,6 +11,7 @@ from cpu.model import LeNet5
 from constants import ftype
 from cpu.ops import training, trainingParallel, testing, trainBatch
 from cpu.arena import CPUBumpArenaAllocator
+
 #
 # from accel import (
 #     LeNet5GPU,
@@ -34,12 +35,59 @@ comptime COUNT_TRAIN = MNISTDataRepository.COUNT_TRAIN
 comptime COUNT_TEST = MNISTDataRepository.COUNT_TEST
 
 
+def trainAndTest(
+    mut model: LeNet5,
+    data_repo: MNISTDataRepository,
+    name: String,
+    *,
+    parallel: Bool = False,
+    batch_size: Int = 300,
+):
+    print(t"{name} begins, parallel = {parallel}, batch_size = {batch_size}")
+    var infer_name = t"{name}_infer_{batch_size}"
+    var train_name = t"{name}_train_{batch_size}"
+    var logger = MultiFileLogger(
+        "results/", String(infer_name), String(train_name)
+    )
+    var start_time = perf_counter_ns()
+    if parallel:
+        trainingParallel(model, data_repo.train_data, batch_size)
+    else:
+        training(model, data_repo.train_data, batch_size)
+    var mid_time = perf_counter_ns()
+    var training_ns = mid_time - start_time
+    print(
+        t"\n\t{name}'s Training done in",
+        training_ns // 1_000_000,
+        "ms. Now testing...",
+    )
+
+    var correct = testing(model, data_repo.test_data)
+    var end_time = perf_counter_ns()
+    var testing_ns = end_time - mid_time
+    try:
+        logger.logInferenceResult(
+            "CPU", testing_ns, correct, COUNT_TEST, 1, ftype
+        )
+        print(
+            "\t",
+            correct,
+            "/",
+            COUNT_TEST,
+            "correct\n\t",
+            testing_ns // 1_000_000,
+            "ms for testing.",
+        )
+    except e:
+        print(e, file=stderr)
+
+
 def main():
     print("CPU Testing")  # , num_logical_cores())
     var data_repo = MNISTDataRepository()
     var logger = MultiFileLogger("results/")
 
-    var batch_sizes = [100]  # 100, 300, 600, 1000]
+    var batch_sizes = [300]  # 100, 300, 600, 1000]
     print(len(batch_sizes), "Batch size test[s] to run")
     for b_sz in batch_sizes:  # range(tests_to_run):
         print("\tBatch size:", b_sz)
@@ -47,17 +95,32 @@ def main():
         data_repo.shuffle()
 
         var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
-        var model = LeNet5(arena)
+        var arena_model = LeNet5(arena)
+        arena_model.randomizeWeights()
+
+        var model = LeNet5()
         model.randomizeWeights()
 
+        trainAndTest(arena_model, data_repo, "arena_single")
+        trainAndTest(model, data_repo, "alloc_single")
+
+        arena_model.zero()
+        arena_model.randomizeWeights()
+
+        model.zero()
+        model.randomizeWeights()
+
+        trainAndTest(arena_model, data_repo, "arena_multi", parallel = True)
+        trainAndTest(model, data_repo, "alloc_multi", parallel = True)
+        _  = """
         var start_time = perf_counter_ns()
-        trainingParallel(model, data_repo.train_data, b_sz)#, logger)
+        training(model, data_repo.train_data, b_sz, logger)
         var training_time = perf_counter_ns()
         var elapsed = training_time - start_time
         print(
             "\n\tTraining done in", elapsed // 1_000_000, "ms. Now testing..."
         )
-    
+
         var correct = testing(model, data_repo.test_data)
         var end_time = perf_counter_ns()
         elapsed = end_time - training_time
@@ -66,17 +129,13 @@ def main():
                 "CPU", elapsed, correct, COUNT_TEST, 1, ftype
             )
             print(
-                "\t",
-                correct,
-                "/",
-                COUNT_TEST,
-                "correct\n\t",
-                elapsed // 1_000_000,
-                "ms for testing.",
+                t"\t{correct}/{COUNT_TEST} correct\n\t{elapsed // 1_000_000}ms"
+                t" for testing."
             )
         except e:
             print(e, file=stderr)
         # TODO: SAVE THE MODEL TO A FILE
+        """
         benchmark.keep(arena)
 
     _ = """

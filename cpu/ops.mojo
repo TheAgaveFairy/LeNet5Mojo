@@ -5,10 +5,11 @@ from std.algorithm import parallelize
 from std.utils.index import IndexList
 from std.memory import memcpy
 import std.benchmark as benchmark
+from std.sys import stderr
 
 from std.time import perf_counter_ns
 from helpers import showProgress
-from resultlogger import LeNet5Logger
+from resultlogger import LeNet5Logger, MultiFileLogger
 
 from cpu.model import LeNet5, Feature
 from constants import (
@@ -677,36 +678,42 @@ def predict(lenet: LeNet5, image: Image) -> Int:
     forward(lenet, feat)
     return argMax(feat.output)
 
+
 def predictNew(lenet: LeNet5, feat: Feature, image: Image) -> Int:
     loadInput(feat, image)
     forward(lenet, feat)
     return argMax(feat.output)
 
-def trainBatchParallel(mut model: LeNet5, inputs: Span[mut = False, Image, _]) -> Tuple[Int, Float32]:
+
+def trainBatchParallel(
+    mut model: LeNet5, inputs: Span[mut=False, Image, _]
+) -> Tuple[Int, Float32]:
     var batch_size = len(inputs)
 
     var buffer_arena = CPUArena(LeNet5._calcArenaSize())
-    var buffer = LeNet5()#buffer_arena)
-    print(buffer.used_external_allocator)
+    var buffer = LeNet5(buffer_arena)
 
-    var arena_size = batch_size * (Feature._calcArenaSize() * 2 + LeNet5._calcArenaSize())
-    var intermediate_arena = CPUArena(arena_size) # will abort if too big
+    var arena_size = batch_size * (
+        Feature._calcArenaSize() * 2 + LeNet5._calcArenaSize()
+    )
+    var intermediate_arena = CPUArena(arena_size)  # will abort if too big
 
     var features = alloc[Feature](batch_size)
     var errors = alloc[Feature](batch_size)
     var deltas = alloc[LeNet5](batch_size)
 
     # could have uninitialized
-    var losses = alloc[Float32](batch_size) # reduce add -> total_loss
-    var corrects = alloc[Int](batch_size) # reduce add, effectively bools
+    var losses = alloc[Float32](batch_size)  # reduce add -> total_loss
+    var corrects = alloc[Int](batch_size)  # reduce add, effectively bools
 
     for i in range(batch_size):
-        features[i] = Feature(intermediate_arena)
-        errors[i] = Feature(intermediate_arena)
-        deltas[i] = LeNet5()#intermediate_arena)
-        #losses[i] = 0
+        # doing features[i] = Feature() will try and __del__ what "was already there" - bad
+        (features + i).init_pointee_move(Feature(intermediate_arena))
+        (errors + i).init_pointee_move(Feature(intermediate_arena))
+        (deltas + i).init_pointee_move(LeNet5(intermediate_arena))
+        # losses[i] = 0
         corrects[i] = 0
-    
+
     def work(tid: Int) {read, mut intermediate_arena, mut corrects, mut losses}:
         loadInput(features[tid], inputs[tid])
         forward(model, features[tid])
@@ -719,8 +726,8 @@ def trainBatchParallel(mut model: LeNet5, inputs: Span[mut = False, Image, _]) -
         losses[tid] = loss
         loadTarget(features[tid], errors[tid], the_label)
         backward(model, deltas[tid], errors[tid], features[tid])
-    
-    parallelize(work, batch_size) 
+
+    parallelize(work, batch_size)
 
     var correct = 0
     var total_loss = Float32(0.0)
@@ -743,7 +750,6 @@ def trainBatchParallel(mut model: LeNet5, inputs: Span[mut = False, Image, _]) -
     losses.free()
     corrects.free()
 
-    print(correct, avg_loss)
     return Tuple[Int, Float32](correct, avg_loss)
 
 
@@ -766,9 +772,9 @@ def trainBatch(
     var deltas = LeNet5(delta_arena)
 
     for i in range(batch_size):
-        #var feat = Feature()
-        #var errors = Feature()
-        #var deltas = LeNet5()
+        # var feat = Feature()
+        # var errors = Feature()
+        # var deltas = LeNet5()
         loadInput(feat, inputs[i])
         forward(model, feat)
         var pred = argMax(feat.output)
@@ -782,9 +788,9 @@ def trainBatch(
         backward(model, deltas, errors, feat)
         buffer.accumulateFromOther(deltas, 1.0)
 
-        feat_arena.clear()
-        error_arena.clear()
-        delta_arena.clear()
+        feat_arena.wipe()
+        error_arena.wipe()
+        delta_arena.wipe()
 
     var k: sftype = sftype(ALPHA) / sftype(batch_size)
     model.accumulateFromOther(buffer, k)
@@ -799,13 +805,59 @@ def trainBatch(
     return Tuple[Int, Float32](correct, avg_loss)
 
 
+def trainingParallel(
+    mut model: LeNet5,
+    data: List[Image],
+    batch_size: Int,
+):
+    print("Training: Multi-Threaded")
+    var total_size = len(data)
+    if total_size % batch_size != 0:
+        print(
+            "Warning: batch size doesn't evenly divide total size.", file=stderr
+        )
+
+    for i in range(0, total_size, batch_size):
+        showProgress(i, total_size)
+        _ = trainBatchParallel(model, data[i : i + batch_size])
+
+
+def trainingParallel(
+    mut model: LeNet5,
+    data: List[Image],
+    batch_size: Int,
+    mut logger: Some[LeNet5Logger],
+):
+    print("Training: Multi-Threaded")
+    var total_size = len(data)
+    if total_size % batch_size != 0:
+        print(
+            "Warning: batch size doesn't evenly divide total size.", file=stderr
+        )
+
+    for i in range(0, total_size, batch_size):
+        showProgress(i, total_size)
+        var start_time = perf_counter_ns()
+        var results_tuple = trainBatchParallel(model, data[i : i + batch_size])
+        var correct = results_tuple[0]
+        var avg_loss = results_tuple[1]
+        var end_time = perf_counter_ns()
+        var elapsed = end_time - start_time
+        try:
+            logger.logTrainingEpoch(
+                "CPU", i, elapsed, correct, total_size, avg_loss, ALPHA, ftype
+            )
+        except e:
+            print("logging error during CPU training:", e)
+
+
 def training(
     mut model: LeNet5,
     data: List[Image],
     batch_size: Int,
     mut logger: Some[LeNet5Logger],
 ):
-    # print("Training")
+    print("Training: Single-Threaded")
     var total_size = len(data)
     for i in range(0, total_size, batch_size):
         showProgress(i, total_size)
@@ -821,18 +873,7 @@ def training(
             )
         except e:
             print("logging error during CPU training:", e)
-        # LOSS, LR
 
-
-def trainingParallel(
-    mut model: LeNet5,
-    data: List[Image],
-    batch_size: Int,
-):
-    var total_size = len(data)
-    for i in range(0, total_size, batch_size):
-        showProgress(i, total_size)
-        _ = trainBatchParallel(model, data[i : i + batch_size])
 
 def training(
     mut model: LeNet5,
@@ -840,8 +881,12 @@ def training(
     batch_size: Int,
     # total_size: Int,
 ):
-    # print("Training")
+    print("Training Single-Threaded")
     var total_size = len(data)
+    if total_size % batch_size != 0:
+        print(
+            "Warning: batch size doesn't evenly divide total size.", file=stderr
+        )
     for i in range(0, total_size, batch_size):
         showProgress(i, total_size)
         _ = trainBatch(model, data[i : i + batch_size])
@@ -852,9 +897,9 @@ def testing(model: LeNet5, data: List[Image]) -> Int:
     var feat_arena = CPUArena(Feature._calcArenaSize())
     var feat = Feature(feat_arena)
     for i in range(len(data)):
-        #var pred = predict(model, data[i])
+        feat_arena.zero()
+        # var pred = predict(model, data[i])
         var pred = predictNew(model, feat, data[i])
-        feat_arena.clear()
         var actual = Int(data[i].label)
         correct += 1 if pred == actual else 0
     benchmark.keep(feat_arena)

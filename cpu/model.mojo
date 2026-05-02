@@ -12,7 +12,7 @@ from std.algorithm.functional import vectorize
 from image import Image
 from resultlogger import MultiFileLogger, LeNet5Logger
 from helpers import showProgress  # , reLu, reLuGrad
-from cpu.arena import CPUBumpArenaAllocator as CPUArena
+from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena
 from activation_fn import ActivationFunction
 from constants import (
     ftype,
@@ -42,7 +42,7 @@ from constants import (
 )
 
 
-struct LeNet5(Copyable):
+struct LeNet5(Movable):
     """
     The LeNet5 model. In the actual LeCun et al implementation, there is some
     notable sparsity in final layers that is not in this version, as well as
@@ -53,7 +53,7 @@ struct LeNet5(Copyable):
     """
 
     # var arena: Self.Allocator  # might not actually be an 'arena' per se, but that's the default
-    var used_external_allocator: Bool
+    var allocator_owns_memory: Bool
 
     # WEIGHTS
     comptime w01_layout = Layout.row_major(
@@ -106,7 +106,7 @@ struct LeNet5(Copyable):
         return (weights + biases) * size_of[ftype]()
 
     def __init__(out self):
-        self.used_external_allocator = False
+        self.allocator_owns_memory = False
         # weights
         self.weight0_1 = LayoutTensor[ftype, Self.w01_layout, MutAnyOrigin](
             alloc[sftype](comptime (Self.w01_layout.size()))
@@ -140,7 +140,7 @@ struct LeNet5(Copyable):
         or for inference, read in from a file. Only biases really need to be set
         to zeroes.
         """
-        self.used_external_allocator = True
+        self.allocator_owns_memory = True
         # weights
         self.weight0_1 = LayoutTensor[ftype, Self.w01_layout, MutAnyOrigin](
             arena.alloc[sftype](comptime (Self.w01_layout.size()))
@@ -169,30 +169,29 @@ struct LeNet5(Copyable):
         ).fill(0.0)
 
     def zero(mut self):
-        self.weight0_1.fill(0.0) 
-        self.weight2_3.fill(0.0) 
-        self.weight4_5.fill(0.0) 
-        self.weight5_6.fill(0.0) 
-        self.bias0_1.fill(0.0) 
-        self.bias2_3.fill(0.0) 
-        self.bias4_5.fill(0.0) 
-        self.bias5_6.fill(0.0) 
+        _ = self.weight0_1.fill(0.0)
+        _ = self.weight2_3.fill(0.0)
+        _ = self.weight4_5.fill(0.0)
+        _ = self.weight5_6.fill(0.0)
+        _ = self.bias0_1.fill(0.0)
+        _ = self.bias2_3.fill(0.0)
+        _ = self.bias4_5.fill(0.0)
+        _ = self.bias5_6.fill(0.0)
 
-    def __init__(out self, *, copy: Self):
-        print("model shallow copy")
-        self.used_external_allocator = copy.used_external_allocator
-        self.weight0_1 = copy.weight0_1
-        self.weight2_3 = copy.weight2_3
-        self.weight4_5 = copy.weight4_5
-        self.weight5_6 = copy.weight5_6
-        self.bias0_1 = copy.bias0_1
-        self.bias2_3 = copy.bias2_3
-        self.bias4_5 = copy.bias4_5
-        self.bias5_6 = copy.bias5_6
+    def __init__(out self, *, deinit existing: Self):
+        print("model move")
+        self.allocator_owns_memory = existing.allocator_owns_memory
+        self.weight0_1 = existing.weight0_1
+        self.weight2_3 = existing.weight2_3
+        self.weight4_5 = existing.weight4_5
+        self.weight5_6 = existing.weight5_6
+        self.bias0_1 = existing.bias0_1
+        self.bias2_3 = existing.bias2_3
+        self.bias4_5 = existing.bias4_5
+        self.bias5_6 = existing.bias5_6
 
     def __del__(deinit self):
-        print("Model __del__")
-        if not self.used_external_allocator:
+        if not self.allocator_owns_memory:
             self.weight0_1.ptr.free()
             self.weight2_3.ptr.free()
             self.weight4_5.ptr.free()
@@ -325,9 +324,7 @@ struct LeNet5(Copyable):
 
                 def helper[
                     layout: Layout
-                ](weights: LayoutTensor[ftype, layout, MutAnyOrigin]) {
-                    mut
-                }:
+                ](weights: LayoutTensor[ftype, layout, MutAnyOrigin]) {mut}:
                     comptime size_of_layer = layout.size()
                     comptime bytes_to_read = size_of_layer * bytes_per_file_weight
                     var bytes: List[UInt8]
@@ -363,7 +360,7 @@ struct LeNet5(Copyable):
             print("error at reading lenet5 from file", e)
 
 
-struct Feature:
+struct Feature(Movable):
     """
     These buffers hold intermediate results.
     """
