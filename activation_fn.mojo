@@ -37,13 +37,13 @@ trait ActivationFunction:
 
     @staticmethod
     @always_inline("nodebug")
-    def gpu_forward(x: sftype) -> sftype:
+    def scalarForward(x: sftype) -> sftype:
         """Scalar forward pass for use inside GPU device functions."""
         ...
 
     @staticmethod
     @always_inline("nodebug")
-    def gpu_backward(x: sftype, d_output: sftype) -> sftype:
+    def scalarBackward(x: sftype, d_output: sftype) -> sftype:
         """Scalar backward pass for use inside GPU device functions.
         x is the pre-activation input, d_output is the upstream gradient.
         """
@@ -89,12 +89,12 @@ struct ReLU(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def gpu_forward(x: sftype) -> sftype:
+    def scalarForward(x: sftype) -> sftype:
         return x if x > 0.0 else sftype(0.0)
 
     @staticmethod
     @always_inline("nodebug")
-    def gpu_backward(x: sftype, d_output: sftype) -> sftype:
+    def scalarBackward(x: sftype, d_output: sftype) -> sftype:
         return d_output if x > 0.0 else sftype(0.0)
 
 
@@ -173,7 +173,7 @@ struct GELU(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def gpu_forward(x: sftype) -> sftype:
+    def scalarForward(x: sftype) -> sftype:
         comptime sqrt2 = sftype(sqrt(2.0))
         comptime half = sftype(0.5)
         comptime one = sftype(1.0)
@@ -181,7 +181,7 @@ struct GELU(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def gpu_backward(x: sftype, d_output: sftype) -> sftype:
+    def scalarBackward(x: sftype, d_output: sftype) -> sftype:
         comptime sqrt2 = sftype(sqrt(2.0))
         comptime half = sftype(0.5)
         comptime one = sftype(1.0)
@@ -263,7 +263,7 @@ struct GELUTanh(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def gpu_forward(x: sftype) -> sftype:
+    def scalarForward(x: sftype) -> sftype:
         comptime k = sftype(sqrt(2.0 / pi))
         comptime c = sftype(0.044715)
         comptime half = sftype(0.5)
@@ -272,7 +272,7 @@ struct GELUTanh(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def gpu_backward(x: sftype, d_output: sftype) -> sftype:
+    def scalarBackward(x: sftype, d_output: sftype) -> sftype:
         comptime k = sftype(sqrt(2.0 / pi))
         comptime c = sftype(0.044715)
         comptime three_c = sftype(3.0 * 0.044715)
@@ -347,7 +347,7 @@ struct GELUFast(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def gpu_forward(x: sftype) -> sftype:
+    def scalarForward(x: sftype) -> sftype:
         comptime alpha = sftype(1.702)
         comptime one = sftype(1.0)
         var s = one / (one + exp(-alpha * x))
@@ -355,7 +355,7 @@ struct GELUFast(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def gpu_backward(x: sftype, d_output: sftype) -> sftype:
+    def scalarBackward(x: sftype, d_output: sftype) -> sftype:
         comptime alpha = sftype(1.702)
         comptime one = sftype(1.0)
         var s = one / (one + exp(-alpha * x))

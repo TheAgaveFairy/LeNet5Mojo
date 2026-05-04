@@ -18,13 +18,19 @@ comptime TILE_SIZE = ROWS * COLS
 
 
 trait GPUAllocator:
-    def alloc[dtype: DType](mut self, count: Int) -> DeviceBuffer[dtype]:
+    def alloc[dtype: DType](mut self, count: Int) raises -> DeviceBuffer[dtype]:
         ...
 
-    def reset(mut self):
+    def free_all(mut self):
+        # Bump: reset offset only. System: release all tracked buffers.
         ...
 
-    def clear(mut self):
+    def zero(mut self) raises:
+        # Fill all allocated memory with 0 — do not change offset/tracking.
+        ...
+
+    def wipe(mut self) raises:
+        # zero() then free_all().
         ...
 
 
@@ -57,15 +63,57 @@ struct GPUBumpArenaAllocator(GPUAllocator):
         self.offset = aligned_offset + total_bytes
         return sub
 
-    def reset(mut self):
+    def free_all(mut self):
+        """Reset bump offset — GPU memory stays allocated."""
         self.offset = 0
 
-    def clear(mut self) raises:
+    def zero(mut self) raises:
+        """Fill slab with zeros — offset unchanged."""
+        self.buffer.enqueue_fill(UInt8(0))
+
+    def wipe(mut self) raises:
+        """Zero slab then reset offset."""
         self.buffer.enqueue_fill(UInt8(0))
         self.offset = 0
 
     def base_address(self) -> Int:
         return Int(self.buffer.unsafe_ptr())
+
+
+struct GPUSystemAllocator(GPUAllocator):
+    """
+    GPU system allocator. Each alloc() creates an independent DeviceBuffer.
+    Tracks raw byte-level buffers; typed views are sub-buffers of those.
+    free_all() destroys all tracked buffers — any held sub-buffer views become invalid.
+    """
+
+    var _ctx: DeviceContext
+    var _allocations: List[DeviceBuffer[DType.uint8]]
+
+    def __init__(out self, var ctx: DeviceContext, capacity_bytes: Int) raises:
+        self._ctx = ctx^
+        self._allocations = List[DeviceBuffer[DType.uint8]]()
+
+    def alloc[dtype: DType](mut self, count: Int) raises -> DeviceBuffer[dtype]:
+        var elem_size = size_of[Scalar[dtype]]()
+        var raw = self._ctx.enqueue_create_buffer[DType.uint8](count * elem_size)
+        var view = raw.create_sub_buffer[dtype](0, count)
+        self._allocations.append(raw^)
+        return view
+
+    def free_all(mut self):
+        """Destroy all tracked DeviceBuffers, releasing GPU memory."""
+        self._allocations.clear()
+
+    def zero(mut self) raises:
+        """Fill all tracked buffers with 0."""
+        for i in range(len(self._allocations)):
+            self._allocations[i].enqueue_fill(UInt8(0))
+
+    def wipe(mut self) raises:
+        """Zero all tracked buffers then release them."""
+        self.zero()
+        self.free_all()
 
 
 # Tests
@@ -120,26 +168,26 @@ def test_gpu_arena_offsets(ctx: DeviceContext) raises:
     print("PASS")
 
 
-def test_gpu_arena_reset(ctx: DeviceContext) raises:
-    print("\n--- test_gpu_arena_reset ---")
+def test_gpu_arena_free_all(ctx: DeviceContext) raises:
+    print("\n--- test_gpu_arena_free_all ---")
     var arena = GPUBumpArenaAllocator(ctx, 20 * size_of[sftype]())
 
     var sub0 = arena.alloc[ftype](10)
     var addr0 = Int(sub0.unsafe_ptr())
-    print("Before reset: alloc addr =", addr0)
+    print("Before free_all: alloc addr =", addr0)
 
-    arena.reset()
+    arena.free_all()
 
     var sub1 = arena.alloc[ftype](10)
     var addr1 = Int(sub1.unsafe_ptr())
-    print("After reset:  alloc addr =", addr1)
+    print("After free_all:  alloc addr =", addr1)
 
     assert_equal(addr0, addr1)
     print("PASS")
 
 
-def test_gpu_arena_clear(ctx: DeviceContext) raises:
-    print("\n--- test_gpu_arena_clear ---")
+def test_gpu_arena_wipe(ctx: DeviceContext) raises:
+    print("\n--- test_gpu_arena_wipe ---")
     var arena = GPUBumpArenaAllocator(ctx, 20 * size_of[sftype]())
     var sub = arena.alloc[ftype](10)
 
@@ -147,15 +195,37 @@ def test_gpu_arena_clear(ctx: DeviceContext) raises:
     ctx.synchronize()
 
     with sub.map_to_host() as host:
-        print("Before clear: host[0] =", host[0])
+        print("Before wipe: host[0] =", host[0])
         assert_equal(host[0], sftype(69.0))
 
-    arena.clear()
+    arena.wipe()
     ctx.synchronize()
 
     with sub.map_to_host() as host:
-        print("After clear:  host[0] =", host[0])
+        print("After wipe:  host[0] =", host[0])
         assert_equal(host[0], sftype(0.0))
+    print("PASS")
+
+
+def test_gpu_arena_zero(ctx: DeviceContext) raises:
+    print("\n--- test_gpu_arena_zero ---")
+    var arena = GPUBumpArenaAllocator(ctx, 20 * size_of[sftype]())
+    var sub0 = arena.alloc[ftype](5)
+    sub0.enqueue_fill(42.0)
+    ctx.synchronize()
+
+    var offset_before = arena.offset
+    arena.zero()
+    ctx.synchronize()
+
+    assert_equal(arena.offset, offset_before)  # offset unchanged
+    with sub0.map_to_host() as host:
+        print("After zero: host[0] =", host[0])
+        assert_equal(host[0], sftype(0.0))
+
+    # can still alloc from same offset (not reset)
+    var sub1 = arena.alloc[ftype](5)
+    assert_equal(Int(sub1.unsafe_ptr()), Int(sub0.unsafe_ptr()) + 5 * size_of[sftype]())
     print("PASS")
 
 
@@ -250,12 +320,78 @@ def test_gpu_arena_work_kernel(ctx: DeviceContext) raises:
     print("PASS")
 
 
+def test_gpu_system_alloc_basic(ctx: DeviceContext) raises:
+    print("\n--- test_gpu_system_alloc_basic ---")
+    var sa = GPUSystemAllocator(DeviceContext(), 0)
+    var buf = sa.alloc[ftype](8)
+    buf.enqueue_fill(7.0)
+    ctx.synchronize()
+    with buf.map_to_host() as host:
+        print("host[0] =", host[0])
+        assert_equal(host[0], sftype(7.0))
+    assert_equal(len(sa._allocations), 1)
+    print("PASS")
+
+
+def test_gpu_system_multi_dtype(ctx: DeviceContext) raises:
+    print("\n--- test_gpu_system_multi_dtype ---")
+    var sa = GPUSystemAllocator(DeviceContext(), 0)
+    var f32_buf = sa.alloc[DType.float32](4)
+    var f64_buf = sa.alloc[DType.float64](4)
+    var u8_buf = sa.alloc[DType.uint8](16)
+    assert_equal(len(sa._allocations), 3)
+    f32_buf.enqueue_fill(Scalar[DType.float32](1.5))
+    f64_buf.enqueue_fill(Scalar[DType.float64](2.5))
+    u8_buf.enqueue_fill(UInt8(255))
+    ctx.synchronize()
+    with f32_buf.map_to_host() as h:
+        assert_equal(h[0], Scalar[DType.float32](1.5))
+    with f64_buf.map_to_host() as h:
+        assert_equal(h[0], Scalar[DType.float64](2.5))
+    with u8_buf.map_to_host() as h:
+        assert_equal(h[0], UInt8(255))
+    print("PASS")
+
+
+def test_gpu_system_free_all(ctx: DeviceContext) raises:
+    print("\n--- test_gpu_system_free_all ---")
+    var sa = GPUSystemAllocator(DeviceContext(), 0)
+    _ = sa.alloc[ftype](4)
+    _ = sa.alloc[ftype](4)
+    assert_equal(len(sa._allocations), 2)
+    sa.free_all()
+    assert_equal(len(sa._allocations), 0)
+    _ = sa.alloc[ftype](4)
+    assert_equal(len(sa._allocations), 1)
+    print("PASS")
+
+
+def test_gpu_system_zero(ctx: DeviceContext) raises:
+    print("\n--- test_gpu_system_zero ---")
+    var sa = GPUSystemAllocator(DeviceContext(), 0)
+    var buf = sa.alloc[ftype](4)
+    buf.enqueue_fill(99.0)
+    ctx.synchronize()
+    sa.zero()
+    ctx.synchronize()
+    assert_equal(len(sa._allocations), 1)  # zero doesn't free
+    with buf.map_to_host() as host:
+        print("After zero: host[0] =", host[0])
+        assert_equal(host[0], sftype(0.0))
+    print("PASS")
+
+
 def main() raises:
     comptime assert has_accelerator(), "GPU required"
     with DeviceContext() as ctx:
         test_gpu_arena_offsets(ctx)
-        test_gpu_arena_reset(ctx)
-        test_gpu_arena_clear(ctx)
+        test_gpu_arena_free_all(ctx)
+        test_gpu_arena_wipe(ctx)
+        test_gpu_arena_zero(ctx)
         test_gpu_arena_mixed_dtype(ctx)
         test_gpu_arena_work_kernel(ctx)
+        test_gpu_system_alloc_basic(ctx)
+        test_gpu_system_multi_dtype(ctx)
+        test_gpu_system_free_all(ctx)
+        test_gpu_system_zero(ctx)
     print("\nAll GPU arena tests passed!")

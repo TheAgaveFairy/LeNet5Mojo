@@ -17,10 +17,11 @@ from std.sys.info import size_of, align_of
 from std.testing import assert_equal, TestSuite
 from std.os import abort
 
+comptime sitype = Scalar[DType.int32] # for testing
 
 trait CPUAllocator:
-    def __init__(out self, capacity_bytes: Int):
-        ...
+    #def __init__(out self, capacity_bytes: Int):
+    #    ...
 
     def alloc[
         T: AnyType
@@ -94,7 +95,7 @@ struct CPUSystemAllocator(CPUAllocator):
 
     var _allocations: List[UnsafePointer[UInt8, MutAnyOrigin]]
 
-    def __init__(out self, capacity_bytes: Int):
+    def __init__(out self):
         self._allocations = List[UnsafePointer[UInt8, MutAnyOrigin]]()
 
     def __del__(deinit self):
@@ -133,26 +134,11 @@ def main() raises:
     # suite.test[test_allocation_failure]() # now panics/aborts instead of raises
     suite.test[test_allocator_wipe]()
     suite.test[test_allocator_free_all]()
+    suite.test[test_system_alloc_basic]()
+    suite.test[test_system_alloc_multi_type]()
+    suite.test[test_system_free_all_clears]()
+    suite.test[test_system_alloc_write_read]()
     suite^.run()
-
-
-def printFields[T: AnyType]():
-    """Testing new reflection features."""
-    print(get_type_name[T](), "has fields:")
-    comptime f_types = struct_field_types[T]()
-    comptime f_names = struct_field_names[T]()
-
-    # @parameter
-    comptime for i in range(struct_field_count[T]()):
-        print("\t", materialize[f_names[i]](), ":", get_type_name[f_types[i]]())
-
-
-def printTypeInfo[T: DType]():
-    """Prints type name, size, and alignment."""
-    comptime thing = "{}:\n\tsize: {}, align {}".format(
-        T, size_of[Scalar[T]](), align_of[Scalar[T]]()
-    )
-    print(thing)
 
 
 def test_allocator_offsets() raises:
@@ -163,7 +149,7 @@ def test_allocator_offsets() raises:
         var p1 = c_arena.alloc[sftype](7)
         # DIFFERENT TYPE BEING ALLOCATED
         var p2 = c_arena.alloc[sitype](3)
-        var end = p2 + 3 * size_of[sitype]()
+        var end = p2 + 3  # pointer arithmetic scales by element size
 
         var size0 = Int(p1) - Int(p0)
         var size1 = Int(p2) - Int(p1)
@@ -179,7 +165,7 @@ def test_allocator_offsets() raises:
 
 @deprecated("alloc now aborts instead of raises")
 def test_allocation_failure() raises:
-    # var arena = BumpArenaAllocator(5)
+    # var arena = CPUBumpArenaAllocator(5)
     # try:
     #    var ptr = arena.alloc[sftype](10)
     # except e:
@@ -206,6 +192,49 @@ def test_allocator_free_all() raises:
     assert_equal(ptr0, ptr1)
 
 
+def test_system_alloc_basic() raises:
+    var sa = CPUSystemAllocator(0)
+    var ptr = sa.alloc[sitype](4)
+    assert_equal(len(sa._allocations), 1)
+    ptr[0] = 42
+    assert_equal(ptr[0], 42)
+
+
+def test_system_alloc_multi_type() raises:
+    var sa = CPUSystemAllocator(0)
+    var p0 = sa.alloc[sftype](5)
+    var p1 = sa.alloc[sitype](3)
+    var p2 = sa.alloc[UInt8](16)
+    assert_equal(len(sa._allocations), 3)
+    p0[0] = 1.5
+    p1[0] = 99
+    p2[0] = 255
+    assert_equal(p0[0], 1.5)
+    assert_equal(p1[0], 99)
+    assert_equal(p2[0], 255)
+
+
+def test_system_free_all_clears() raises:
+    var sa = CPUSystemAllocator(0)
+    _ = sa.alloc[sitype](8)
+    _ = sa.alloc[sftype](8)
+    assert_equal(len(sa._allocations), 2)
+    sa.free_all()
+    assert_equal(len(sa._allocations), 0)
+    # can allocate again after free_all
+    _ = sa.alloc[sitype](4)
+    assert_equal(len(sa._allocations), 1)
+
+
+def test_system_alloc_write_read() raises:
+    var sa = CPUSystemAllocator(0)
+    var ptr = sa.alloc[sftype](10)
+    for i in range(10):
+        ptr[i] = Float32(i) * 0.5
+    for i in range(10):
+        assert_equal(ptr[i], Float32(i) * 0.5)
+
+
 def test_nested_arena():
     var tc = TestContainer()  # allocates Arena itself
     var tw_arena = CPUBumpArenaAllocator(7 * size_of[sftype]())
@@ -214,16 +243,14 @@ def test_nested_arena():
     print(tw.a.ptr, tc.a.ptr, tc.sub_weights.a.ptr)
 
 
-struct TestWeights(Weights):
-    var arena: CPUBumpArenaAllocator
+struct TestWeights():
 
     comptime layout = Layout.row_major(7)
     var a: LayoutTensor[ftype, Self.layout, MutAnyOrigin]
 
-    def __init__(out self, arena: BumpArenaAllocator):
-        self.arena = arena
+    def __init__(out self, mut arena: CPUBumpArenaAllocator):
         self.a = type_of(self.a)(
-            self.arena.alloc[sftype](comptime (self.layout.size()))
+            arena.alloc[sftype](comptime (self.layout.size()))
         ).fill(3.0)
 
     @staticmethod
@@ -232,7 +259,7 @@ struct TestWeights(Weights):
 
     @staticmethod
     def initRandom(
-        out self: Self, arena: CPUBumpArenaAllocator, std: Float64 = 0.02
+        out self: Self, mut arena: CPUBumpArenaAllocator, std: Float64 = 0.02
     ):
         self = Self(arena)
         _ = self.a.fill(1.0)

@@ -38,15 +38,14 @@ def argMax[layout: Layout](output: LayoutTensor[ftype, layout, _]) -> Int:
 
 def crossEntropyLossSIMD[
     layout: Layout
-](preds: LayoutTensor[ftype, layout, _], label: Int) -> Float64:
+](preds: LayoutTensor[ftype, layout, _], label: Int) -> Float32:
     """
     Input is treated as if it is always a 1d 'vector'.
     SIMD vectorized.
     """
     var global_max: sftype = preds.ptr[0]
 
-    @parameter
-    def find_max[width: Int](i: Int) unified {read, mut global_max}:
+    def find_max[width: Int](i: Int) {read, mut global_max}:
         var nums = preds.ptr.load[width=width](i)
         var local_max = nums.reduce_max()
         if local_max > global_max:
@@ -56,8 +55,7 @@ def crossEntropyLossSIMD[
 
     var exp_sum: sftype = 0.0
 
-    @parameter
-    def calc_exp[width: Int](i: Int) unified {read, mut exp_sum}:
+    def calc_exp[width: Int](i: Int) {read, mut exp_sum}:
         var ps = preds.ptr.load[width](i)
         var maxes = SIMD[ftype, width](global_max)
         var diff = ps - maxes
@@ -68,7 +66,7 @@ def crossEntropyLossSIMD[
     var log_prob: sftype = rebind[sftype](
         (preds.ptr[label] - global_max) - log(exp_sum)
     )
-    return -1.0 * Float64(log_prob)
+    return -1.0 * Float32(log_prob)
 
 
 def crossEntropyLoss[
@@ -402,9 +400,12 @@ def convoluteForward[
         for i in range(result.shape[1]()):
             for j in range(result.shape[2]()):
                 result[c, i, j] += bias[c]
+                _ = """
                 result[c, i, j] = (
                     result[c, i, j] if result[c, i, j] > 0.0 else 0.0
                 )
+                """
+    act_fn.forward(result)
 
 
 # "out feat size" is from the perspective of the forward pass... I might want to clear up names
@@ -458,19 +459,19 @@ def maxPoolForward[
         MutAnyOrigin,
     ],
 ):
-    var lenx = input.shape[1]() // output.shape[1]()
-    var leny = input.shape[2]() // output.shape[2]()
+    comptime lenx = input.shape[1]() // output.shape[1]()
+    comptime leny = input.shape[2]() // output.shape[2]()
 
     comptime for c in range(output.shape[0]()):  # each channel
-        for i in range(output.shape[1]()):  # feature size
-            for j in range(
+        comptime for i in range(output.shape[1]()):  # feature size
+            comptime for j in range(
                 output.shape[2]()
             ):  # feature size (should match shape[1]())
                 var x0: Int = 0
                 var y0: Int = 0
 
-                for x in range(lenx):
-                    for y in range(leny):
+                comptime for x in range(lenx):
+                    comptime for y in range(leny):
                         var temp_idx_x = Int(i * lenx + x)
                         var temp_idx_y = Int(j * leny + y)
                         var temp_idx_xx = Int(i * lenx + x0)
@@ -569,7 +570,10 @@ def matmulForward[
 
     comptime for i in range(output.shape[0]()):
         output[i] += bias[i]
-        output[i] = output[i] if output[i] > 0 else 0
+        #output[i] = output[i] if output[i] > 0 else 0
+    #act_fn.forward(output)
+    # TODO: look into if this is good or bad
+    # FIXME: just a louder reminder
 
 
 # BECOME STRUCT METHODS
@@ -722,7 +726,7 @@ def trainBatchParallel(
         if pred == the_label:
             corrects[tid] = 1
 
-        var loss = crossEntropyLoss(features[tid].output, the_label)
+        var loss = crossEntropyLossSIMD(features[tid].output, the_label)
         losses[tid] = loss
         loadTarget(features[tid], errors[tid], the_label)
         backward(model, deltas[tid], errors[tid], features[tid])
@@ -782,7 +786,7 @@ def trainBatch(
         if pred == the_label:
             correct += 1
 
-        var loss = crossEntropyLoss(feat.output, the_label)
+        var loss = crossEntropyLossSIMD(feat.output, the_label)
         total_loss += loss
         loadTarget(feat, errors, the_label)
         backward(model, deltas, errors, feat)

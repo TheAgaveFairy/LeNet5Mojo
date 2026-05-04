@@ -19,3 +19,4 @@ buildmain = { cmd = "mojo build -Xlinker -lm main.mojo", cwd = "src" }
 matplotlib = ">=3.10.9,<4"
 numpy = ">=2.4.3,<3"
 mojo = ">=1.0.0b1.dev2026042505,<2"
+pandas = ">=3.0.2,<4"

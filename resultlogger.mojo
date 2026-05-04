@@ -1,5 +1,7 @@
 from std.subprocess import run  # var current = run("date")
 import std.os as os
+from std.reflection import reflect
+from constants import act_fn
 
 
 @fieldwise_init
@@ -76,11 +78,13 @@ struct InferenceResult(LogEntry):
             + String(self.batch_size)
             + ","
             + datatype_string
+            + ","
+            + materialize[reflect[act_fn]().name()]().split(".")[1]
         )
 
     @staticmethod
     def getHeaders() -> String:
-        return "timestamp,device,elapsed_ns,correct,test_size,batch_size,ftype"
+        return "timestamp,device,elapsed_ns,correct,test_size,batch_size,ftype,activation_fn"
 
 
 struct TrainingResult(LogEntry):
@@ -142,11 +146,13 @@ struct TrainingResult(LogEntry):
             + String(self.learning_rate)
             + ","
             + datatype_string
+            + ","
+            + materialize[reflect[act_fn]().name()]().split(".")[1]
         )
 
     @staticmethod
     def getHeaders() -> String:
-        return "timestamp,device,epoch,elapsed_ns,correct,test_size,loss,learning_rate,ftype"
+        return "timestamp,device,epoch,elapsed_ns,correct,test_size,loss,learning_rate,ftype,activation_fn"
 
 
 trait MyLogger:
@@ -284,6 +290,7 @@ struct MultiFileLogger(LeNet5Logger):
         base_path: String = "results/",
         inference_name: String = "inference",
         training_name: String = "training",
+        *,
         format: LogFormat = LogFormat.CSV,
     ):
         self.base_path = base_path
@@ -338,7 +345,7 @@ struct MultiFileLogger(LeNet5Logger):
 
 def main() raises:
     comptime output_path = "results/"
-    var logger = MultiFileLogger(output_path, materialize[LogFormat.CSV]())
+    var logger = MultiFileLogger(output_path)
 
     logger.logInferenceResult("RTX6069", 420, 99, 100, 10, DType.float64)
     logger.logInferenceResult("GTX730", 9001, 98, 100, 10, DType.float32)

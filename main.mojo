@@ -1,16 +1,18 @@
+from std.subprocess import run as subProcessRun
 from std.random import seed
 from std.sys.info import num_logical_cores
 from std.sys import stderr
 from std.time import perf_counter_ns
 import std.os as os
 import std.benchmark as benchmark
+from std.reflection import get_type_name, reflect # TODO: remove unused imports
 from std.gpu.host import DeviceContext
 
 from image import Image
 from cpu.model import LeNet5
-from constants import ftype
+from constants import ftype, act_fn
 from cpu.ops import training, trainingParallel, testing, trainBatch
-from cpu.arena import CPUBumpArenaAllocator
+from cpu.arena import CPUBumpArenaAllocator, CPUSystemAllocator
 
 #
 # from accel import (
@@ -34,26 +36,32 @@ from resultlogger import MultiFileLogger
 comptime COUNT_TRAIN = MNISTDataRepository.COUNT_TRAIN
 comptime COUNT_TEST = MNISTDataRepository.COUNT_TEST
 
+comptime act_fn_name = reflect[act_fn]().name()
 
 def trainAndTest(
     mut model: LeNet5,
     data_repo: MNISTDataRepository,
-    name: String,
+    alloc: String,
+    #thread: String,
+    run_id: String,
     *,
     parallel: Bool = False,
     batch_size: Int = 300,
 ):
+    var act_name = materialize[act_fn_name]().split('.')[1]
+    var thread = 1 if not parallel else num_logical_cores()
+    var name = t"{alloc} with {thread} threads"
     print(t"{name} begins, parallel = {parallel}, batch_size = {batch_size}")
-    var infer_name = t"{name}_infer_{batch_size}"
-    var train_name = t"{name}_train_{batch_size}"
+    var infer_name = t"mode=infer_alloc={alloc}_thread={thread}_bs={batch_size}_act={act_name}_run={run_id}"
+    var train_name = t"mode=train_alloc={alloc}_thread={thread}_bs={batch_size}_act={act_name}_run={run_id}"
     var logger = MultiFileLogger(
         "results/", String(infer_name), String(train_name)
     )
     var start_time = perf_counter_ns()
     if parallel:
-        trainingParallel(model, data_repo.train_data, batch_size)
+        trainingParallel(model, data_repo.train_data, batch_size, logger)
     else:
-        training(model, data_repo.train_data, batch_size)
+        training(model, data_repo.train_data, batch_size, logger)
     var mid_time = perf_counter_ns()
     var training_ns = mid_time - start_time
     print(
@@ -83,35 +91,41 @@ def trainAndTest(
 
 
 def main():
-    print("CPU Testing")  # , num_logical_cores())
-    var data_repo = MNISTDataRepository()
-    var logger = MultiFileLogger("results/")
+    var run_id: String
+    try:
+        run_id = subProcessRun("date +%s")
+    except:
+        run_id = "unknown"
 
-    var batch_sizes = [300]  # 100, 300, 600, 1000]
+    var act_name = materialize[act_fn_name]().split('.')[1]
+    print(t"CPU Testing with {num_logical_cores()} cores. Activation function is:", act_name)
+    var data_repo = MNISTDataRepository()
+
+    var batch_sizes = [300]  # 100, 300, 600, 1000] # prefer 300
     print(len(batch_sizes), "Batch size test[s] to run")
     for b_sz in batch_sizes:  # range(tests_to_run):
         print("\tBatch size:", b_sz)
-        seed(0)  # seeds 'random', we could 'search' for a better seed
+        seed(42069)  # seeds 'random', we could 'search' for a better seed
         data_repo.shuffle()
 
-        var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
+        #var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
+        var arena = CPUSystemAllocator()
         var arena_model = LeNet5(arena)
-        arena_model.randomizeWeights()
+        #arena_model.randomizeWeights()
 
         var model = LeNet5()
-        model.randomizeWeights()
+        #model.randomizeWeights()
 
-        trainAndTest(arena_model, data_repo, "arena_single")
-        trainAndTest(model, data_repo, "alloc_single")
+        #trainAndTest(arena_model, data_repo, "arena", "single", run_id)
+        #trainAndTest(model, data_repo, "alloc", "single", run_id)
 
         arena_model.zero()
         arena_model.randomizeWeights()
-
         model.zero()
         model.randomizeWeights()
 
-        trainAndTest(arena_model, data_repo, "arena_multi", parallel = True)
-        trainAndTest(model, data_repo, "alloc_multi", parallel = True)
+        trainAndTest(arena_model, data_repo, "wrappedsysalloc", run_id, parallel = False, batch_size = b_sz)
+        trainAndTest(model, data_repo, "alloc", run_id, parallel = False, batch_size = b_sz)
         _  = """
         var start_time = perf_counter_ns()
         training(model, data_repo.train_data, b_sz, logger)

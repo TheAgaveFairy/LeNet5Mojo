@@ -1,6 +1,6 @@
 from std.sys import simd_width_of
 
-from activation_fn import ActivationFunction, ReLU
+from activation_fn import *
 
 
 # Architecture dimensions
@@ -35,4 +35,4 @@ comptime ftype = DType.float32
 comptime sftype = Scalar[ftype]
 comptime nelts = simd_width_of[ftype]()
 
-comptime act_fn: ActivationFunction = ReLU  # see activation_fn.mojo for other options
+comptime act_fn: ActivationFunction = ReLU # options: ReLU, GELU, GELUFast, GELUTanh
