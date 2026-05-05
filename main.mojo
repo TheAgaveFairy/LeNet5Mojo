@@ -10,7 +10,7 @@ from std.gpu.host import DeviceContext
 
 from image import Image
 from cpu.model import LeNet5
-from constants import ftype, act_fn
+from constants import ftype, act_fn, ALPHA
 from cpu.ops import training, trainingParallel, testing, trainBatch
 from cpu.arena import CPUBumpArenaAllocator, CPUSystemAllocator
 
@@ -98,7 +98,7 @@ def main():
         run_id = "unknown"
 
     var act_name = materialize[act_fn_name]().split('.')[1]
-    print(t"CPU Testing with {num_logical_cores()} cores. Activation function is:", act_name)
+    print(t"CPU Testing with {num_logical_cores()} cores. Activation function is: {act_name}. Alpha = {ALPHA}, ftype = {ftype}")
     var data_repo = MNISTDataRepository()
 
     var batch_sizes = [300]  # 100, 300, 600, 1000] # prefer 300
@@ -108,23 +108,20 @@ def main():
         seed(42069)  # seeds 'random', we could 'search' for a better seed
         data_repo.shuffle()
 
-        #var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
-        var arena = CPUSystemAllocator()
+        var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
+        #var arena = CPUSystemAllocator()
         var arena_model = LeNet5(arena)
         #arena_model.randomizeWeights()
 
         var model = LeNet5()
         #model.randomizeWeights()
 
-        #trainAndTest(arena_model, data_repo, "arena", "single", run_id)
-        #trainAndTest(model, data_repo, "alloc", "single", run_id)
-
         arena_model.zero()
         arena_model.randomizeWeights()
         model.zero()
         model.randomizeWeights()
 
-        trainAndTest(arena_model, data_repo, "wrappedsysalloc", run_id, parallel = False, batch_size = b_sz)
+        trainAndTest(arena_model, data_repo, "arena", run_id, parallel = True, batch_size = b_sz)
         trainAndTest(model, data_repo, "alloc", run_id, parallel = False, batch_size = b_sz)
         _  = """
         var start_time = perf_counter_ns()
