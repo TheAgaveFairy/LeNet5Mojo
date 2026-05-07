@@ -1,5 +1,6 @@
 from std.sys import simd_width_of
 import std.sys.defines as defines
+from std.utils.type_functions import ConditionalType
 
 from activation_fn import *
 
@@ -31,9 +32,39 @@ comptime PADDING = 2
 comptime IMAGE_SIZE = 28
 comptime PADDED_SIZE = IMAGE_SIZE + 2 * PADDING  # == LENGTH_FEATURE0
 
-# Numeric type — change 'ftype' here to switch the whole model (float64, bf16, etc.)
-comptime ftype = DType.float64 #defines.get_defined_dtype["ftype", DType.float32]() # doesn't want to work
+# Numeric type — change 'ftype' (floating point type) here to switch the whole model (float64, bf16, etc.)
+#comptime ftype = DType.float64 #defines.get_defined_dtype["ftype", DType.float32]() # doesn't want to work
+comptime ftype = DType.float32 #if defines.is_defined["float64"]() else DType.float32https://www.instagram.com/reel/DWzkX7GPoPa/?igsh=bDNzYmV0bzhxbHVn
 comptime sftype = Scalar[ftype]
 comptime nelts = simd_width_of[ftype]()
 
-comptime act_fn: ActivationFunction = GELUFast # options: ReLU, GELU, GELUFast, GELUTanh
+#comptime act_fn: ActivationFunction = GELU # options: ReLU, GELU, GELUFast, GELUTanh
+
+comptime act_fn = ConditionalType[
+    Trait=ActivationFunction,
+    If=defines.is_defined["GELU"](),
+    Then=GELU,
+    Else=ConditionalType[
+        Trait=ActivationFunction,
+        If=defines.is_defined["GELUTanh"](),
+        Then=GELUTanh,
+        Else=ConditionalType[
+            Trait=ActivationFunction,
+            If=defines.is_defined["GELUFast"](),
+            Then=GELUFast,
+            Else=ConditionalType[
+                Trait=ActivationFunction,
+                If=defines.is_defined["Sigmoid"](),
+                Then=Sigmoid,
+                Else=ConditionalType[
+                    Trait=ActivationFunction,
+                    If=defines.is_defined["Tanh"](),
+                    Then=Tanh,
+                    Else=ReLU,
+                ],
+            ],
+        ],
+    ],
+]# options: ReLU, GELU, GELUFast, GELUTanh, Sigmoid
+
+comptime DISPLAY = True if defines.is_defined["DISPLAY"]() else False

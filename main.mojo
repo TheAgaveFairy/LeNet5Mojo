@@ -2,6 +2,7 @@ from std.subprocess import run as subProcessRun
 from std.random import seed
 from std.sys.info import num_logical_cores
 from std.sys import stderr
+from std.sys.defines import get_defined_int
 from std.time import perf_counter_ns
 import std.os as os
 import std.benchmark as benchmark
@@ -10,7 +11,7 @@ from std.gpu.host import DeviceContext
 
 from image import Image
 from cpu.model import LeNet5
-from constants import ftype, act_fn, ALPHA
+from constants import ftype, act_fn, ALPHA, DISPLAY
 from cpu.ops import training, trainingParallel, testing, trainBatch
 from cpu.arena import CPUBumpArenaAllocator, CPUSystemAllocator
 
@@ -48,12 +49,12 @@ def trainAndTest(
     parallel: Bool = False,
     batch_size: Int = 300,
 ):
-    var act_name = materialize[act_fn_name]().split('.')[1]
-    var thread = 1 if not parallel else num_logical_cores()
-    var name = t"{alloc} with {thread} threads"
-    print(t"{name} begins, parallel = {parallel}, batch_size = {batch_size}")
-    var infer_name = t"mode=infer_alloc={alloc}_thread={thread}_bs={batch_size}_act={act_name}_run={run_id}"
-    var train_name = t"mode=train_alloc={alloc}_thread={thread}_bs={batch_size}_act={act_name}_run={run_id}"
+    var act_name = materialize[act_fn_name]().split('.')[1] # ex: activation_fn.GELU, only need the end portion
+    var threads = 1 if not parallel else num_logical_cores()
+    #var name = t"{alloc} with {threads} threads"
+    #print(t"{name} begins, parallel = {parallel}, batch_size = {batch_size}")
+    var infer_name = t"mode=infer_alloc={alloc}_thread={threads}_bs={batch_size}_act={act_name}_run={run_id}"
+    var train_name = t"mode=train_alloc={alloc}_thread={threads}_bs={batch_size}_act={act_name}_run={run_id}"
     var logger = MultiFileLogger(
         "results/", String(infer_name), String(train_name)
     )
@@ -64,11 +65,12 @@ def trainAndTest(
         training(model, data_repo.train_data, batch_size, logger)
     var mid_time = perf_counter_ns()
     var training_ns = mid_time - start_time
-    print(
-        t"\n\t{name}'s Training done in",
-        training_ns // 1_000_000,
-        "ms. Now testing...",
-    )
+    if DISPLAY:
+        print(
+                t"\n\t{alloc} training:",
+            training_ns // 1_000_000,
+            "ms.",
+        )
 
     var correct = testing(model, data_repo.test_data)
     var end_time = perf_counter_ns()
@@ -77,18 +79,22 @@ def trainAndTest(
         logger.logInferenceResult(
             "CPU", testing_ns, correct, COUNT_TEST, 1, ftype
         )
-        print(
-            "\t",
-            correct,
-            "/",
-            COUNT_TEST,
-            "correct\n\t",
-            testing_ns // 1_000_000,
-            "ms for testing.",
-        )
+        if DISPLAY:
+            print(
+                "\t",
+                correct,
+                "/",
+                COUNT_TEST,
+                "correct\n\t",
+                testing_ns // 1_000_000,
+                "ms for testing.",
+            )
     except e:
         print(e, file=stderr)
 
+    var training_ms = training_ns // 1_000_000
+    var testing_ms = testing_ns // 1_000_000
+    print(t"alloc={alloc}, act_fn={act_name}, threads={threads}, ALPHA={ALPHA}, correct={correct}, total_count={len(data_repo.test_data)}, ftype={ftype}, batch_size={batch_size}, training_ms={training_ms}, testing_ms={testing_ms}")
 
 def main():
     var run_id: String
@@ -98,13 +104,13 @@ def main():
         run_id = "unknown"
 
     var act_name = materialize[act_fn_name]().split('.')[1]
-    print(t"CPU Testing with {num_logical_cores()} cores. Activation function is: {act_name}. Alpha = {ALPHA}, ftype = {ftype}")
+    #print(t"CPU Testing with {num_logical_cores()} cores. Activation function is: {act_name}. Alpha = {ALPHA}, ftype = {ftype}")
     var data_repo = MNISTDataRepository()
 
     var batch_sizes = [300]  # 100, 300, 600, 1000] # prefer 300
-    print(len(batch_sizes), "Batch size test[s] to run")
+    #print(len(batch_sizes), "Batch size test[s] to run")
     for b_sz in batch_sizes:  # range(tests_to_run):
-        print("\tBatch size:", b_sz)
+        #print("\tBatch size:", b_sz)
         seed(42069)  # seeds 'random', we could 'search' for a better seed
         data_repo.shuffle()
 
@@ -113,16 +119,16 @@ def main():
         var arena_model = LeNet5(arena)
         #arena_model.randomizeWeights()
 
-        var model = LeNet5()
+        #var model = LeNet5()
         #model.randomizeWeights()
 
         arena_model.zero()
         arena_model.randomizeWeights()
-        model.zero()
-        model.randomizeWeights()
+        #model.zero()
+        #model.randomizeWeights()
 
         trainAndTest(arena_model, data_repo, "arena", run_id, parallel = True, batch_size = b_sz)
-        trainAndTest(model, data_repo, "alloc", run_id, parallel = False, batch_size = b_sz)
+        #trainAndTest(model, data_repo, "alloc", run_id, parallel = False, batch_size = b_sz)
         _  = """
         var start_time = perf_counter_ns()
         training(model, data_repo.train_data, b_sz, logger)

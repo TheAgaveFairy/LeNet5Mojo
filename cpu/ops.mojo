@@ -20,6 +20,7 @@ from constants import (
     LENGTH_KERNEL,
     PADDED_SIZE,
     ALPHA,
+    DISPLAY,
 )
 from image import Image
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena
@@ -814,7 +815,8 @@ def trainingParallel(
     data: List[Image],
     batch_size: Int,
 ):
-    print("Training: Multi-Threaded")
+    if DISPLAY:
+        print("Training: Multi-Threaded")
     var total_size = len(data)
     if total_size % batch_size != 0:
         print(
@@ -832,7 +834,8 @@ def trainingParallel(
     batch_size: Int,
     mut logger: Some[LeNet5Logger],
 ):
-    print("Training: Multi-Threaded")
+    if DISPLAY:
+        print("Training: Multi-Threaded")
     var total_size = len(data)
     if total_size % batch_size != 0:
         print(
@@ -861,7 +864,8 @@ def training(
     batch_size: Int,
     mut logger: Some[LeNet5Logger],
 ):
-    print("Training: Single-Threaded")
+    if DISPLAY:
+        print("Training: Single-Threaded")
     var total_size = len(data)
     for i in range(0, total_size, batch_size):
         showProgress(i, total_size)
@@ -885,7 +889,8 @@ def training(
     batch_size: Int,
     # total_size: Int,
 ):
-    print("Training Single-Threaded")
+    if DISPLAY:
+        print("Training Single-Threaded")
     var total_size = len(data)
     if total_size % batch_size != 0:
         print(

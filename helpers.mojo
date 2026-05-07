@@ -1,4 +1,8 @@
+from constants import DISPLAY
+
 def showProgress(progress: Int, total: Int) -> None:
+    comptime if not DISPLAY:
+        return
     comptime bar_width = 50
     var ratio = Float64(progress) / Float64(total)
     var filled = Int(Float64(bar_width) * ratio)

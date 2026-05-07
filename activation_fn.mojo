@@ -37,14 +37,16 @@ trait ActivationFunction:
 
     @staticmethod
     @always_inline("nodebug")
-    def scalarForward(x: sftype) -> sftype:
-        """Scalar forward pass for use inside GPU device functions."""
+    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        """SIMD forward pass parameterized over dtype and vector width."""
         ...
 
     @staticmethod
     @always_inline("nodebug")
-    def scalarBackward(x: sftype, d_output: sftype) -> sftype:
-        """Scalar backward pass for use inside GPU device functions.
+    def simdBackward[fp: DType, width: Int](
+        x: SIMD[fp, width], d_output: SIMD[fp, width]
+    ) -> SIMD[fp, width]:
+        """SIMD backward pass parameterized over dtype and vector width.
         x is the pre-activation input, d_output is the upstream gradient.
         """
         ...
@@ -89,13 +91,128 @@ struct ReLU(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def scalarForward(x: sftype) -> sftype:
-        return x if x > 0.0 else sftype(0.0)
+    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert fp.is_floating_point(), "simdForward requires floating point"
+        comptime zeros = SIMD[fp, width](0.0)
+        return x.gt(zeros).select(x, zeros)
 
     @staticmethod
     @always_inline("nodebug")
-    def scalarBackward(x: sftype, d_output: sftype) -> sftype:
-        return d_output if x > 0.0 else sftype(0.0)
+    def simdBackward[fp: DType, width: Int](
+        x: SIMD[fp, width], d_output: SIMD[fp, width]
+    ) -> SIMD[fp, width]:
+        comptime assert fp.is_floating_point(), "simdBackward requires floating point"
+        comptime zeros = SIMD[fp, width](0.0)
+        return x.gt(zeros).select(d_output, zeros)
+
+
+struct Sigmoid(ActivationFunction):
+    """
+    Exact implementation.
+    sigmoid(x) = 1 / (1 + e^(-x))
+    """
+
+    @staticmethod
+    @always_inline("nodebug")
+    def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
+        def vectorize_closure[width: Int](i: Int) {read}:
+            var nums = x.ptr.load[width=width](i)
+            comptime ones = SIMD[ftype, width](1.0)
+            var sigmoid = ones / (ones + exp(-nums))
+            x.ptr.store[width=width](i, sigmoid)
+
+        vectorize[nelts](comptime (layout.size()), vectorize_closure)
+
+    @staticmethod
+    @always_inline("nodebug")
+    def backward[
+        layout: Layout
+    ](
+        x: LayoutTensor[ftype, layout, _],
+        d_output: LayoutTensor[ftype, layout, _],
+        d_z: LayoutTensor[ftype, layout, MutAnyOrigin],
+    ):
+        """
+        sigmoid'(z) = sigmoid(z) * (1-sigmoid(z))
+        """
+
+        def vectorize_closure[width: Int](i: Int) {read}:
+            var nums = x.ptr.load[width=width](i)
+            comptime ones = SIMD[ftype, width](1.0)
+            var upstream = d_output.ptr.load[width=width](i)
+            var s = ones / (ones + exp(-nums))
+            var answer = upstream * s * (ones - s)
+            d_z.ptr.store[width=width](i, answer)
+
+        vectorize[nelts](comptime (layout.size()), vectorize_closure)
+
+    @staticmethod
+    @always_inline("nodebug")
+    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert fp.is_floating_point(), "simdForward requires floating point"
+        comptime ones = SIMD[fp, width](1.0)
+        return ones / (ones + exp(-x))
+
+    @staticmethod
+    @always_inline("nodebug")
+    def simdBackward[fp: DType, width: Int](
+        x: SIMD[fp, width], d_output: SIMD[fp, width]
+    ) -> SIMD[fp, width]:
+        comptime assert fp.is_floating_point(), "simdBackward requires floating point"
+        comptime ones = SIMD[fp, width](1.0)
+        var s = ones / (ones + exp(-x))
+        return d_output * s * (ones - s)
+
+struct Tanh(ActivationFunction):
+    """
+    tanh(x) = (e^x - e^(-x)) / (e^x + e^(-x))
+    """
+
+    @staticmethod
+    @always_inline("nodebug")
+    def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
+        def vectorize_closure[width: Int](i: Int) {read}:
+            var nums = x.ptr.load[width=width](i)
+            x.ptr.store[width=width](i, tanh(nums))
+
+        vectorize[nelts](comptime (layout.size()), vectorize_closure)
+
+    @staticmethod
+    @always_inline("nodebug")
+    def backward[
+        layout: Layout
+    ](
+        x: LayoutTensor[ftype, layout, _],
+        d_output: LayoutTensor[ftype, layout, _],
+        d_z: LayoutTensor[ftype, layout, MutAnyOrigin],
+    ):
+        """
+        tanh'(x) = 1 - tanh(x)^2
+        """
+
+        def vectorize_closure[width: Int](i: Int) {read}:
+            comptime ones = SIMD[ftype, width](1.0)
+            var t = tanh(x.ptr.load[width=width](i))
+            var upstream = d_output.ptr.load[width=width](i)
+            d_z.ptr.store[width=width](i, upstream * (ones - t * t))
+
+        vectorize[nelts](comptime (layout.size()), vectorize_closure)
+
+    @staticmethod
+    @always_inline("nodebug")
+    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert fp.is_floating_point(), "simdForward requires floating point"
+        return tanh(x)
+
+    @staticmethod
+    @always_inline("nodebug")
+    def simdBackward[fp: DType, width: Int](
+        x: SIMD[fp, width], d_output: SIMD[fp, width]
+    ) -> SIMD[fp, width]:
+        comptime assert fp.is_floating_point(), "simdBackward requires floating point"
+        comptime ones = SIMD[fp, width](1.0)
+        var t = tanh(x)
+        return d_output * (ones - t * t)
 
 
 struct GELU(ActivationFunction):
@@ -112,12 +229,6 @@ struct GELU(ActivationFunction):
 
         def vectorize_closure[width: Int](i: Int) {read}:
             var nums = x.ptr.load[width=width](i)
-            # var nums_cubed = nums * nums * nums
-            # comptime scaling = SIMD[ftype, width](0.44715)
-            # comptime term = sftype(sqrt(2 / pi))
-            # var gelu = (
-            #    nums / 2 * (1 + tanh(term * (nums + scaling * nums_cubed)))
-            # )
             comptime sqrt2_vec = SIMD[ftype, width](sqrt2)
             comptime halves = SIMD[ftype, width](0.5)
             comptime ones = SIMD[ftype, width](1.0)
@@ -173,23 +284,28 @@ struct GELU(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def scalarForward(x: sftype) -> sftype:
-        comptime sqrt2 = sftype(sqrt(2.0))
-        comptime half = sftype(0.5)
-        comptime one = sftype(1.0)
+    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert fp.is_floating_point(), "simdForward requires floating point"
+        comptime typ = SIMD[fp, width]
+        comptime sqrt2 = typ(sqrt(2.0))
+        comptime half = typ(0.5)
+        comptime one = typ(1.0)
         return half * x * (one + erf(x / sqrt2))
 
     @staticmethod
     @always_inline("nodebug")
-    def scalarBackward(x: sftype, d_output: sftype) -> sftype:
-        comptime sqrt2 = sftype(sqrt(2.0))
-        comptime half = sftype(0.5)
-        comptime one = sftype(1.0)
-        comptime inv_sqrttau = sftype(1.0 / sqrt(tau))
+    def simdBackward[fp: DType, width: Int](
+        x: SIMD[fp, width], d_output: SIMD[fp, width]
+    ) -> SIMD[fp, width]:
+        comptime assert fp.is_floating_point(), "simdBackward requires floating point"
+        comptime typ = SIMD[fp, width]
+        comptime sqrt2 = typ(sqrt(2.0))
+        comptime half = typ(0.5)
+        comptime one = typ(1.0)
+        comptime inv_sqrttau = typ(1.0 / sqrt(tau))
         var cdf = half * (one + erf(x / sqrt2))
         var pdf = exp(-half * x * x) * inv_sqrttau
         return d_output * (cdf + x * pdf)
-
 
 struct GELUTanh(ActivationFunction):
     """
@@ -263,24 +379,28 @@ struct GELUTanh(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def scalarForward(x: sftype) -> sftype:
-        comptime k = sftype(sqrt(2.0 / pi))
-        comptime c = sftype(0.044715)
-        comptime half = sftype(0.5)
-        comptime one = sftype(1.0)
-        return half * x * (one + tanh(k * (x + c * x * x * x)))
+    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert fp.is_floating_point(), "simdForward requires floating point"
+        comptime k = SIMD[fp, width](sqrt(2.0 / pi))
+        comptime c = SIMD[fp, width](0.044715)
+        comptime half = SIMD[fp, width](0.5)
+        comptime ones = SIMD[fp, width](1.0)
+        return half * x * (ones + tanh(k * (x + c * x * x * x)))
 
     @staticmethod
     @always_inline("nodebug")
-    def scalarBackward(x: sftype, d_output: sftype) -> sftype:
-        comptime k = sftype(sqrt(2.0 / pi))
-        comptime c = sftype(0.044715)
-        comptime three_c = sftype(3.0 * 0.044715)
-        comptime half = sftype(0.5)
-        comptime one = sftype(1.0)
+    def simdBackward[fp: DType, width: Int](
+        x: SIMD[fp, width], d_output: SIMD[fp, width]
+    ) -> SIMD[fp, width]:
+        comptime assert fp.is_floating_point(), "simdBackward requires floating point"
+        comptime k = SIMD[fp, width](sqrt(2.0 / pi))
+        comptime c = SIMD[fp, width](0.044715)
+        comptime three_c = SIMD[fp, width](3.0 * 0.044715)
+        comptime half = SIMD[fp, width](0.5)
+        comptime ones = SIMD[fp, width](1.0)
         var t = tanh(k * (x + c * x * x * x))
         var deriv = half * (
-            (one + t) + x * (one - t * t) * k * (one + three_c * x * x)
+            (ones + t) + x * (ones - t * t) * k * (ones + three_c * x * x)
         )
         return d_output * deriv
 
@@ -347,16 +467,18 @@ struct GELUFast(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def scalarForward(x: sftype) -> sftype:
-        comptime alpha = sftype(1.702)
-        comptime one = sftype(1.0)
-        var s = one / (one + exp(-alpha * x))
-        return x * s
+    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert fp.is_floating_point(), "simdForward requires floating point"
+        comptime alpha = SIMD[fp, width](1.702)
+        return x * Self._sigmoid(alpha * x)
 
     @staticmethod
     @always_inline("nodebug")
-    def scalarBackward(x: sftype, d_output: sftype) -> sftype:
-        comptime alpha = sftype(1.702)
-        comptime one = sftype(1.0)
-        var s = one / (one + exp(-alpha * x))
-        return d_output * (s + alpha * x * s * (one - s))
+    def simdBackward[fp: DType, width: Int](
+        x: SIMD[fp, width], d_output: SIMD[fp, width]
+    ) -> SIMD[fp, width]:
+        comptime assert fp.is_floating_point(), "simdBackward requires floating point"
+        comptime alpha = SIMD[fp, width](1.702)
+        comptime ones = SIMD[fp, width](1.0)
+        var s = Self._sigmoid(alpha * x)
+        return d_output * (s + alpha * x * s * (ones - s))
