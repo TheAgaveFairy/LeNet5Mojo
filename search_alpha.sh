@@ -20,7 +20,7 @@ OUTDIR="."
 PHASE1_POINTS=(8 32 64 128 256 384 512 768 1000)
 
 # Phase 2: linear sweep around the phase 1 peak
-PHASE2_HALF_WIDTH=40   # sweep ± this many ALPHA units around the peak
+PHASE2_HALF_WIDTH=100   # sweep ± this many ALPHA units around the peak
 PHASE2_STEP=10         # step size
 
 # ══════════════════════════════════════════════════════════════════════════════

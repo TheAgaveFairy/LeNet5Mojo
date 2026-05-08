@@ -6,6 +6,7 @@ from std.utils.index import IndexList
 from std.memory import memcpy
 import std.benchmark as benchmark
 from std.sys import stderr
+from std.sys.info import size_of
 
 from std.time import perf_counter_ns
 from helpers import showProgress
@@ -913,3 +914,4 @@ def testing(model: LeNet5, data: List[Image]) -> Int:
         correct += 1 if pred == actual else 0
     benchmark.keep(feat_arena)
     return correct
+

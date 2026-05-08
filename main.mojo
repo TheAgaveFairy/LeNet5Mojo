@@ -6,7 +6,7 @@ from std.sys.defines import get_defined_int
 from std.time import perf_counter_ns
 import std.os as os
 import std.benchmark as benchmark
-from std.reflection import get_type_name, reflect # TODO: remove unused imports
+from std.reflection.reflect import reflect # TODO: remove unused imports
 from std.gpu.host import DeviceContext
 
 from image import Image
@@ -37,7 +37,7 @@ from resultlogger import MultiFileLogger
 comptime COUNT_TRAIN = MNISTDataRepository.COUNT_TRAIN
 comptime COUNT_TEST = MNISTDataRepository.COUNT_TEST
 
-comptime act_fn_name = reflect[act_fn]().name()
+comptime act_fn_name = reflect[act_fn].base_name()
 
 def trainAndTest(
     mut model: LeNet5,
@@ -49,7 +49,7 @@ def trainAndTest(
     parallel: Bool = False,
     batch_size: Int = 300,
 ):
-    var act_name = materialize[act_fn_name]().split('.')[1] # ex: activation_fn.GELU, only need the end portion
+    var act_name = materialize[act_fn_name]() # ex: activation_fn.GELU, only need the end portion
     var threads = 1 if not parallel else num_logical_cores()
     #var name = t"{alloc} with {threads} threads"
     #print(t"{name} begins, parallel = {parallel}, batch_size = {batch_size}")
@@ -103,8 +103,6 @@ def main():
     except:
         run_id = "unknown"
 
-    var act_name = materialize[act_fn_name]().split('.')[1]
-    #print(t"CPU Testing with {num_logical_cores()} cores. Activation function is: {act_name}. Alpha = {ALPHA}, ftype = {ftype}")
     var data_repo = MNISTDataRepository()
 
     var batch_sizes = [300]  # 100, 300, 600, 1000] # prefer 300
@@ -129,30 +127,6 @@ def main():
 
         trainAndTest(arena_model, data_repo, "arena", run_id, parallel = True, batch_size = b_sz)
         #trainAndTest(model, data_repo, "alloc", run_id, parallel = False, batch_size = b_sz)
-        _  = """
-        var start_time = perf_counter_ns()
-        training(model, data_repo.train_data, b_sz, logger)
-        var training_time = perf_counter_ns()
-        var elapsed = training_time - start_time
-        print(
-            "\n\tTraining done in", elapsed // 1_000_000, "ms. Now testing..."
-        )
-
-        var correct = testing(model, data_repo.test_data)
-        var end_time = perf_counter_ns()
-        elapsed = end_time - training_time
-        try:
-            logger.logInferenceResult(
-                "CPU", elapsed, correct, COUNT_TEST, 1, ftype
-            )
-            print(
-                t"\t{correct}/{COUNT_TEST} correct\n\t{elapsed // 1_000_000}ms"
-                t" for testing."
-            )
-        except e:
-            print(e, file=stderr)
-        # TODO: SAVE THE MODEL TO A FILE
-        """
         benchmark.keep(arena)
 
     _ = """
