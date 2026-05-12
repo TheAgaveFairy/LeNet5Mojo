@@ -278,7 +278,7 @@ struct LeNet5(Movable):
 
     @staticmethod
     def bytesToFType[
-        filetype: DType, num_bytes: Int, layout: Layout
+            filetype: DType, num_bytes: Int, layout: Layout, big_e: Bool = is_big_endian()
     ](
         bytes: InlineArray[Scalar[DType.uint8], num_bytes],
         tensor: LayoutTensor[ftype, layout, MutAnyOrigin],
@@ -359,6 +359,31 @@ struct LeNet5(Movable):
         except e:
             print("error at reading lenet5 from file", e)
 
+    @staticmethod
+    def _writeTensor[layout: Layout](tensor: LayoutTensor[ftype, layout, MutAnyOrigin], mut f: FileHandle) raises:
+        comptime fbs = size_of[ftype]() # float byte size
+        var ptr_bytes = tensor.ptr.bitcast[UInt8]()
+        var ptr_len = comptime(layout.size()) * fbs
+        var temp_buf = alloc[UInt8](ptr_len)
+        var bytes_span = Span(ptr = temp_buf, length = ptr_len)
+        memcpy(src = ptr_bytes, dest = temp_buf, count = ptr_len)
+        comptime if is_big_endian():
+            for i in range(0, ptr_len, fbs):
+                comptime for j in range(fbs // 2):
+                    swap(temp_buf[i + j], temp_buf[i + (fbs - 1) - j])
+        f.write_all(bytes_span)
+
+    def saveToFile(mut self, filename: Path) raises:
+        """Alternatively, could write an Arena to file, etc."""
+        with open(filename, "w") as f:
+            Self._writeTensor(self.weight0_1, f)
+            Self._writeTensor(self.weight2_3, f)
+            Self._writeTensor(self.weight4_5, f)
+            Self._writeTensor(self.weight5_6, f)
+            Self._writeTensor(self.bias0_1, f)
+            Self._writeTensor(self.bias2_3, f)
+            Self._writeTensor(self.bias4_5, f)
+            Self._writeTensor(self.bias5_6, f)
 
 struct Feature(Movable):
     """

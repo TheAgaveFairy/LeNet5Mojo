@@ -4,6 +4,7 @@ from std.sys.info import num_logical_cores
 from std.sys import stderr
 from std.sys.defines import get_defined_int
 from std.time import perf_counter_ns
+from std.pathlib import Path
 import std.os as os
 import std.benchmark as benchmark
 from std.reflection.reflect import reflect # TODO: remove unused imports
@@ -127,13 +128,17 @@ def main():
 
         trainAndTest(arena_model, data_repo, "arena", run_id, parallel = True, batch_size = b_sz)
         #trainAndTest(model, data_repo, "alloc", run_id, parallel = False, batch_size = b_sz)
+    
+        try:
+            arena_model.saveToFile(Path("models/deleteme.test"))
+        except e:
+            print(e, file=stderr)
         benchmark.keep(arena)
-
-    _ = """
     # TESTING A PRETRAINED VERSION FROM OLD FILE
         
-    comptime model_name = "models/model_f64.dat"
-    comptime saved_model_dtype = DType.float64
+    #_ = """
+    comptime model_name = "models/deleteme.test"
+    comptime saved_model_dtype = ftype
 
     print("Loading and testing a saved model: '" + model_name + "'")
     var modelCPU = LeNet5()
@@ -144,18 +149,20 @@ def main():
     print("\t", correct, "/", COUNT_TRAIN, "correct")
     elapsed = end_time - start_time  # // 1_000_000
     print("\t", elapsed // 1_000_000, "ms")
-    try:
-        logger.logInferenceResult(
-            "CPU", elapsed, correct, COUNT_TRAIN, 1, saved_model_dtype
-        )
-    except e:
-        print(e, file=stderr)
+
+    #
+    # try:
+    #     logger.logInferenceResult(
+    #         "CPU", elapsed, correct, COUNT_TRAIN, 1, saved_model_dtype
+    #     )
+    # except e:
+    #     print(e, file=stderr)
     
 
     # print("Kernel Length:", LENGTH_KERNEL)
     # print("Feature 0->5:", LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2, LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5)
     # print("Input Channels, Layer1->5, Output:", INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT)
-
+    _ = """
     try:
         with DeviceContext() as ctx:
             var modelGPUfromCPU = LeNet5GPU(ctx, modelCPU)

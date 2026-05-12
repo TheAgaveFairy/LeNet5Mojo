@@ -79,7 +79,7 @@ struct InferenceResult(LogEntry):
             + ","
             + datatype_string
             + ","
-            + materialize[reflect[act_fn]().name()]().split(".")[1]
+            + materialize[reflect[act_fn].name()]().split(".")[1]
         )
 
     @staticmethod
@@ -147,7 +147,7 @@ struct TrainingResult(LogEntry):
             + ","
             + datatype_string
             + ","
-            + materialize[reflect[act_fn]().name()]().split(".")[1]
+            + materialize[reflect[act_fn].name()]().split(".")[1]
         )
 
     @staticmethod
