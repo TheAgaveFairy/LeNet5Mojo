@@ -2,7 +2,7 @@ from layout import Layout, LayoutTensor
 
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.builtin.device_passable import DevicePassable
-from std.reflection import get_type_name
+from std.reflection.reflect import reflect
 
 from cpu.model import LeNet5
 from constants import (
@@ -28,7 +28,7 @@ from constants import (
 from image import Image
 
 
-struct LeNet5GPUBuffers:
+struct LeNet5GPUBuffers():
     """Stays on CPU — holds DeviceBuffers for host-side access (map_to_host, enqueue_copy_from, etc.).
     """
 
@@ -208,13 +208,13 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable):
 
     @staticmethod
     def get_type_name() -> String:
-        return get_type_name[Self]()
+        return reflect[Self].name()
 
     def _to_device_type(self, target: MutOpaquePointer[_]):
         target.bitcast[Self.device_type]()[] = self
 
 
-struct FeatureGPUBuffers:
+struct FeatureGPUBuffers():
     """Stays on CPU — holds DeviceBuffers for host-side access (map_to_host, enqueue_copy_from, etc.).
     """
 
@@ -235,7 +235,7 @@ struct FeatureGPUBuffers:
         self.layer5_storage = feat.layer5.to_device_buffer(ctx)
         self.output_storage = feat.output.to_device_buffer(ctx)
 
-    def loadInput(mut self, image: Image) -> None:
+    def loadInput(mut self, image: Image) raises -> None:
         try:
             with self.input_storage.map_to_host() as load_me:
                 for i in range(PADDED_SIZE):
@@ -244,7 +244,7 @@ struct FeatureGPUBuffers:
                             image.pixels[i, j]
                         )
         except e:
-            print("loadInput FeatureGPUBuffers ERROR", e)
+            raise Error("loadInput FeatureGPUBuffers ERROR", e)
 
 
 struct FeatureGPU(Copyable, Movable):

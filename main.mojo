@@ -7,7 +7,7 @@ from std.time import perf_counter_ns
 from std.pathlib import Path
 import std.os as os
 import std.benchmark as benchmark
-from std.reflection.reflect import reflect # TODO: remove unused imports
+from std.reflection.reflect import reflect  # TODO: remove unused imports
 from std.gpu.host import DeviceContext
 
 from image import Image
@@ -16,17 +16,16 @@ from constants import ftype, act_fn, ALPHA, DISPLAY
 from cpu.ops import training, trainingParallel, testing, trainBatch
 from cpu.arena import CPUBumpArenaAllocator, CPUSystemAllocator
 
-#
-# from accel import (
-#     LeNet5GPU,
-#     conv1FusedKernel,
-#     conv2FusedKernel,
-#     conv3FusedKernel,
-#     maxPool1Kernel,
-#     maxPool2Kernel,
-#     matMulFusedKernel,
-#     batchedForward,
-# )
+from accel import (
+    LeNet5GPU,
+    conv1FusedKernel,
+    conv2FusedKernel,
+    conv3FusedKernel,
+    maxPool1Kernel,
+    maxPool2Kernel,
+    matMulFusedKernel,
+    batchedForward,
+)
 
 from helpers import showProgress
 from dataloader import MNISTDataRepository
@@ -40,64 +39,125 @@ comptime COUNT_TEST = MNISTDataRepository.COUNT_TEST
 
 comptime act_fn_name = reflect[act_fn].base_name()
 
+
+@fieldwise_init
+struct TrainingSummary(Copyable, Movable):
+    var elapsed_ns: UInt
+
+
+@fieldwise_init
+struct InferenceSummary(Copyable, Movable):
+    var correct: Int
+    var count: Int
+    var elapsed_ns: UInt
+
+
+def runTrain(
+    mut model: LeNet5,
+    data: List[Image],
+    *,
+    parallel: Bool = False,
+    batch_size: Int = 300,
+) -> TrainingSummary:
+    var start_time = perf_counter_ns()
+    if parallel:
+        trainingParallel(model, data, batch_size)
+    else:
+        training(model, data, batch_size)
+    return TrainingSummary(perf_counter_ns() - start_time)
+
+
+def runTrain(
+    mut model: LeNet5,
+    data: List[Image],
+    mut logger: MultiFileLogger,
+    *,
+    parallel: Bool = False,
+    batch_size: Int = 300,
+) -> TrainingSummary:
+    var start_time = perf_counter_ns()
+    if parallel:
+        trainingParallel(model, data, batch_size, logger)
+    else:
+        training(model, data, batch_size, logger)
+    return TrainingSummary(perf_counter_ns() - start_time)
+
+
+def runTest(
+    model: LeNet5,
+    data: List[Image],
+) -> InferenceSummary:
+    var start_time = perf_counter_ns()
+    var correct = testing(model, data)
+    return InferenceSummary(correct, len(data), perf_counter_ns() - start_time)
+
+
+def runTest(
+    model: LeNet5,
+    data: List[Image],
+    mut logger: MultiFileLogger,
+) -> InferenceSummary:
+    var start_time = perf_counter_ns()
+    var correct = testing(model, data)
+    var elapsed_ns = perf_counter_ns() - start_time
+    try:
+        logger.logInferenceResult(
+            "CPU", elapsed_ns, correct, len(data), 1, ftype
+        )
+    except e:
+        print(e, file=stderr)
+    return InferenceSummary(correct, len(data), elapsed_ns)
+
+
 def trainAndTest(
     mut model: LeNet5,
     data_repo: MNISTDataRepository,
     alloc: String,
-    #thread: String,
     run_id: String,
     *,
     parallel: Bool = False,
     batch_size: Int = 300,
-):
-    var act_name = materialize[act_fn_name]() # ex: activation_fn.GELU, only need the end portion
+) raises:
+    var act_name = materialize[act_fn_name]()
     var threads = 1 if not parallel else num_logical_cores()
-    #var name = t"{alloc} with {threads} threads"
-    #print(t"{name} begins, parallel = {parallel}, batch_size = {batch_size}")
     var infer_name = t"mode=infer_alloc={alloc}_thread={threads}_bs={batch_size}_act={act_name}_run={run_id}"
     var train_name = t"mode=train_alloc={alloc}_thread={threads}_bs={batch_size}_act={act_name}_run={run_id}"
     var logger = MultiFileLogger(
         "results/", String(infer_name), String(train_name)
     )
-    var start_time = perf_counter_ns()
-    if parallel:
-        trainingParallel(model, data_repo.train_data, batch_size, logger)
-    else:
-        training(model, data_repo.train_data, batch_size, logger)
-    var mid_time = perf_counter_ns()
-    var training_ns = mid_time - start_time
+    var train_res = runTrain(
+        model,
+        data_repo.train_data,
+        logger,
+        parallel=parallel,
+        batch_size=batch_size,
+    )
     if DISPLAY:
         print(
-                t"\n\t{alloc} training:",
-            training_ns // 1_000_000,
-            "ms.",
+            t"\n\t{alloc} training:", train_res.elapsed_ns // 1_000_000, "ms."
         )
-
-    var correct = testing(model, data_repo.test_data)
-    var end_time = perf_counter_ns()
-    var testing_ns = end_time - mid_time
-    try:
-        logger.logInferenceResult(
-            "CPU", testing_ns, correct, COUNT_TEST, 1, ftype
+    var infer_res = runTest(model, data_repo.test_data, logger)
+    if DISPLAY:
+        print(
+            "\t",
+            infer_res.correct,
+            "/",
+            infer_res.count,
+            "correct\n\t",
+            infer_res.elapsed_ns // 1_000_000,
+            "ms for testing.",
         )
-        if DISPLAY:
-            print(
-                "\t",
-                correct,
-                "/",
-                COUNT_TEST,
-                "correct\n\t",
-                testing_ns // 1_000_000,
-                "ms for testing.",
-            )
-    except e:
-        print(e, file=stderr)
+    var training_ms = train_res.elapsed_ns // 1_000_000
+    var testing_ms = infer_res.elapsed_ns // 1_000_000
+    print(
+        t"alloc={alloc}, act_fn={act_name}, threads={threads}, ALPHA={ALPHA},"
+        t" correct={infer_res.correct}, total_count={infer_res.count},"
+        t" ftype={ftype}, batch_size={batch_size}, training_ms={training_ms},"
+        t" testing_ms={testing_ms}"
+    )
 
-    var training_ms = training_ns // 1_000_000
-    var testing_ms = testing_ns // 1_000_000
-    print(t"alloc={alloc}, act_fn={act_name}, threads={threads}, ALPHA={ALPHA}, correct={correct}, total_count={len(data_repo.test_data)}, ftype={ftype}, batch_size={batch_size}, training_ms={training_ms}, testing_ms={testing_ms}")
 
-def main():
+def main() raises:
     var run_id: String
     try:
         run_id = subProcessRun("date +%s")
@@ -107,62 +167,57 @@ def main():
     var data_repo = MNISTDataRepository()
 
     var batch_sizes = [300]  # 100, 300, 600, 1000] # prefer 300
-    #print(len(batch_sizes), "Batch size test[s] to run")
+    # print(len(batch_sizes), "Batch size test[s] to run")
     for b_sz in batch_sizes:  # range(tests_to_run):
-        #print("\tBatch size:", b_sz)
+        # print("\tBatch size:", b_sz)
         seed(42069)  # seeds 'random', we could 'search' for a better seed
         data_repo.shuffle()
 
         var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
-        #var arena = CPUSystemAllocator()
+        # var arena = CPUSystemAllocator()
         var arena_model = LeNet5(arena)
-        #arena_model.randomizeWeights()
+        # arena_model.randomizeWeights()
 
-        #var model = LeNet5()
-        #model.randomizeWeights()
+        # var model = LeNet5()
+        # model.randomizeWeights()
 
         arena_model.zero()
         arena_model.randomizeWeights()
-        #model.zero()
-        #model.randomizeWeights()
+        # model.zero()
+        # model.randomizeWeights()
 
-        trainAndTest(arena_model, data_repo, "arena", run_id, parallel = True, batch_size = b_sz)
-        #trainAndTest(model, data_repo, "alloc", run_id, parallel = False, batch_size = b_sz)
-    
+        trainAndTest(
+            arena_model,
+            data_repo,
+            "arena",
+            run_id,
+            parallel=True,
+            batch_size=b_sz,
+        )
+        # trainAndTest(model, data_repo, "alloc", run_id, parallel = False, batch_size = b_sz)
+
         try:
             arena_model.saveToFile(Path("models/deleteme.test"))
         except e:
             print(e, file=stderr)
-        benchmark.keep(arena)
+        benchmark.keep(arena) # FIXME: joint origins have been discussed. could also wrap together into an AllocatorBox[LeNet5, Arena] so the lifetimes are tied
+
     # TESTING A PRETRAINED VERSION FROM OLD FILE
-        
-    #_ = """
+
+    # _ = """
     comptime model_name = "models/deleteme.test"
     comptime saved_model_dtype = ftype
 
     print("Loading and testing a saved model: '" + model_name + "'")
     var modelCPU = LeNet5()
     modelCPU.loadFromFile[saved_model_dtype](model_name)
-    start_time = perf_counter_ns()
-    var correct = testing(modelCPU, data_repo.train_data)
-    end_time = perf_counter_ns()
-    print("\t", correct, "/", COUNT_TRAIN, "correct")
-    elapsed = end_time - start_time  # // 1_000_000
-    print("\t", elapsed // 1_000_000, "ms")
-
-    #
-    # try:
-    #     logger.logInferenceResult(
-    #         "CPU", elapsed, correct, COUNT_TRAIN, 1, saved_model_dtype
-    #     )
-    # except e:
-    #     print(e, file=stderr)
-    
+    var saved_res = runTest(modelCPU, data_repo.test_data)
+    print("\t", saved_res.correct, "/", saved_res.count, "correct")
+    print("\t", saved_res.elapsed_ns // 1_000_000, "ms")
 
     # print("Kernel Length:", LENGTH_KERNEL)
     # print("Feature 0->5:", LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2, LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5)
     # print("Input Channels, Layer1->5, Output:", INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT)
-    _ = """
     try:
         with DeviceContext() as ctx:
             var modelGPUfromCPU = LeNet5GPU(ctx, modelCPU)
@@ -175,24 +230,24 @@ def main():
             comptime batch_size = 50  # more than ~75 fails "uses too much parameter space"
 
             var conv1 = ctx.compile_function[
-                conv1FusedKernel[batch_size, reLu]
+                conv1FusedKernel[batch_size]
             ]()
             var pool1 = ctx.compile_function[maxPool1Kernel[batch_size]]()
             var conv2 = ctx.compile_function[
-                conv2FusedKernel[batch_size, reLu]
+                conv2FusedKernel[batch_size]
             ]()
             var pool2 = ctx.compile_function[maxPool2Kernel[batch_size]]()
             var conv3 = ctx.compile_function[
-                conv3FusedKernel[batch_size, reLu]
+                conv3FusedKernel[batch_size]
             ]()
             var matmul = ctx.compile_function[
-                matMulFusedKernel[batch_size, reLu]
+                matMulFusedKernel[batch_size]
             ]()
 
             var start_time = perf_counter_ns()
 
-            var correct = batchedForward[COUNT_TRAIN, batch_size](
-                train_data,
+            var correct = batchedForward[batch_size](
+                data_repo.train_data,
                 modelGPUfromCPU,
                 conv1,
                 pool1,
@@ -206,10 +261,9 @@ def main():
 
             print("\t", correct, "/", COUNT_TRAIN, "correct")
             print("\t", elapsed // 1_000_000, "ms")
-            logger.logInferenceResult(
-                device_name, elapsed, correct, COUNT_TRAIN, batch_size, ftype
-            )
+            # TODO: wire up logger for GPU inference result
+            # logger.logInferenceResult(
+            #     device_name, elapsed, correct, COUNT_TRAIN, batch_size, ftype
+            # )
     except e:
         print("ERROR IN MAIN", e, file=stderr)
-        # don't forget to tell "raise" what to raise, compiler doesn't handle that well
-    """

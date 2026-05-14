@@ -22,35 +22,16 @@ from constants import (
     LENGTH_FEATURE5,
 )
 from image import Image
-from gpu.arena import GPUBumpArenaAllocator
+from accel.arena import GPUBumpArenaAllocator
 
 
-struct FeatureGPUBuffers:
+struct FeatureGPUBuffers():
     """CPU-side — holds DeviceBuffer handles for host ops (map_to_host, loadInput, etc.).
     Owns the arena sub-buffer refs; FeatureGPU's LayoutTensors point into these.
     Arena must outlive both this struct and any FeatureGPU built from it.
     """
 
-    comptime input_layout = Layout.row_major(
-        INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0
-    )
-    comptime layer1_layout = Layout.row_major(
-        LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE1
-    )
-    comptime layer2_layout = Layout.row_major(
-        LAYER2, LENGTH_FEATURE2, LENGTH_FEATURE2
-    )
-    comptime layer3_layout = Layout.row_major(
-        LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE3
-    )
-    comptime layer4_layout = Layout.row_major(
-        LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4
-    )
-    comptime layer5_layout = Layout.row_major(
-        LAYER5, LENGTH_FEATURE5, LENGTH_FEATURE5
-    )
-    comptime output_layout = Layout.row_major(OUTPUT)
-
+    var allocator_owns_memory: Bool
     var input: DeviceBuffer[ftype]
     var layer1: DeviceBuffer[ftype]
     var layer2: DeviceBuffer[ftype]
@@ -64,26 +45,38 @@ struct FeatureGPUBuffers:
         """Total bytes needed from the arena for one FeatureGPUBuffers instance.
         """
         return (
-            comptime (Self.input_layout.size())
-            + comptime (Self.layer1_layout.size())
-            + comptime (Self.layer2_layout.size())
-            + comptime (Self.layer3_layout.size())
-            + comptime (Self.layer4_layout.size())
-            + comptime (Self.layer5_layout.size())
-            + comptime (Self.output_layout.size())
+            comptime (FeatureGPU.input_layout.size())
+            + comptime (FeatureGPU.layer1_layout.size())
+            + comptime (FeatureGPU.layer2_layout.size())
+            + comptime (FeatureGPU.layer3_layout.size())
+            + comptime (FeatureGPU.layer4_layout.size())
+            + comptime (FeatureGPU.layer5_layout.size())
+            + comptime (FeatureGPU.output_layout.size())
         ) * size_of[sftype]()
 
     def __init__(out self, mut arena: GPUBumpArenaAllocator) raises:
         """Allocates all layer buffers from the arena. No GPU work — pure bookkeeping.
         Arena already zero-fills on creation; no enqueue_fill needed here.
         """
-        self.input = areniiia.alloc[ftype](comptime (Self.input_layout.size()))
-        self.layer1 = arena.alloc[ftype](comptime (Self.layer1_layout.size()))
-        self.layer2 = arena.alloc[ftype](comptime (Self.layer2_layout.size()))
-        self.layer3 = arena.alloc[ftype](comptime (Self.layer3_layout.size()))
-        self.layer4 = arena.alloc[ftype](comptime (Self.layer4_layout.size()))
-        self.layer5 = arena.alloc[ftype](comptime (Self.layer5_layout.size()))
-        self.output = arena.alloc[ftype](comptime (Self.output_layout.size()))
+        self.allocator_owns_memory = True
+        self.input = arena.alloc[ftype](comptime (FeatureGPU.input_layout.size()))
+        self.layer1 = arena.alloc[ftype](comptime (FeatureGPU.layer1_layout.size()))
+        self.layer2 = arena.alloc[ftype](comptime (FeatureGPU.layer2_layout.size()))
+        self.layer3 = arena.alloc[ftype](comptime (FeatureGPU.layer3_layout.size()))
+        self.layer4 = arena.alloc[ftype](comptime (FeatureGPU.layer4_layout.size()))
+        self.layer5 = arena.alloc[ftype](comptime (FeatureGPU.layer5_layout.size()))
+        self.output = arena.alloc[ftype](comptime (FeatureGPU.output_layout.size()))
+
+    def __init__(out self, ctx: DeviceContext) raises:
+        self.allocator_owns_memory = False
+        self.input = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.input_layout.size()).enqueue_fill(0.0)
+        self.layer1 = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.layer1_layout.size()).enqueue_fill(0.0)
+        self.layer2 = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.layer2_layout.size()).enqueue_fill(0.0)
+        self.layer3 = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.layer3_layout.size()).enqueue_fill(0.0)
+        self.layer4 = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.layer4_layout.size()).enqueue_fill(0.0)
+        self.layer5 = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.layer5_layout.size()).enqueue_fill(0.0)
+        self.output = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.output_layout.size()).enqueue_fill(0.0)
+        
 
     def loadInput(mut self, image: Image) -> None:
         try:
@@ -132,7 +125,6 @@ struct FeatureGPU(Copyable, Movable):
     var output: LayoutTensor[ftype, FeatureGPU.output_layout, MutAnyOrigin]
 
     def __init__(out self, bufs: FeatureGPUBuffers):
-        # LayoutTensor constructor needs a local var ref, not a field-through-read-param.
         var b_input = bufs.input
         var b_layer1 = bufs.layer1
         var b_layer2 = bufs.layer2

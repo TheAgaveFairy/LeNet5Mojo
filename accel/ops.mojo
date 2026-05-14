@@ -1,11 +1,12 @@
 from layout import Layout, LayoutTensor
 from std.math import ceil, log2
 
-from std.gpu.host import DeviceContext, DeviceFunction
+from std.gpu.host import DeviceContext, DeviceBuffer, DeviceFunction
 from std.gpu import thread_idx, block_idx, block_dim, barrier
 from std.gpu.memory import AddressSpace
 
-from cpu.model import LeNet5
+from cpu.model import LeNet5, Feature
+from cpu.ops import loadInput, forward, argMax
 from constants import (
     ftype,
     sftype,
@@ -93,7 +94,7 @@ def matMulFusedKernel[
 
         if thread == 0:
             var temp = rebind[sftype](reduction_buffer[0] + lenet.bias5_6[oc])
-            feats[img_idx].output[oc] = act_fn.gpu_forward(temp)
+            feats[img_idx].output[oc] = act_fn.simdForward(temp)
 
 
 def matMulForward[
@@ -297,7 +298,7 @@ def conv3FusedKernel[
             temp = rebind[sftype](
                 reduction_buffer[0] + lenet.bias4_5[oc + offset]
             )
-            feats[img_idx].layer5[oc + offset, 0, 0] = act_fn.gpu_forward(temp)
+            feats[img_idx].layer5[oc + offset, 0, 0] = act_fn.simdForward(temp)
 
 
 def conv3Forward[
@@ -399,7 +400,7 @@ def conv2FusedKernel[
                     local_image[ic, in_row, in_col]
                 ) * rebind[sftype](local_kernels[ic, local_chan, i, j])
 
-    feats[img_idx].layer3[global_chan, row, col] = act_fn.gpu_forward(
+    feats[img_idx].layer3[global_chan, row, col] = act_fn.simdForward(
         rebind[sftype](result + local_biases[local_chan])
     )
 
@@ -488,7 +489,7 @@ def conv1FusedKernel[
                     result += rebind[sftype](
                         local_image[ic, in_row, in_col]
                     ) * rebind[sftype](local_kernels[ic, oc, i, j])
-        feats[img_idx].layer1[oc, row, col] = act_fn.gpu_forward(
+        feats[img_idx].layer1[oc, row, col] = act_fn.simdForward(
             rebind[sftype](result + local_biases[oc])
         )
 
@@ -540,8 +541,9 @@ def compareBuffers[
     """Debugging helper — compares GPU buffer to CPU pointer element-wise."""
     from std.math import abs
 
+    comptime size = layout.size()
     var epsilon: sftype = -1.0
-    for i in range(layout.size()):
+    for i in range(size):
         if abs(host_buffer[i]) > epsilon:
             epsilon = abs(host_buffer[i])
     epsilon /= 100  # allow 1% error
@@ -551,7 +553,7 @@ def compareBuffers[
     try:
         with DeviceContext() as ctx:
             with device_buffer.map_to_host() as dev:
-                for i in range(layout.size()):
+                for i in range(size):
                     if (
                         dev[i] < host_buffer[i] - epsilon
                         or dev[i] > host_buffer[i] + epsilon
@@ -575,7 +577,7 @@ def compareBuffers[
         "\t...",
         count,
         "/",
-        layout.size(),
+        size,
         "errors between CPU and GPU. Max",
         max_display,
         "shown.",
@@ -600,10 +602,10 @@ def singleForward(
 
     try:
         with DeviceContext() as ctx:
-            var feat_cpu = lenet.Feature()
-            lenet.loadInput(feat_cpu, img_copy)
-            lenet.forward(lenet_cpu, feat_cpu)
-            var cpu_guess = lenet.argMax(feat_cpu.output)
+            var feat_cpu = Feature()
+            loadInput(feat_cpu, img_copy)
+            forward(lenet_cpu, feat_cpu)
+            var cpu_guess = argMax(feat_cpu.output)
 
             var feats = InlineArray[FeatureGPU, batch_size](
                 fill=FeatureGPU(ctx)
@@ -621,7 +623,7 @@ def singleForward(
             with feat_bufs.output_storage.map_to_host() as ans:
                 for i in range(host_output_layer.size()):
                     host_output_layer.ptr[i] = ans[i]
-            gpu_guess = lenet.argMax(host_output_layer)
+            gpu_guess = argMax(host_output_layer)
     except e:
         print(e)
 
@@ -652,10 +654,8 @@ def getResults[
     return output^
 
 
-def batchedForward[
-    count: Int, batch_size: Int
-](
-    data: UnsafePointer[Image, _],
+def batchedForward[batch_size: Int](
+    data: List[Image],
     model: LeNet5GPU,
     conv1: DeviceFunction,
     pool1: DeviceFunction,
@@ -664,18 +664,21 @@ def batchedForward[
     conv3: DeviceFunction,
     matmul: DeviceFunction,
 ) raises -> Int:
+    var count = len(data)
+    _ = """
     comptime assert (
         count % batch_size == 0
     ), "count must be divisible by batch_size"
+    """
     print("Batched forward, batch size:", batch_size)
     var correct = 0
 
     try:
         with DeviceContext() as ctx:
-            var features = InlineArray[FeatureGPU, batch_size](
+            var features = InlineArray[FeatureGPU, batch_size]( # TODO: consider making this a List / dynamic shape
                 fill=FeatureGPU(ctx)
             )
-            # TODO: @parameter explodes compile time — left as runtime loop
+            # TODO: 'comptime for' explodes compile time
             for i in range(0, count, batch_size):
                 for j in range(batch_size):
                     var bufs = FeatureGPUBuffers(ctx, features[j])
@@ -689,7 +692,7 @@ def batchedForward[
                 matMulForward(model, features, matmul)
 
                 var results = getResults(ctx, features)
-                comptime for j in range(batch_size):
+                for j in range(batch_size):
                     if results[j] == UInt8(data[i + j].label):
                         correct += 1
     except e:

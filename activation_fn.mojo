@@ -37,15 +37,17 @@ trait ActivationFunction:
 
     @staticmethod
     @always_inline("nodebug")
-    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
+    def simdForward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width]) -> SIMD[fp, width]:
         """SIMD forward pass parameterized over dtype and vector width."""
         ...
 
     @staticmethod
     @always_inline("nodebug")
-    def simdBackward[fp: DType, width: Int](
-        x: SIMD[fp, width], d_output: SIMD[fp, width]
-    ) -> SIMD[fp, width]:
+    def simdBackward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
         """SIMD backward pass parameterized over dtype and vector width.
         x is the pre-activation input, d_output is the upstream gradient.
         """
@@ -91,17 +93,23 @@ struct ReLU(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
-        comptime assert fp.is_floating_point(), "simdForward requires floating point"
+    def simdForward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert (
+            fp.is_floating_point()
+        ), "simdForward requires floating point"
         comptime zeros = SIMD[fp, width](0.0)
         return x.gt(zeros).select(x, zeros)
 
     @staticmethod
     @always_inline("nodebug")
-    def simdBackward[fp: DType, width: Int](
-        x: SIMD[fp, width], d_output: SIMD[fp, width]
-    ) -> SIMD[fp, width]:
-        comptime assert fp.is_floating_point(), "simdBackward requires floating point"
+    def simdBackward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert (
+            fp.is_floating_point()
+        ), "simdBackward requires floating point"
         comptime zeros = SIMD[fp, width](0.0)
         return x.gt(zeros).select(d_output, zeros)
 
@@ -148,20 +156,27 @@ struct Sigmoid(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
-        comptime assert fp.is_floating_point(), "simdForward requires floating point"
+    def simdForward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert (
+            fp.is_floating_point()
+        ), "simdForward requires floating point"
         comptime ones = SIMD[fp, width](1.0)
         return ones / (ones + exp(-x))
 
     @staticmethod
     @always_inline("nodebug")
-    def simdBackward[fp: DType, width: Int](
-        x: SIMD[fp, width], d_output: SIMD[fp, width]
-    ) -> SIMD[fp, width]:
-        comptime assert fp.is_floating_point(), "simdBackward requires floating point"
+    def simdBackward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert (
+            fp.is_floating_point()
+        ), "simdBackward requires floating point"
         comptime ones = SIMD[fp, width](1.0)
         var s = ones / (ones + exp(-x))
         return d_output * s * (ones - s)
+
 
 struct Tanh(ActivationFunction):
     """
@@ -200,16 +215,22 @@ struct Tanh(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
-        comptime assert fp.is_floating_point(), "simdForward requires floating point"
+    def simdForward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert (
+            fp.is_floating_point()
+        ), "simdForward requires floating point"
         return tanh(x)
 
     @staticmethod
     @always_inline("nodebug")
-    def simdBackward[fp: DType, width: Int](
-        x: SIMD[fp, width], d_output: SIMD[fp, width]
-    ) -> SIMD[fp, width]:
-        comptime assert fp.is_floating_point(), "simdBackward requires floating point"
+    def simdBackward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert (
+            fp.is_floating_point()
+        ), "simdBackward requires floating point"
         comptime ones = SIMD[fp, width](1.0)
         var t = tanh(x)
         return d_output * (ones - t * t)
@@ -284,8 +305,12 @@ struct GELU(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
-        comptime assert fp.is_floating_point(), "simdForward requires floating point"
+    def simdForward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert (
+            fp.is_floating_point()
+        ), "simdForward requires floating point"
         comptime typ = SIMD[fp, width]
         comptime sqrt2 = typ(sqrt(2.0))
         comptime half = typ(0.5)
@@ -294,10 +319,12 @@ struct GELU(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def simdBackward[fp: DType, width: Int](
-        x: SIMD[fp, width], d_output: SIMD[fp, width]
-    ) -> SIMD[fp, width]:
-        comptime assert fp.is_floating_point(), "simdBackward requires floating point"
+    def simdBackward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert (
+            fp.is_floating_point()
+        ), "simdBackward requires floating point"
         comptime typ = SIMD[fp, width]
         comptime sqrt2 = typ(sqrt(2.0))
         comptime half = typ(0.5)
@@ -306,6 +333,7 @@ struct GELU(ActivationFunction):
         var cdf = half * (one + erf(x / sqrt2))
         var pdf = exp(-half * x * x) * inv_sqrttau
         return d_output * (cdf + x * pdf)
+
 
 struct GELUTanh(ActivationFunction):
     """
@@ -379,8 +407,12 @@ struct GELUTanh(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
-        comptime assert fp.is_floating_point(), "simdForward requires floating point"
+    def simdForward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert (
+            fp.is_floating_point()
+        ), "simdForward requires floating point"
         comptime k = SIMD[fp, width](sqrt(2.0 / pi))
         comptime c = SIMD[fp, width](0.044715)
         comptime half = SIMD[fp, width](0.5)
@@ -389,10 +421,12 @@ struct GELUTanh(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def simdBackward[fp: DType, width: Int](
-        x: SIMD[fp, width], d_output: SIMD[fp, width]
-    ) -> SIMD[fp, width]:
-        comptime assert fp.is_floating_point(), "simdBackward requires floating point"
+    def simdBackward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert (
+            fp.is_floating_point()
+        ), "simdBackward requires floating point"
         comptime k = SIMD[fp, width](sqrt(2.0 / pi))
         comptime c = SIMD[fp, width](0.044715)
         comptime three_c = SIMD[fp, width](3.0 * 0.044715)
@@ -467,17 +501,23 @@ struct GELUFast(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def simdForward[fp: DType, width: Int](x: SIMD[fp, width]) -> SIMD[fp, width]:
-        comptime assert fp.is_floating_point(), "simdForward requires floating point"
+    def simdForward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert (
+            fp.is_floating_point()
+        ), "simdForward requires floating point"
         comptime alpha = SIMD[fp, width](1.702)
         return x * Self._sigmoid(alpha * x)
 
     @staticmethod
     @always_inline("nodebug")
-    def simdBackward[fp: DType, width: Int](
-        x: SIMD[fp, width], d_output: SIMD[fp, width]
-    ) -> SIMD[fp, width]:
-        comptime assert fp.is_floating_point(), "simdBackward requires floating point"
+    def simdBackward[
+        fp: DType, width: Int
+    ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
+        comptime assert (
+            fp.is_floating_point()
+        ), "simdBackward requires floating point"
         comptime alpha = SIMD[fp, width](1.702)
         comptime ones = SIMD[fp, width](1.0)
         var s = Self._sigmoid(alpha * x)

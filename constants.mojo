@@ -19,12 +19,12 @@ comptime LENGTH_FEATURE5 = LENGTH_FEATURE4 - LENGTH_KERNEL + 1
 comptime INPUT = 1
 comptime LAYER1 = 6
 comptime LAYER2 = LAYER1
-comptime LAYER3 = 16 # 16
+comptime LAYER3 = 16  # 16
 comptime LAYER4 = LAYER3
 comptime LAYER5 = 120
 comptime OUTPUT = 10
 
-comptime NUM_WEIGHTS = 51902 # hardcoding here for simplicity, can be calculated
+comptime NUM_WEIGHTS = 51902  # hardcoding here for simplicity, can be calculated
 
 comptime ALPHA = Float32(defines.get_defined_int["ALPHA", 500]()) / 1000
 comptime PADDING = 2
@@ -33,12 +33,12 @@ comptime IMAGE_SIZE = 28
 comptime PADDED_SIZE = IMAGE_SIZE + 2 * PADDING  # == LENGTH_FEATURE0
 
 # Numeric type — change 'ftype' (floating point type) here to switch the whole model (float64, bf16, etc.)
-#comptime ftype = DType.float64 #defines.get_defined_dtype["ftype", DType.float32]() # doesn't want to work
-comptime ftype = DType.float32 #if defines.is_defined["float64"]() else DType.float32https://www.instagram.com/reel/DWzkX7GPoPa/?igsh=bDNzYmV0bzhxbHVn
+# comptime ftype = DType.float64 #defines.get_defined_dtype["ftype", DType.float32]() # doesn't want to work
+comptime ftype = DType.float32  # if defines.is_defined["float64"]() else DType.float32https://www.instagram.com/reel/DWzkX7GPoPa/?igsh=bDNzYmV0bzhxbHVn
 comptime sftype = Scalar[ftype]
 comptime nelts = simd_width_of[ftype]()
 
-#comptime act_fn: ActivationFunction = GELU # options: ReLU, GELU, GELUFast, GELUTanh
+# comptime act_fn: ActivationFunction = GELU # options: ReLU, GELU, GELUFast, GELUTanh
 
 comptime act_fn = ConditionalType[
     Trait=ActivationFunction,
@@ -65,6 +65,6 @@ comptime act_fn = ConditionalType[
             ],
         ],
     ],
-]# options: ReLU, GELU, GELUFast, GELUTanh, Sigmoid
+]  # options: ReLU, GELU, GELUFast, GELUTanh, Sigmoid
 
 comptime DISPLAY = True if defines.is_defined["DISPLAY"]() else False

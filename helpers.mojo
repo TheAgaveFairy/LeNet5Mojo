@@ -1,5 +1,6 @@
 from constants import DISPLAY
 
+
 def showProgress(progress: Int, total: Int) -> None:
     comptime if not DISPLAY:
         return
