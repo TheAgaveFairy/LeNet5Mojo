@@ -18,13 +18,16 @@ from cpu.arena import CPUBumpArenaAllocator, CPUSystemAllocator
 
 from accel import (
     LeNet5GPU,
-    conv1FusedKernel,
-    conv2FusedKernel,
-    conv3FusedKernel,
-    maxPool1Kernel,
-    maxPool2Kernel,
-    matMulFusedKernel,
     batchedForward,
+)
+from accel.ops import (
+    conv1FusedKernel,
+    maxPool1Kernel,
+    conv2FusedKernel,
+    maxPool2Kernel,
+    conv3FusedKernel,
+    matMulFusedKernel,
+    gatherOutputsKernel,
 )
 
 from helpers import showProgress
@@ -229,20 +232,13 @@ def main() raises:
             )
             comptime batch_size = 50  # more than ~75 fails "uses too much parameter space"
 
-            var conv1 = ctx.compile_function[
-                conv1FusedKernel[batch_size]
-            ]()
-            var pool1 = ctx.compile_function[maxPool1Kernel[batch_size]]()
-            var conv2 = ctx.compile_function[
-                conv2FusedKernel[batch_size]
-            ]()
-            var pool2 = ctx.compile_function[maxPool2Kernel[batch_size]]()
-            var conv3 = ctx.compile_function[
-                conv3FusedKernel[batch_size]
-            ]()
-            var matmul = ctx.compile_function[
-                matMulFusedKernel[batch_size]
-            ]()
+            var conv1  = ctx.compile_function[conv1FusedKernel[batch_size]]()
+            var pool1  = ctx.compile_function[maxPool1Kernel[batch_size]]()
+            var conv2  = ctx.compile_function[conv2FusedKernel[batch_size]]()
+            var pool2  = ctx.compile_function[maxPool2Kernel[batch_size]]()
+            var conv3  = ctx.compile_function[conv3FusedKernel[batch_size]]()
+            var matmul = ctx.compile_function[matMulFusedKernel[batch_size]]()
+            var gather = ctx.compile_function[gatherOutputsKernel[batch_size]]()
 
             var start_time = perf_counter_ns()
 
@@ -255,6 +251,7 @@ def main() raises:
                 pool2,
                 conv3,
                 matmul,
+                gather,
             )
             var end_time = perf_counter_ns()
             var elapsed = end_time - start_time  # // 1_000_000

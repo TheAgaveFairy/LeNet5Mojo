@@ -33,6 +33,26 @@ from accel.model import LeNet5GPU, FeatureGPU, FeatureGPUBuffers
 comptime div_chans_conv2 = 8  # any lower uses too many resources
 comptime div_chans_conv3 = 8  # needs to be a factor of 120
 
+def gatherOutputsKernel[batch_size: Int](feats: InlineArray[FeatureGPU, batch_size], outputs: LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin]):
+    var img = block_idx.x
+    var i = thread_idx.x
+    outputs[img, i] = feats[img].output[i]
+
+def gatherOutputs[
+    batch_size: Int
+](
+    ctx: DeviceContext,
+    feats: InlineArray[FeatureGPU, batch_size],
+    outputs: LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin],
+    gather_kernel: DeviceFunction,
+) raises -> None:
+    ctx.enqueue_function(
+        gather_kernel,
+        feats,
+        outputs,
+        grid_dim=(batch_size),
+        block_dim=(OUTPUT),
+    )
 
 def matMulFusedKernel[
     batch_size: Int
@@ -100,23 +120,19 @@ def matMulFusedKernel[
 def matMulForward[
     batch_size: Int
 ](
+    ctx: DeviceContext,
     lenet: LeNet5GPU,
     feats: InlineArray[FeatureGPU, batch_size],
     matmul_kernel: DeviceFunction,
 ) raises -> None:
     comptime reduction_size = 1 << Int(ceil(log2(Float64(LAYER5))))  # 128
-    try:
-        with DeviceContext() as ctx:
-            ctx.enqueue_function(
-                matmul_kernel,
-                lenet,
-                feats,
-                grid_dim=(batch_size),
-                block_dim=(reduction_size),
-            )
-            ctx.synchronize()
-    except e:
-        print(e)
+    ctx.enqueue_function(
+        matmul_kernel,
+        lenet,
+        feats,
+        grid_dim=(batch_size),
+        block_dim=(reduction_size),
+    )
 
 
 def maxPool2Kernel[
@@ -159,22 +175,18 @@ def maxPool2Kernel[
 def maxPool2Forward[
     batch_size: Int
 ](
+    ctx: DeviceContext,
     lenet: LeNet5GPU,
     feats: InlineArray[FeatureGPU, batch_size],
     pool2_kernel: DeviceFunction,
 ) raises -> None:
-    try:
-        with DeviceContext() as ctx:
-            ctx.enqueue_function(
-                pool2_kernel,
-                lenet,
-                feats,
-                grid_dim=(batch_size),
-                block_dim=(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4),
-            )
-            ctx.synchronize()
-    except e:
-        print(e)
+    ctx.enqueue_function(
+        pool2_kernel,
+        lenet,
+        feats,
+        grid_dim=(batch_size),
+        block_dim=(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4),
+    )
 
 
 def maxPool1Kernel[
@@ -210,22 +222,18 @@ def maxPool1Kernel[
 def maxPool1Forward[
     batch_size: Int
 ](
+    ctx: DeviceContext,
     lenet: LeNet5GPU,
     feats: InlineArray[FeatureGPU, batch_size],
     pool1_kernel: DeviceFunction,
 ) raises -> None:
-    try:
-        with DeviceContext() as ctx:
-            ctx.enqueue_function(
-                pool1_kernel,
-                lenet,
-                feats,
-                grid_dim=(batch_size, LAYER1),
-                block_dim=(LENGTH_FEATURE1, LENGTH_FEATURE1),
-            )
-            ctx.synchronize()
-    except e:
-        print(e)
+    ctx.enqueue_function(
+        pool1_kernel,
+        lenet,
+        feats,
+        grid_dim=(batch_size, LAYER1),
+        block_dim=(LENGTH_FEATURE1, LENGTH_FEATURE1),
+    )
 
 
 def conv3FusedKernel[
@@ -304,6 +312,7 @@ def conv3FusedKernel[
 def conv3Forward[
     batch_size: Int
 ](
+    ctx: DeviceContext,
     lenet: LeNet5GPU,
     feats: InlineArray[FeatureGPU, batch_size],
     conv3_kernel: DeviceFunction,
@@ -312,18 +321,13 @@ def conv3Forward[
     comptime assert (
         LAYER5 % div_chans_conv3 == 0
     ), "conv3 channel divisions must divide evenly"
-    try:
-        with DeviceContext() as ctx:
-            ctx.enqueue_function(
-                conv3_kernel,
-                lenet,
-                feats,
-                grid_dim=(batch_size, div_chans_conv3),
-                block_dim=(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4),
-            )
-            ctx.synchronize()
-    except e:
-        print(e)
+    ctx.enqueue_function(
+        conv3_kernel,
+        lenet,
+        feats,
+        grid_dim=(batch_size, div_chans_conv3),
+        block_dim=(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4),
+    )
 
 
 def conv2FusedKernel[
@@ -408,6 +412,7 @@ def conv2FusedKernel[
 def conv2Forward[
     batch_size: Int
 ](
+    ctx: DeviceContext,
     lenet: LeNet5GPU,
     feats: InlineArray[FeatureGPU, batch_size],
     conv2_kernel: DeviceFunction,
@@ -415,22 +420,17 @@ def conv2Forward[
     comptime assert (
         LAYER3 % div_chans_conv2 == 0
     ), "conv2 channel divisions must divide evenly"
-    try:
-        with DeviceContext() as ctx:
-            ctx.enqueue_function(
-                conv2_kernel,
-                lenet,
-                feats,
-                grid_dim=(batch_size, div_chans_conv2),
-                block_dim=(
-                    LAYER3 // div_chans_conv2,
-                    LENGTH_FEATURE3,
-                    LENGTH_FEATURE3,
-                ),
-            )
-            ctx.synchronize()
-    except e:
-        print(e)
+    ctx.enqueue_function(
+        conv2_kernel,
+        lenet,
+        feats,
+        grid_dim=(batch_size, div_chans_conv2),
+        block_dim=(
+            LAYER3 // div_chans_conv2,
+            LENGTH_FEATURE3,
+            LENGTH_FEATURE3,
+        ),
+    )
 
 
 def conv1FusedKernel[
@@ -497,22 +497,18 @@ def conv1FusedKernel[
 def conv1Forward[
     batch_size: Int
 ](
+    ctx: DeviceContext,
     lenet: LeNet5GPU,
     feats: InlineArray[FeatureGPU, batch_size],
     conv1_kernel: DeviceFunction,
 ) raises -> None:
-    try:
-        with DeviceContext() as ctx:
-            ctx.enqueue_function(
-                conv1_kernel,
-                lenet,
-                feats,
-                grid_dim=(batch_size),
-                block_dim=(LENGTH_FEATURE1, LENGTH_FEATURE1),
-            )
-            ctx.synchronize()
-    except e:
-        print(e)
+    ctx.enqueue_function(
+        conv1_kernel,
+        lenet,
+        feats,
+        grid_dim=(batch_size),
+        block_dim=(LENGTH_FEATURE1, LENGTH_FEATURE1),
+    )
 
 
 def printerGPU[
@@ -594,6 +590,7 @@ def singleForward(
     pool2: DeviceFunction,
     conv3: DeviceFunction,
     matmul: DeviceFunction,
+    gather: DeviceFunction,
 ) raises -> UInt8:
     var gpu_guess = 10  # invalid sentinel — TODO: make Optional[Int]
     var img_copy = img
@@ -612,12 +609,13 @@ def singleForward(
             )
             var feat_bufs = FeatureGPUBuffers(ctx, feats[0])
             feat_bufs.loadInput(img)
-            conv1Forward[batch_size](model, feats, conv1)
-            maxPool1Forward[batch_size](model, feats, pool1)
-            conv2Forward[batch_size](model, feats, conv2)
-            maxPool2Forward[batch_size](model, feats, pool2)
-            conv3Forward[batch_size](model, feats, conv3)
-            matMulForward[batch_size](model, feats, matmul)
+            conv1Forward[batch_size](ctx, model, feats, conv1)
+            maxPool1Forward[batch_size](ctx, model, feats, pool1)
+            conv2Forward[batch_size](ctx, model, feats, conv2)
+            maxPool2Forward[batch_size](ctx, model, feats, pool2)
+            conv3Forward[batch_size](ctx, model, feats, conv3)
+            matMulForward[batch_size](ctx, model, feats, matmul)
+            ctx.synchronize()
 
             var host_output_layer = type_of(feat_cpu.output).stack_allocation()
             with feat_bufs.output_storage.map_to_host() as ans:
@@ -653,6 +651,17 @@ def getResults[
         print(e)
     return output^
 
+def batchedArgMax[batch_size: Int](outputs: LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), _], out guesses: InlineArray[UInt8, batch_size]):
+    guesses = type_of(guesses)(uninitialized = True) # out arg
+    for b in range(batch_size):
+        var max_idx: UInt8 = 17 # nonsense sentinel
+        var max_val = sftype.MIN
+        for i in range(OUTPUT):
+            var v = rebind[sftype](outputs[b, i])
+            if v > max_val:
+                max_val = v
+                max_idx = UInt8(i)
+        guesses[b] = max_idx
 
 def batchedForward[batch_size: Int](
     data: List[Image],
@@ -663,6 +672,7 @@ def batchedForward[batch_size: Int](
     pool2: DeviceFunction,
     conv3: DeviceFunction,
     matmul: DeviceFunction,
+    gather: DeviceFunction,
 ) raises -> Int:
     var count = len(data)
     _ = """
@@ -678,23 +688,31 @@ def batchedForward[batch_size: Int](
             var features = InlineArray[FeatureGPU, batch_size]( # TODO: consider making this a List / dynamic shape
                 fill=FeatureGPU(ctx)
             )
+            var outputs_buffer = ctx.enqueue_create_buffer[ftype](batch_size * OUTPUT)
+            ctx.synchronize()
+            var outputs = LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin](outputs_buffer)
             # TODO: 'comptime for' explodes compile time
             for i in range(0, count, batch_size):
                 for j in range(batch_size):
                     var bufs = FeatureGPUBuffers(ctx, features[j])
                     bufs.loadInput(data[i + j])
 
-                conv1Forward(model, features, conv1)
-                maxPool1Forward(model, features, pool1)
-                conv2Forward(model, features, conv2)
-                maxPool2Forward(model, features, pool2)
-                conv3Forward(model, features, conv3)
-                matMulForward(model, features, matmul)
+                conv1Forward(ctx, model, features, conv1)
+                maxPool1Forward(ctx, model, features, pool1)
+                conv2Forward(ctx, model, features, conv2)
+                maxPool2Forward(ctx, model, features, pool2)
+                conv3Forward(ctx, model, features, conv3)
+                matMulForward(ctx, model, features, matmul)
+                gatherOutputs(ctx, features, outputs, gather)
+                
+                ctx.synchronize()
 
-                var results = getResults(ctx, features)
-                for j in range(batch_size):
-                    if results[j] == UInt8(data[i + j].label):
-                        correct += 1
+                with outputs_buffer.map_to_host() as outs:
+                    var hosted_outputs = LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin](outs.unsafe_ptr())
+                    var results = batchedArgMax(hosted_outputs)
+                    for j in range(batch_size):
+                        if results[j] == UInt8(data[i + j].label):
+                            correct += 1
     except e:
         print("batchedForward ERROR", e)
         raise e^
