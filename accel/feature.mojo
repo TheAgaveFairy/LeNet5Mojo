@@ -25,7 +25,7 @@ from image import Image
 from accel.arena import GPUBumpArenaAllocator
 
 
-struct FeatureGPUBuffers():
+struct FeatureGPUBuffers(Movable):
     """CPU-side — holds DeviceBuffer handles for host ops (map_to_host, loadInput, etc.).
     Owns the arena sub-buffer refs; FeatureGPU's LayoutTensors point into these.
     Arena must outlive both this struct and any FeatureGPU built from it.

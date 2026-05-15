@@ -28,7 +28,9 @@ from constants import (
     PADDED_SIZE,
 )
 from image import Image
-from accel.model import LeNet5GPU, FeatureGPU, FeatureGPUBuffers
+from accel.model import LeNet5GPU
+from accel.feature import FeatureGPU, FeatureGPUBuffers
+from accel.arena import GPUBumpArenaAllocator
 
 comptime div_chans_conv2 = 8  # any lower uses too many resources
 comptime div_chans_conv3 = 8  # needs to be a factor of 120
@@ -114,7 +116,8 @@ def matMulFusedKernel[
 
         if thread == 0:
             var temp = rebind[sftype](reduction_buffer[0] + lenet.bias5_6[oc])
-            feats[img_idx].output[oc] = act_fn.simdForward(temp)
+            feats[img_idx].output[oc] = rebind[sftype](temp)
+            # TODO: confirm we don't want to do act_fn.simdForward() call
 
 
 def matMulForward[
@@ -389,7 +392,7 @@ def conv2FusedKernel[
         MutAnyOrigin,
         address_space=AddressSpace.SHARED,
     ].stack_allocation()
-    if flat_idx < local_biases.size():
+    if row == 0 and col == 0:
         local_biases[local_chan] = lenet.bias2_3[global_chan]
 
     barrier()
@@ -604,10 +607,10 @@ def singleForward(
             forward(lenet_cpu, feat_cpu)
             var cpu_guess = argMax(feat_cpu.output)
 
+            var feat_bufs = FeatureGPUBuffers(ctx)
             var feats = InlineArray[FeatureGPU, batch_size](
-                fill=FeatureGPU(ctx)
+                fill=FeatureGPU(feat_bufs)
             )
-            var feat_bufs = FeatureGPUBuffers(ctx, feats[0])
             feat_bufs.loadInput(img)
             conv1Forward[batch_size](ctx, model, feats, conv1)
             maxPool1Forward[batch_size](ctx, model, feats, pool1)
@@ -618,7 +621,7 @@ def singleForward(
             ctx.synchronize()
 
             var host_output_layer = type_of(feat_cpu.output).stack_allocation()
-            with feat_bufs.output_storage.map_to_host() as ans:
+            with feat_bufs.output.map_to_host() as ans:
                 for i in range(host_output_layer.size()):
                     host_output_layer.ptr[i] = ans[i]
             gpu_guess = argMax(host_output_layer)
@@ -628,6 +631,7 @@ def singleForward(
     return gpu_guess
 
 
+@deprecated("Use batchedForward with arena-allocated FeatureGPUBuffers instead.")
 def getResults[
     batch_size: Int
 ](
@@ -685,17 +689,19 @@ def batchedForward[batch_size: Int](
 
     try:
         with DeviceContext() as ctx:
-            var features = InlineArray[FeatureGPU, batch_size]( # TODO: consider making this a List / dynamic shape
-                fill=FeatureGPU(ctx)
-            )
+            var arena = GPUBumpArenaAllocator(ctx, batch_size * FeatureGPUBuffers.sizeInBytes())
+            var all_bufs = alloc[FeatureGPUBuffers](batch_size)
+            var features = InlineArray[FeatureGPU, batch_size](uninitialized=True)
+            for j in range(batch_size):
+                (all_bufs + j).init_pointee_move(FeatureGPUBuffers(arena))
+                (features.unsafe_ptr() + j).init_pointee_move(FeatureGPU((all_bufs + j)[]))
             var outputs_buffer = ctx.enqueue_create_buffer[ftype](batch_size * OUTPUT)
             ctx.synchronize()
             var outputs = LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin](outputs_buffer)
             # TODO: 'comptime for' explodes compile time
             for i in range(0, count, batch_size):
                 for j in range(batch_size):
-                    var bufs = FeatureGPUBuffers(ctx, features[j])
-                    bufs.loadInput(data[i + j])
+                    (all_bufs + j)[].loadInput(data[i + j])
 
                 conv1Forward(ctx, model, features, conv1)
                 maxPool1Forward(ctx, model, features, pool1)
@@ -713,6 +719,7 @@ def batchedForward[batch_size: Int](
                     for j in range(batch_size):
                         if results[j] == UInt8(data[i + j].label):
                             correct += 1
+            all_bufs.free()
     except e:
         print("batchedForward ERROR", e)
         raise e^
