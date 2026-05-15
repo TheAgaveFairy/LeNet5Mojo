@@ -1,5 +1,5 @@
 from layout import Layout, LayoutTensor
-from std.math import ceil, log2
+from std.math import ceil, log2, abs
 
 from std.gpu.host import DeviceContext, DeviceBuffer, DeviceFunction
 from std.gpu import thread_idx, block_idx, block_dim, barrier
@@ -530,12 +530,12 @@ def printerGPU[
 def compareBuffers[
     layout: Layout
 ](
+    ctx: DeviceContext,
     device_buffer: DeviceBuffer[ftype],
     host_buffer: UnsafePointer[sftype, _],
     label: String = "",
 ):
     """Debugging helper — compares GPU buffer to CPU pointer element-wise."""
-    from std.math import abs
 
     comptime size = layout.size()
     var epsilon: sftype = -1.0
@@ -545,28 +545,28 @@ def compareBuffers[
     epsilon /= 100  # allow 1% error
     comptime max_display = 1000
     var count = 0
-    print("Comparing GPU to CPU", label, ":")
+    var pad = " " if len(label) > 0 else ""
+    print("Comparing GPU to CPU" + pad, label, ":")
     try:
-        with DeviceContext() as ctx:
-            with device_buffer.map_to_host() as dev:
-                for i in range(size):
-                    if (
-                        dev[i] < host_buffer[i] - epsilon
-                        or dev[i] > host_buffer[i] + epsilon
-                    ):
-                        count += 1
-                        if count < max_display:
-                            print(
-                                "\t!=,",
-                                i,
-                                "dev:",
-                                round(dev[i], 2),
-                                "host:",
-                                round(host_buffer[i], 2),
-                                ((dev[i] - host_buffer[i]) * 100)
-                                / host_buffer[i],
-                                "% difference",
-                            )
+        with device_buffer.map_to_host() as dev:
+            for i in range(size):
+                if (
+                    dev[i] < host_buffer[i] - epsilon
+                    or dev[i] > host_buffer[i] + epsilon
+                ):
+                    count += 1
+                    if count < max_display:
+                        print(
+                            "\t!=,",
+                            i,
+                            "dev:",
+                            round(dev[i], 3),
+                            "host:",
+                            round(host_buffer[i], 3),
+                            ((dev[i] - host_buffer[i]) * 100)
+                            / host_buffer[i],
+                            "% difference",
+                        )
     except e:
         print(e)
     print(

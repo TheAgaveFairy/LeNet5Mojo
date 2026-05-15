@@ -3,8 +3,10 @@ from layout import Layout, LayoutTensor
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.builtin.device_passable import DevicePassable
 from std.reflection.reflect import reflect
+from std.sys import size_of
 
 from cpu.model import LeNet5
+from accel.arena import GPUAllocator, GPUBumpArenaAllocator 
 from constants import (
     ftype,
     sftype,
@@ -27,11 +29,26 @@ from constants import (
 )
 from image import Image
 
+struct DeviceSession[Allocator: GPUAllocator = GPUBumpArenaAllocator]():
+    """Ties lifetimes of arena etc all together."""
+    var bufs: LeNet5GPUBuffers
+    var model: LeNet5GPU
+    var alloc: Self.Allocator
+
+    def __init__(out self, ctx: DeviceContext) raises:
+        self.alloc = Self.Allocator(ctx, LeNet5GPU.sizeInBytes()) # default
+        self.bufs = LeNet5GPUBuffers(self.alloc)
+        self.model = LeNet5GPU(self.bufs)
+
+    def __init__(out self, arena: Self.Allocator) raises:
+        self.alloc = arena^
+        self.bufs = LeNet5GPUBuffers(self.alloc)
+        self.model = LeNet5GPU(self.bufs)
 
 struct LeNet5GPUBuffers():
     """Stays on CPU — holds DeviceBuffers for host-side access (map_to_host, enqueue_copy_from, etc.).
     """
-
+    var allocator_owns_memory: Bool # TODO: AcceptsAllocator trait idea (along with static sizeInBytes())
     var w01_storage: DeviceBuffer[ftype]
     var w23_storage: DeviceBuffer[ftype]
     var w45_storage: DeviceBuffer[ftype]
@@ -41,16 +58,58 @@ struct LeNet5GPUBuffers():
     var b45_storage: DeviceBuffer[ftype]
     var b56_storage: DeviceBuffer[ftype]
 
-    def __init__(out self, ctx: DeviceContext, model: LeNet5GPU) raises:
-        self.w01_storage = model.weight0_1.to_device_buffer(ctx)
-        self.w23_storage = model.weight2_3.to_device_buffer(ctx)
-        self.w45_storage = model.weight4_5.to_device_buffer(ctx)
-        self.w56_storage = model.weight5_6.to_device_buffer(ctx)
-        self.b01_storage = model.bias0_1.to_device_buffer(ctx)
-        self.b23_storage = model.bias2_3.to_device_buffer(ctx)
-        self.b45_storage = model.bias4_5.to_device_buffer(ctx)
-        self.b56_storage = model.bias5_6.to_device_buffer(ctx)
+    def __init__(out self, mut arena: Some[GPUAllocator]) raises:
+        self.allocator_owns_memory = True
+        self.w01_storage = arena.alloc[ftype](comptime(LeNet5GPU.w0_1_layout.size()))
+        self.w23_storage = arena.alloc[ftype](comptime(LeNet5GPU.w2_3_layout.size()))
+        self.w45_storage = arena.alloc[ftype](comptime(LeNet5GPU.w4_5_layout.size()))
+        self.w56_storage = arena.alloc[ftype](comptime(LeNet5GPU.w5_6_layout.size()))
+        self.b01_storage = arena.alloc[ftype](comptime(LeNet5GPU.b0_1_layout.size()))
+        self.b23_storage = arena.alloc[ftype](comptime(LeNet5GPU.b2_3_layout.size()))
+        self.b45_storage = arena.alloc[ftype](comptime(LeNet5GPU.b4_5_layout.size()))
+        self.b56_storage = arena.alloc[ftype](comptime(LeNet5GPU.b5_6_layout.size()))
 
+
+    def __init__(out self, ctx: DeviceContext) raises:
+        self.allocator_owns_memory = False
+        self.w01_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.w0_1_layout.size()))
+        self.w23_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.w2_3_layout.size()))
+        self.w45_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.w4_5_layout.size()))
+        self.w56_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.w5_6_layout.size()))
+        self.b01_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.b0_1_layout.size()))
+        self.b23_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.b2_3_layout.size()))
+        self.b45_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.b4_5_layout.size()))
+        self.b56_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.b5_6_layout.size()))
+        self.zero(sync_ctx = ctx)
+        #ctx.synchronize() # or pass no ctx (sync_ctx = None) and do it yourself here
+
+    @staticmethod
+    def sizeInBytes() -> Int:
+        return LeNet5GPU.sizeInBytes() # TODO: consolodate this pattern into an AcceptsAllocator trait or similar
+
+    def loadCPUWeights(mut self, cpu_model: LeNet5) raises:
+        self.w01_storage.enqueue_copy_from(cpu_model.weight0_1.ptr)
+        self.w23_storage.enqueue_copy_from(cpu_model.weight2_3.ptr)
+        self.w45_storage.enqueue_copy_from(cpu_model.weight4_5.ptr)
+        self.w56_storage.enqueue_copy_from(cpu_model.weight5_6.ptr)
+        self.b01_storage.enqueue_copy_from(cpu_model.bias0_1.ptr)
+        self.b23_storage.enqueue_copy_from(cpu_model.bias2_3.ptr)
+        self.b45_storage.enqueue_copy_from(cpu_model.bias4_5.ptr)
+        self.b56_storage.enqueue_copy_from(cpu_model.bias5_6.ptr)
+
+    def zero(mut self, *, sync_ctx: Optional[DeviceContext]):
+        self.w01_storage.enqueue_fill(0.0)
+        self.w23_storage.enqueue_fill(0.0)
+        self.w45_storage.enqueue_fill(0.0)
+        self.w56_storage.enqueue_fill(0.0)
+        self.b01_storage.enqueue_fill(0.0)
+        self.b23_storage.enqueue_fill(0.0)
+        self.b45_storage.enqueue_fill(0.0)
+        self.b56_storage.enqueue_fill(0.0)
+        if sync_ctx:
+            sync_ctx.value().synchronize()
+
+    # TODO:def __del__(deinit self):
 
 struct LeNet5GPU(DevicePassable, TrivialRegisterPassable):
     """
@@ -94,117 +153,30 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable):
     comptime b5_6_layout = Layout.row_major(OUTPUT)
     var bias5_6: LayoutTensor[ftype, Self.b5_6_layout, MutAnyOrigin]
 
-    def __init__(out self, ctx: DeviceContext) raises:
-        """Initialize to all zeros. Pass in a DeviceContext from the caller."""
-        var w01 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.w0_1_layout.size())
-        )
-        w01.enqueue_fill(0)
-        var w23 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.w2_3_layout.size())
-        )
-        w23.enqueue_fill(0)
-        var w45 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.w4_5_layout.size())
-        )
-        w45.enqueue_fill(0)
-        var w56 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.w5_6_layout.size())
-        )
-        w56.enqueue_fill(0)
-        var b01 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.b0_1_layout.size())
-        )
-        b01.enqueue_fill(0)
-        var b23 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.b2_3_layout.size())
-        )
-        b23.enqueue_fill(0)
-        var b45 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.b4_5_layout.size())
-        )
-        b45.enqueue_fill(0)
-        var b56 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.b5_6_layout.size())
-        )
-        b56.enqueue_fill(0)
-        ctx.synchronize()
-        self.weight0_1 = LayoutTensor[ftype, Self.w0_1_layout, MutAnyOrigin](
-            w01
-        )
-        self.weight2_3 = LayoutTensor[ftype, Self.w2_3_layout, MutAnyOrigin](
-            w23
-        )
-        self.weight4_5 = LayoutTensor[ftype, Self.w4_5_layout, MutAnyOrigin](
-            w45
-        )
-        self.weight5_6 = LayoutTensor[ftype, Self.w5_6_layout, MutAnyOrigin](
-            w56
-        )
-        self.bias0_1 = LayoutTensor[ftype, Self.b0_1_layout, MutAnyOrigin](b01)
-        self.bias2_3 = LayoutTensor[ftype, Self.b2_3_layout, MutAnyOrigin](b23)
-        self.bias4_5 = LayoutTensor[ftype, Self.b4_5_layout, MutAnyOrigin](b45)
-        self.bias5_6 = LayoutTensor[ftype, Self.b5_6_layout, MutAnyOrigin](b56)
+    def __init__(out self, bufs: LeNet5GPUBuffers) raises:
+        """Ensure you are initialized to all zeros. Lifetimes of underlying data need to be handled separately, as with DeviceSession's lifetime tying."""
+        self.weight0_1 = LayoutTensor[ftype, Self.w0_1_layout, MutAnyOrigin](bufs.w01_storage)
+        self.weight2_3 = LayoutTensor[ftype, Self.w2_3_layout, MutAnyOrigin](bufs.w23_storage)
+        self.weight4_5 = LayoutTensor[ftype, Self.w4_5_layout, MutAnyOrigin](bufs.w45_storage)
+        self.weight5_6 = LayoutTensor[ftype, Self.w5_6_layout, MutAnyOrigin](bufs.w56_storage)
+        self.bias0_1 = LayoutTensor[ftype, Self.b0_1_layout, MutAnyOrigin](bufs.b01_storage)
+        self.bias2_3 = LayoutTensor[ftype, Self.b2_3_layout, MutAnyOrigin](bufs.b23_storage)
+        self.bias4_5 = LayoutTensor[ftype, Self.b4_5_layout, MutAnyOrigin](bufs.b45_storage)
+        self.bias5_6 = LayoutTensor[ftype, Self.b5_6_layout, MutAnyOrigin](bufs.b56_storage)
 
-    def __init__(out self, ctx: DeviceContext, cpu_model: LeNet5) raises:
-        """Upload weights from a CPU model."""
-        var w01 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.w0_1_layout.size())
+    @staticmethod
+    def sizeInBytes() -> Int:
+        var num_ftypes = comptime(
+                Self.w0_1_layout.size() +
+                Self.w2_3_layout.size() +
+                Self.w4_5_layout.size() +
+                Self.w5_6_layout.size() +
+                Self.b0_1_layout.size() +
+                Self.b2_3_layout.size() +
+                Self.b4_5_layout.size() +
+                Self.b5_6_layout.size()
         )
-        w01.enqueue_fill(0)
-        w01.enqueue_copy_from(cpu_model.weight0_1.ptr)
-        var w23 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.w2_3_layout.size())
-        )
-        w23.enqueue_fill(0)
-        w23.enqueue_copy_from(cpu_model.weight2_3.ptr)
-        var w45 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.w4_5_layout.size())
-        )
-        w45.enqueue_fill(0)
-        w45.enqueue_copy_from(cpu_model.weight4_5.ptr)
-        var w56 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.w5_6_layout.size())
-        )
-        w56.enqueue_fill(0)
-        w56.enqueue_copy_from(cpu_model.weight5_6.ptr)
-        var b01 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.b0_1_layout.size())
-        )
-        b01.enqueue_fill(0)
-        b01.enqueue_copy_from(cpu_model.bias0_1.ptr)
-        var b23 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.b2_3_layout.size())
-        )
-        b23.enqueue_fill(0)
-        b23.enqueue_copy_from(cpu_model.bias2_3.ptr)
-        var b45 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.b4_5_layout.size())
-        )
-        b45.enqueue_fill(0)
-        b45.enqueue_copy_from(cpu_model.bias4_5.ptr)
-        var b56 = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.b5_6_layout.size())
-        )
-        b56.enqueue_fill(0)
-        b56.enqueue_copy_from(cpu_model.bias5_6.ptr)
-        ctx.synchronize()
-        self.weight0_1 = LayoutTensor[ftype, Self.w0_1_layout, MutAnyOrigin](
-            w01
-        )
-        self.weight2_3 = LayoutTensor[ftype, Self.w2_3_layout, MutAnyOrigin](
-            w23
-        )
-        self.weight4_5 = LayoutTensor[ftype, Self.w4_5_layout, MutAnyOrigin](
-            w45
-        )
-        self.weight5_6 = LayoutTensor[ftype, Self.w5_6_layout, MutAnyOrigin](
-            w56
-        )
-        self.bias0_1 = LayoutTensor[ftype, Self.b0_1_layout, MutAnyOrigin](b01)
-        self.bias2_3 = LayoutTensor[ftype, Self.b2_3_layout, MutAnyOrigin](b23)
-        self.bias4_5 = LayoutTensor[ftype, Self.b4_5_layout, MutAnyOrigin](b45)
-        self.bias5_6 = LayoutTensor[ftype, Self.b5_6_layout, MutAnyOrigin](b56)
+        return num_ftypes * size_of[ftype]()
 
     @staticmethod
     def get_type_name() -> String:

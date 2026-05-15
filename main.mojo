@@ -17,8 +17,9 @@ from cpu.ops import training, trainingParallel, testing, trainBatch
 from cpu.arena import CPUBumpArenaAllocator, CPUSystemAllocator
 
 from accel import (
-    LeNet5GPU,
+        #LeNet5GPU,
     batchedForward,
+    DeviceSession,
 )
 from accel.ops import (
     conv1FusedKernel,
@@ -28,6 +29,7 @@ from accel.ops import (
     conv3FusedKernel,
     matMulFusedKernel,
     gatherOutputsKernel,
+    compareBuffers
 )
 
 from helpers import showProgress
@@ -223,7 +225,9 @@ def main() raises:
     # print("Input Channels, Layer1->5, Output:", INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT)
     try:
         with DeviceContext() as ctx:
-            var modelGPUfromCPU = LeNet5GPU(ctx, modelCPU)
+            var gpu_session = DeviceSession(ctx)
+            gpu_session.bufs.loadCPUWeights(modelCPU)
+            compareBuffers[LeNet5.w01_layout](ctx, gpu_session.bufs.w01_storage, modelCPU.weight0_1.ptr, label = "layer1")
             var device_name = ctx.name()
             print(
                 "\nDevice found:",
@@ -244,7 +248,7 @@ def main() raises:
 
             var correct = batchedForward[batch_size](
                 data_repo.train_data,
-                modelGPUfromCPU,
+                gpu_session.model,
                 conv1,
                 pool1,
                 conv2,
