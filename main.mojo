@@ -230,7 +230,7 @@ def main() raises:
                 device_name,
                 ". Compiling kernels and testing...",
             )
-            comptime batch_size = 75  # more than ~75 fails "uses too much parameter space"
+            comptime batch_size = get_defined_int["BATCH_SIZE", 50]()  # more than ~120 fails on my RTX3070
 
             var conv1 = ctx.compile_function[conv1FusedKernel[batch_size]]()
             var pool1 = ctx.compile_function[maxPool1Kernel[batch_size]]()
