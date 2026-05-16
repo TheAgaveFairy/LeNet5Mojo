@@ -34,7 +34,6 @@ from accel.ops import (
     compareBuffers,
 )
 
-from helpers import showProgress
 from dataloader import MNISTDataRepository
 from resultlogger import MultiFileLogger
 
