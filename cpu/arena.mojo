@@ -19,7 +19,7 @@ from std.os import abort
 
 comptime sitype = Scalar[DType.int32] # for testing
 
-trait CPUAllocator:
+trait CPUAllocator():
     #def __init__(out self, capacity_bytes: Int):
     #    ...
 

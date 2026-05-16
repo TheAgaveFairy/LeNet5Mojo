@@ -17,7 +17,10 @@ comptime layout = Layout.row_major(ROWS, COLS)
 comptime TILE_SIZE = ROWS * COLS
 
 
-trait GPUAllocator:
+trait GPUAllocator(Movable, ImplicitlyDestructible):
+    def __init__(out self, ctx: DeviceContext, capacity_bytes: Int) raises:
+        ...
+
     def alloc[dtype: DType](mut self, count: Int) raises -> DeviceBuffer[dtype]:
         ...
 
@@ -49,6 +52,12 @@ struct GPUBumpArenaAllocator(GPUAllocator):
         self.buffer.enqueue_fill(UInt8(0))
         self.capacity = capacity_bytes
         self.offset = 0
+
+    def __init__(out self, *, deinit take: Self):
+        print("GPUBumpArenaAllocator moveinit")
+        self.buffer = take.buffer^
+        self.capacity = take.capacity
+        self.offset = take.offset
 
     def alloc[dtype: DType](mut self, count: Int) raises -> DeviceBuffer[dtype]:
         var elem_size = size_of[Scalar[dtype]]()
@@ -90,9 +99,13 @@ struct GPUSystemAllocator(GPUAllocator):
     var _ctx: DeviceContext
     var _allocations: List[DeviceBuffer[DType.uint8]]
 
-    def __init__(out self, var ctx: DeviceContext, capacity_bytes: Int) raises:
-        self._ctx = ctx^
+    def __init__(out self, ctx: DeviceContext, capacity_bytes: Int) raises:
+        self._ctx = ctx
         self._allocations = List[DeviceBuffer[DType.uint8]]()
+
+    def __init__(out self, *, deinit take: Self):
+        self._ctx = take._ctx
+        self._allocations = take._allocations^
 
     def alloc[dtype: DType](mut self, count: Int) raises -> DeviceBuffer[dtype]:
         var elem_size = size_of[Scalar[dtype]]()
@@ -305,7 +318,7 @@ def test_gpu_arena_work_kernel(ctx: DeviceContext) raises:
     var input_t = LayoutTensor[ftype, layout, MutAnyOrigin](in_buf)
     var output_t = LayoutTensor[ftype, layout, MutAnyOrigin](out_buf)
 
-    ctx.enqueue_function[work, work](
+    ctx.enqueue_function[work](
         input_t, output_t, grid_dim=1, block_dim=ROWS
     )
     ctx.synchronize()
@@ -320,9 +333,9 @@ def test_gpu_arena_work_kernel(ctx: DeviceContext) raises:
     print("PASS")
 
 
-def test_gpu_system_alloc_basic(ctx: DeviceContext) raises:
+def test_gpu_system_alloc_basic(mut ctx: DeviceContext) raises:
     print("\n--- test_gpu_system_alloc_basic ---")
-    var sa = GPUSystemAllocator(DeviceContext(), 0)
+    var sa = GPUSystemAllocator(ctx, 0)
     var buf = sa.alloc[ftype](8)
     buf.enqueue_fill(7.0)
     ctx.synchronize()
@@ -335,7 +348,8 @@ def test_gpu_system_alloc_basic(ctx: DeviceContext) raises:
 
 def test_gpu_system_multi_dtype(ctx: DeviceContext) raises:
     print("\n--- test_gpu_system_multi_dtype ---")
-    var sa = GPUSystemAllocator(DeviceContext(), 0)
+    #var ctx_cpy = ctx
+    var sa = GPUSystemAllocator(ctx, 0)
     var f32_buf = sa.alloc[DType.float32](4)
     var f64_buf = sa.alloc[DType.float64](4)
     var u8_buf = sa.alloc[DType.uint8](16)

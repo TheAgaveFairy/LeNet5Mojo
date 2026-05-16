@@ -6,7 +6,7 @@ from std.reflection.reflect import reflect
 from std.sys import size_of
 
 from cpu.model import LeNet5
-from accel.arena import GPUAllocator, GPUBumpArenaAllocator 
+from accel.arena import GPUAllocator, GPUBumpArenaAllocator, GPUSystemAllocator 
 from constants import (
     ftype,
     sftype,
@@ -29,8 +29,8 @@ from constants import (
 )
 from image import Image
 
-struct DeviceSession[Allocator: GPUAllocator = GPUBumpArenaAllocator]():
-    """Ties lifetimes of arena etc all together."""
+struct DeviceSession[Allocator: GPUAllocator]():
+    """Ties lifetimes of arena, buffers, etc all together."""
     var bufs: LeNet5GPUBuffers
     var model: LeNet5GPU
     var alloc: Self.Allocator
@@ -40,10 +40,13 @@ struct DeviceSession[Allocator: GPUAllocator = GPUBumpArenaAllocator]():
         self.bufs = LeNet5GPUBuffers(self.alloc)
         self.model = LeNet5GPU(self.bufs)
 
-    def __init__(out self, arena: Self.Allocator) raises:
+    def __init__(out self, mut arena: Self.Allocator) raises:
         self.alloc = arena^
         self.bufs = LeNet5GPUBuffers(self.alloc)
         self.model = LeNet5GPU(self.bufs)
+
+    # def __del__(deinit self):
+    #     pass
 
 struct LeNet5GPUBuffers():
     """Stays on CPU — holds DeviceBuffers for host-side access (map_to_host, enqueue_copy_from, etc.).
@@ -97,7 +100,7 @@ struct LeNet5GPUBuffers():
         self.b45_storage.enqueue_copy_from(cpu_model.bias4_5.ptr)
         self.b56_storage.enqueue_copy_from(cpu_model.bias5_6.ptr)
 
-    def zero(mut self, *, sync_ctx: Optional[DeviceContext]):
+    def zero(mut self, *, sync_ctx: Optional[DeviceContext]) raises:
         self.w01_storage.enqueue_fill(0.0)
         self.w23_storage.enqueue_fill(0.0)
         self.w45_storage.enqueue_fill(0.0)
@@ -154,15 +157,26 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable):
     var bias5_6: LayoutTensor[ftype, Self.b5_6_layout, MutAnyOrigin]
 
     def __init__(out self, bufs: LeNet5GPUBuffers) raises:
-        """Ensure you are initialized to all zeros. Lifetimes of underlying data need to be handled separately, as with DeviceSession's lifetime tying."""
-        self.weight0_1 = LayoutTensor[ftype, Self.w0_1_layout, MutAnyOrigin](bufs.w01_storage)
-        self.weight2_3 = LayoutTensor[ftype, Self.w2_3_layout, MutAnyOrigin](bufs.w23_storage)
-        self.weight4_5 = LayoutTensor[ftype, Self.w4_5_layout, MutAnyOrigin](bufs.w45_storage)
-        self.weight5_6 = LayoutTensor[ftype, Self.w5_6_layout, MutAnyOrigin](bufs.w56_storage)
-        self.bias0_1 = LayoutTensor[ftype, Self.b0_1_layout, MutAnyOrigin](bufs.b01_storage)
-        self.bias2_3 = LayoutTensor[ftype, Self.b2_3_layout, MutAnyOrigin](bufs.b23_storage)
-        self.bias4_5 = LayoutTensor[ftype, Self.b4_5_layout, MutAnyOrigin](bufs.b45_storage)
-        self.bias5_6 = LayoutTensor[ftype, Self.b5_6_layout, MutAnyOrigin](bufs.b56_storage)
+        """Ensure you are initialized to all zeros..
+        The storage local var copy trick allows for compliation; this is the only pattern I could get working.
+        Lifetimes are handled either by DeviceSession() or manually (benchmark.compiler.keep() is useful).
+        """
+        var w0 = bufs.w01_storage
+        var w2 = bufs.w23_storage
+        var w4 = bufs.w45_storage
+        var w5 = bufs.w56_storage 
+        self.weight0_1 = LayoutTensor[ftype, Self.w0_1_layout, MutAnyOrigin](w0)
+        self.weight2_3 = LayoutTensor[ftype, Self.w2_3_layout, MutAnyOrigin](w2)
+        self.weight4_5 = LayoutTensor[ftype, Self.w4_5_layout, MutAnyOrigin](w4)
+        self.weight5_6 = LayoutTensor[ftype, Self.w5_6_layout, MutAnyOrigin](w5)
+        var b0 = bufs.b01_storage
+        var b2 = bufs.b23_storage
+        var b4 = bufs.b45_storage
+        var b5 = bufs.b56_storage 
+        self.bias0_1 = LayoutTensor[ftype, Self.b0_1_layout, MutAnyOrigin](b0)
+        self.bias2_3 = LayoutTensor[ftype, Self.b2_3_layout, MutAnyOrigin](b2)
+        self.bias4_5 = LayoutTensor[ftype, Self.b4_5_layout, MutAnyOrigin](b4)
+        self.bias5_6 = LayoutTensor[ftype, Self.b5_6_layout, MutAnyOrigin](b5)
 
     @staticmethod
     def sizeInBytes() -> Int:

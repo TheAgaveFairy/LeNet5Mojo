@@ -5,6 +5,7 @@ from std.sys import stderr
 from std.sys.defines import get_defined_int
 from std.time import perf_counter_ns
 from std.pathlib import Path
+from std.sys import argv
 import std.os as os
 import std.benchmark as benchmark
 from std.reflection.reflect import reflect  # TODO: remove unused imports
@@ -20,6 +21,7 @@ from accel import (
         #LeNet5GPU,
     batchedForward,
     DeviceSession,
+    GPUBumpArenaAllocator,
 )
 from accel.ops import (
     conv1FusedKernel,
@@ -163,6 +165,13 @@ def trainAndTest(
 
 
 def main() raises:
+    var args = argv()
+    var argc = len(args)
+    if argc > 1:
+        if args[1] == "--help":
+            print("-D ALPHA=[1..1000], -D ACT_FN, see constants.mojo")
+            return
+
     var run_id: String
     try:
         run_id = subProcessRun("date +%s")
@@ -172,24 +181,14 @@ def main() raises:
     var data_repo = MNISTDataRepository()
 
     var batch_sizes = [300]  # 100, 300, 600, 1000] # prefer 300
-    # print(len(batch_sizes), "Batch size test[s] to run")
     for b_sz in batch_sizes:  # range(tests_to_run):
-        # print("\tBatch size:", b_sz)
         seed(42069)  # seeds 'random', we could 'search' for a better seed
         data_repo.shuffle()
 
         var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
-        # var arena = CPUSystemAllocator()
         var arena_model = LeNet5(arena)
-        # arena_model.randomizeWeights()
-
-        # var model = LeNet5()
-        # model.randomizeWeights()
-
         arena_model.zero()
         arena_model.randomizeWeights()
-        # model.zero()
-        # model.randomizeWeights()
 
         trainAndTest(
             arena_model,
@@ -199,7 +198,6 @@ def main() raises:
             parallel=True,
             batch_size=b_sz,
         )
-        # trainAndTest(model, data_repo, "alloc", run_id, parallel = False, batch_size = b_sz)
 
         try:
             arena_model.saveToFile(Path("models/deleteme.test"))
@@ -209,7 +207,6 @@ def main() raises:
 
     # TESTING A PRETRAINED VERSION FROM OLD FILE
 
-    # _ = """
     comptime model_name = "models/deleteme.test"
     comptime saved_model_dtype = ftype
 
@@ -220,14 +217,11 @@ def main() raises:
     print("\t", saved_res.correct, "/", saved_res.count, "correct")
     print("\t", saved_res.elapsed_ns // 1_000_000, "ms")
 
-    # print("Kernel Length:", LENGTH_KERNEL)
-    # print("Feature 0->5:", LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2, LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5)
-    # print("Input Channels, Layer1->5, Output:", INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT)
     try:
         with DeviceContext() as ctx:
-            var gpu_session = DeviceSession(ctx)
+            var gpu_session = DeviceSession[GPUBumpArenaAllocator](ctx)
             gpu_session.bufs.loadCPUWeights(modelCPU)
-            compareBuffers[LeNet5.w01_layout](ctx, gpu_session.bufs.w01_storage, modelCPU.weight0_1.ptr, label = "layer1")
+            #compareBuffers[LeNet5.w01_layout](ctx, gpu_session.bufs.w01_storage, modelCPU.weight0_1.ptr, label = "layer1")
             var device_name = ctx.name()
             print(
                 "\nDevice found:",

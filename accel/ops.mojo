@@ -548,7 +548,7 @@ def compareBuffers[
     epsilon /= 100  # allow 1% error
     comptime max_display = 1000
     var count = 0
-    var pad = " " if len(label) > 0 else ""
+    var pad = " " if label.byte_length() > 0 else ""
     print("Comparing GPU to CPU" + pad, label, ":")
     try:
         with device_buffer.map_to_host() as dev:
