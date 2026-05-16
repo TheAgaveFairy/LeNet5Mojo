@@ -278,7 +278,10 @@ struct LeNet5(Movable):
 
     @staticmethod
     def bytesToFType[
-            filetype: DType, num_bytes: Int, layout: Layout, big_e: Bool = is_big_endian()
+        filetype: DType,
+        num_bytes: Int,
+        layout: Layout,
+        big_e: Bool = is_big_endian(),
     ](
         bytes: InlineArray[Scalar[DType.uint8], num_bytes],
         tensor: LayoutTensor[ftype, layout, MutAnyOrigin],
@@ -360,13 +363,17 @@ struct LeNet5(Movable):
             print("error at reading lenet5 from file", e)
 
     @staticmethod
-    def _writeTensor[layout: Layout](tensor: LayoutTensor[ftype, layout, MutAnyOrigin], mut f: FileHandle) raises:
-        comptime fbs = size_of[ftype]() # float byte size
+    def _writeTensor[
+        layout: Layout
+    ](
+        tensor: LayoutTensor[ftype, layout, MutAnyOrigin], mut f: FileHandle
+    ) raises:
+        comptime fbs = size_of[ftype]()  # float byte size
         var ptr_bytes = tensor.ptr.bitcast[UInt8]()
-        var ptr_len = comptime(layout.size()) * fbs
+        var ptr_len = comptime (layout.size()) * fbs
         var temp_buf = alloc[UInt8](ptr_len)
-        var bytes_span = Span(ptr = temp_buf, length = ptr_len)
-        memcpy(src = ptr_bytes, dest = temp_buf, count = ptr_len)
+        var bytes_span = Span(ptr=temp_buf, length=ptr_len)
+        memcpy(src=ptr_bytes, dest=temp_buf, count=ptr_len)
         comptime if is_big_endian():
             for i in range(0, ptr_len, fbs):
                 comptime for j in range(fbs // 2):
@@ -384,6 +391,7 @@ struct LeNet5(Movable):
             Self._writeTensor(self.bias2_3, f)
             Self._writeTensor(self.bias4_5, f)
             Self._writeTensor(self.bias5_6, f)
+
 
 struct Feature(Movable):
     """

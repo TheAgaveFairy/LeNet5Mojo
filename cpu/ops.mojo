@@ -572,8 +572,8 @@ def matmulForward[
 
     comptime for i in range(output.shape[0]()):
         output[i] += bias[i]
-        #output[i] = output[i] if output[i] > 0 else 0
-    #act_fn.forward(output)
+        # output[i] = output[i] if output[i] > 0 else 0
+    # act_fn.forward(output)
     # TODO: look into if this is good or bad
     # FIXME: just a louder reminder
 
@@ -914,4 +914,3 @@ def testing(model: LeNet5, data: List[Image]) -> Int:
         correct += 1 if pred == actual else 0
     benchmark.keep(feat_arena)
     return correct
-

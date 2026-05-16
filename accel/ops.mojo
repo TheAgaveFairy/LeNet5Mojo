@@ -33,7 +33,7 @@ from accel.feature import FeatureGPU, FeatureGPUBuffers
 from accel.arena import GPUBumpArenaAllocator
 
 comptime div_chans_conv2 = 8  # any lower uses too many resources
-comptime div_chans_conv3 = 8  # needs to be a factor of 120
+comptime div_chans_conv3 = 24 #8  # needs to be a factor of 120
 
 def gatherOutputsKernel[batch_size: Int](feats: InlineArray[FeatureGPU, batch_size], outputs: LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin]):
     var img = block_idx.x

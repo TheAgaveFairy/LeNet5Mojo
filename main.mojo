@@ -18,7 +18,7 @@ from cpu.ops import training, trainingParallel, testing, trainBatch
 from cpu.arena import CPUBumpArenaAllocator, CPUSystemAllocator
 
 from accel import (
-        #LeNet5GPU,
+    # LeNet5GPU,
     batchedForward,
     DeviceSession,
     GPUBumpArenaAllocator,
@@ -31,7 +31,7 @@ from accel.ops import (
     conv3FusedKernel,
     matMulFusedKernel,
     gatherOutputsKernel,
-    compareBuffers
+    compareBuffers,
 )
 
 from helpers import showProgress
@@ -203,7 +203,9 @@ def main() raises:
             arena_model.saveToFile(Path("models/deleteme.test"))
         except e:
             print(e, file=stderr)
-        benchmark.keep(arena) # FIXME: joint origins have been discussed. could also wrap together into an AllocatorBox[LeNet5, Arena] so the lifetimes are tied
+        benchmark.keep(
+            arena
+        )  # FIXME: joint origins have been discussed. could also wrap together into an AllocatorBox[LeNet5, Arena] so the lifetimes are tied
 
     # TESTING A PRETRAINED VERSION FROM OLD FILE
 
@@ -221,20 +223,20 @@ def main() raises:
         with DeviceContext() as ctx:
             var gpu_session = DeviceSession[GPUBumpArenaAllocator](ctx)
             gpu_session.bufs.loadCPUWeights(modelCPU)
-            #compareBuffers[LeNet5.w01_layout](ctx, gpu_session.bufs.w01_storage, modelCPU.weight0_1.ptr, label = "layer1")
+            # compareBuffers[LeNet5.w01_layout](ctx, gpu_session.bufs.w01_storage, modelCPU.weight0_1.ptr, label = "layer1")
             var device_name = ctx.name()
             print(
                 "\nDevice found:",
                 device_name,
                 ". Compiling kernels and testing...",
             )
-            comptime batch_size = 50  # more than ~75 fails "uses too much parameter space"
+            comptime batch_size = 75  # more than ~75 fails "uses too much parameter space"
 
-            var conv1  = ctx.compile_function[conv1FusedKernel[batch_size]]()
-            var pool1  = ctx.compile_function[maxPool1Kernel[batch_size]]()
-            var conv2  = ctx.compile_function[conv2FusedKernel[batch_size]]()
-            var pool2  = ctx.compile_function[maxPool2Kernel[batch_size]]()
-            var conv3  = ctx.compile_function[conv3FusedKernel[batch_size]]()
+            var conv1 = ctx.compile_function[conv1FusedKernel[batch_size]]()
+            var pool1 = ctx.compile_function[maxPool1Kernel[batch_size]]()
+            var conv2 = ctx.compile_function[conv2FusedKernel[batch_size]]()
+            var pool2 = ctx.compile_function[maxPool2Kernel[batch_size]]()
+            var conv3 = ctx.compile_function[conv3FusedKernel[batch_size]]()
             var matmul = ctx.compile_function[matMulFusedKernel[batch_size]]()
             var gather = ctx.compile_function[gatherOutputsKernel[batch_size]]()
 

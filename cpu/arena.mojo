@@ -17,10 +17,11 @@ from std.sys.info import size_of, align_of
 from std.testing import assert_equal, TestSuite
 from std.os import abort
 
-comptime sitype = Scalar[DType.int32] # for testing
+comptime sitype = Scalar[DType.int32]  # for testing
 
-trait CPUAllocator():
-    #def __init__(out self, capacity_bytes: Int):
+
+trait CPUAllocator:
+    # def __init__(out self, capacity_bytes: Int):
     #    ...
 
     def alloc[
@@ -243,8 +244,7 @@ def test_nested_arena():
     print(tw.a.ptr, tc.a.ptr, tc.sub_weights.a.ptr)
 
 
-struct TestWeights():
-
+struct TestWeights:
     comptime layout = Layout.row_major(7)
     var a: LayoutTensor[ftype, Self.layout, MutAnyOrigin]
 
