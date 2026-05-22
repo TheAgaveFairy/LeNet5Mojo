@@ -16,6 +16,9 @@ results/*.csv
 main
 *.out
 
+#nvidia profiling
+timeline.*
+
 #flamegraphing
 out.*
 perf.*

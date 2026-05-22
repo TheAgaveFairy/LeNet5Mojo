@@ -9,7 +9,6 @@ from std.sys import stderr
 from std.sys.info import size_of
 
 from std.time import perf_counter_ns
-from helpers import showProgress
 from resultlogger import LeNet5Logger, MultiFileLogger
 
 from cpu.model import LeNet5, Feature
@@ -26,6 +25,17 @@ from constants import (
 from image import Image
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena
 
+def showProgress(progress: Int, total: Int) -> None:
+    comptime bar_width = 50
+    var ratio = Float32(progress) / Float32(total)
+    var filled = Int(Float32(bar_width) * ratio)
+    # print(chr(27) + "[2J",end="")
+    print("\r[", end="")
+    for _ in range(filled):
+        print("=", end="")
+    for _ in range(filled, bar_width):
+        print(" ", end="")
+    print("]", round(ratio * 100, 3), "%", end="")
 
 def argMax[layout: Layout](output: LayoutTensor[ftype, layout, _]) -> Int:
     var largest_value: sftype = FloatLiteral[].negative_infinity
@@ -582,14 +592,15 @@ def matmulForward[
 
 
 def loadInput(features: Feature, image: Image):
-    memcpy(
-        src=image.pixels.ptr,
-        dest=features.input.ptr,
-        count=PADDED_SIZE * PADDED_SIZE,
-    )
-    # for i in range(PADDED_SIZE):
-    #    for j in range(PADDED_SIZE):
-    #        features.input[0, i, j] = image.pixels[i, j]
+    #var normed_buffer = InlineArray[ftype, Image.DataLayout.size()](fill = 0.0)
+    #var normed_tensor = LayoutTensor[ftype, Feature.input_layout, MutAnyOrigin](features.input.ptr) # [1, IMAGE_SIZE, IMAGE_SIZE] from [IMAGE_SIZE, IMAGE_SIZE]
+    var normed_tensor = Image.DataTensor(features.input.ptr)
+    image.normalized(normed_tensor)
+    #memcpy(
+    #    src=normed_tensor.ptr,#image.pixels.ptr,
+    #    dest=features.input.ptr,
+    #    count=PADDED_SIZE * PADDED_SIZE, #Image.DataLayout.size()
+    #)
 
 
 def forward(lenet: LeNet5, features: Feature):
@@ -825,7 +836,8 @@ def trainingParallel(
         )
 
     for i in range(0, total_size, batch_size):
-        showProgress(i, total_size)
+        if DISPLAY:
+            showProgress(i, total_size)
         _ = trainBatchParallel(model, data[i : i + batch_size])
 
 
@@ -844,7 +856,8 @@ def trainingParallel(
         )
 
     for i in range(0, total_size, batch_size):
-        showProgress(i, total_size)
+        if DISPLAY:
+            showProgress(i, total_size)
         var start_time = perf_counter_ns()
         var results_tuple = trainBatchParallel(model, data[i : i + batch_size])
         var correct = results_tuple[0]
@@ -869,7 +882,8 @@ def training(
         print("Training: Single-Threaded")
     var total_size = len(data)
     for i in range(0, total_size, batch_size):
-        showProgress(i, total_size)
+        if DISPLAY:
+            showProgress(i, total_size)
         var start_time = perf_counter_ns()
         var results_tuple = trainBatch(model, data[i : i + batch_size])
         var correct = results_tuple[0]
@@ -913,4 +927,27 @@ def testing(model: LeNet5, data: List[Image]) -> Int:
         var actual = Int(data[i].label)
         correct += 1 if pred == actual else 0
     benchmark.keep(feat_arena)
+    return correct
+
+def testingParallel(model: LeNet5, data: List[Image], batch_size: Int = 50) -> Int:
+    var correct = 0
+    var feat_arena = CPUArena(Feature._calcArenaSize() * batch_size)
+    var feats = alloc[Feature](batch_size)
+
+    for i in range(batch_size):
+        # doing feats[i] = Feature() will try and __del__ what "was already there" - bad
+        (feats + i).init_pointee_move(Feature(feat_arena))
+    var corrects = List[Int](length = batch_size, fill = 0)
+
+    for i in range(0, len(data), batch_size): # TODO: handle case where len(data) % batch_size != 0
+        feat_arena.zero()
+        def work(tid: Int) {read, mut corrects}:
+            var pred = predictNew(model, feats[tid], data[i + tid])
+            var actual = Int(data[i + tid].label)
+            corrects[tid] += 1 if pred == actual else 0
+            
+        parallelize(work, batch_size)
+    benchmark.keep(feat_arena)
+    for i in range(batch_size):
+        correct += corrects[i]
     return correct

@@ -1,7 +1,7 @@
 from layout import Layout, LayoutTensor
 
 from std.gpu.host import DeviceContext, DeviceBuffer
-from std.builtin.device_passable import DevicePassable
+from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.reflection.reflect import reflect
 from std.sys import size_of
 
@@ -196,8 +196,9 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable):
     def get_type_name() -> String:
         return reflect[Self].name()
 
-    def _to_device_type(self, target: MutOpaquePointer[_]):
-        target.bitcast[Self.device_type]()[] = self
+    def _to_device_type(self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]):
+        #target.bitcast[Self.device_type]()[] = self
+        encoder.encode(self, target)
 
 
 struct FeatureGPUBuffers():

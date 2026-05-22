@@ -14,7 +14,7 @@ from std.gpu.host import DeviceContext
 from image import Image
 from cpu.model import LeNet5
 from constants import ftype, act_fn, ALPHA, DISPLAY
-from cpu.ops import training, trainingParallel, testing, trainBatch
+from cpu.ops import training, trainingParallel, testing, testingParallel#, trainBatch
 from cpu.arena import CPUBumpArenaAllocator, CPUSystemAllocator
 
 from accel import (
@@ -24,6 +24,7 @@ from accel import (
     GPUBumpArenaAllocator,
 )
 from accel.ops import (
+    normalizeInputsKernel,
     conv1FusedKernel,
     maxPool1Kernel,
     conv2FusedKernel,
@@ -62,12 +63,13 @@ def runTrain(
     mut model: LeNet5,
     data: List[Image],
     *,
-    parallel: Bool = False,
+    parallel: Bool = True,
     batch_size: Int = 300,
 ) -> TrainingSummary:
     var start_time = perf_counter_ns()
     if parallel:
         trainingParallel(model, data, batch_size)
+        #training(model, data, batch_size)
     else:
         training(model, data, batch_size)
     return TrainingSummary(perf_counter_ns() - start_time)
@@ -78,12 +80,13 @@ def runTrain(
     data: List[Image],
     mut logger: MultiFileLogger,
     *,
-    parallel: Bool = False,
+    parallel: Bool = True,
     batch_size: Int = 300,
 ) -> TrainingSummary:
     var start_time = perf_counter_ns()
     if parallel:
         trainingParallel(model, data, batch_size, logger)
+        #training(model, data, batch_size, logger)
     else:
         training(model, data, batch_size, logger)
     return TrainingSummary(perf_counter_ns() - start_time)
@@ -92,9 +95,16 @@ def runTrain(
 def runTest(
     model: LeNet5,
     data: List[Image],
+    *,
+    parallel: Bool = True,
 ) -> InferenceSummary:
     var start_time = perf_counter_ns()
-    var correct = testing(model, data)
+    var correct: Int
+    if parallel:
+        correct = testingParallel(model, data)
+        #correct = testing(model, data)
+    else:
+        correct = testing(model, data)
     return InferenceSummary(correct, len(data), perf_counter_ns() - start_time)
 
 
@@ -102,9 +112,16 @@ def runTest(
     model: LeNet5,
     data: List[Image],
     mut logger: MultiFileLogger,
+    *,
+    parallel: Bool = True,
 ) -> InferenceSummary:
     var start_time = perf_counter_ns()
-    var correct = testing(model, data)
+    var correct: Int
+    if parallel:
+        correct = testingParallel(model, data)
+        #correct = testing(model, data)
+    else:
+        correct = testing(model, data)
     var elapsed_ns = perf_counter_ns() - start_time
     try:
         logger.logInferenceResult(
@@ -121,7 +138,7 @@ def trainAndTest(
     alloc: String,
     run_id: String,
     *,
-    parallel: Bool = False,
+    parallel: Bool = True,
     batch_size: Int = 300,
 ) raises:
     var act_name = materialize[act_fn_name]()
@@ -142,7 +159,7 @@ def trainAndTest(
         print(
             t"\n\t{alloc} training:", train_res.elapsed_ns // 1_000_000, "ms."
         )
-    var infer_res = runTest(model, data_repo.test_data, logger)
+    var infer_res = runTest(model, data_repo.test_data, logger, parallel = parallel)
     if DISPLAY:
         print(
             "\t",
@@ -182,7 +199,7 @@ def main() raises:
     var batch_sizes = [300]  # 100, 300, 600, 1000] # prefer 300
     for b_sz in batch_sizes:  # range(tests_to_run):
         seed(42069)  # seeds 'random', we could 'search' for a better seed
-        data_repo.shuffle()
+        #data_repo.shuffle()
 
         var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
         var arena_model = LeNet5(arena)
@@ -204,7 +221,7 @@ def main() raises:
             print(e, file=stderr)
         benchmark.keep(
             arena
-        )  # FIXME: joint origins have been discussed. could also wrap together into an AllocatorBox[LeNet5, Arena] so the lifetimes are tied
+        )  # FIXME: joint origins have been discussed. could also wrap together into a CPUSession.{LeNet5, Arena} so the lifetimes are tied
 
     # TESTING A PRETRAINED VERSION FROM OLD FILE
 
@@ -222,7 +239,7 @@ def main() raises:
         with DeviceContext() as ctx:
             var gpu_session = DeviceSession[GPUBumpArenaAllocator](ctx)
             gpu_session.bufs.loadCPUWeights(modelCPU)
-            # compareBuffers[LeNet5.w01_layout](ctx, gpu_session.bufs.w01_storage, modelCPU.weight0_1.ptr, label = "layer1")
+            #compareBuffers[LeNet5.w01_layout](ctx, gpu_session.bufs.w01_storage, modelCPU.weight0_1.ptr, label = "layer1")
             var device_name = ctx.name()
             print(
                 "\nDevice found:",
@@ -231,6 +248,7 @@ def main() raises:
             )
             comptime batch_size = get_defined_int["BATCH_SIZE", 50]()  # more than ~120 fails on my RTX3070
 
+            var norm = ctx.compile_function[normalizeInputsKernel[batch_size]]()
             var conv1 = ctx.compile_function[conv1FusedKernel[batch_size]]()
             var pool1 = ctx.compile_function[maxPool1Kernel[batch_size]]()
             var conv2 = ctx.compile_function[conv2FusedKernel[batch_size]]()
@@ -241,9 +259,13 @@ def main() raises:
 
             var start_time = perf_counter_ns()
 
+            var batched_data = data_repo.getTrainBatch(0, COUNT_TRAIN)
+            
             var correct = batchedForward[batch_size](
-                data_repo.train_data,
+                ctx,
+                batched_data,
                 gpu_session.model,
+                norm,
                 conv1,
                 pool1,
                 conv2,
@@ -261,5 +283,7 @@ def main() raises:
             # logger.logInferenceResult(
             #     device_name, elapsed, correct, COUNT_TRAIN, batch_size, ftype
             # )
+            benchmark.keep(gpu_session)
     except e:
         print("ERROR IN MAIN", e, file=stderr)
+    benchmark.keep(data_repo)
