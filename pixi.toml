@@ -6,17 +6,17 @@ platforms = ["linux-64"]
 version = "0.2.0"
 
 [tasks]
+run = { cmd = "mojo main.mojo" }
+build = { cmd = "mojo build -Xlinker -lm main.mojo" }
 formatall = "mojo format *.mojo; mojo format cpu/*.mojo; mojo format accel/*.mojo"
-
-#tests = { cmd = "mojo arena.mojo; mojo mylogger.mojo; mojo ops.mojo; mojo tokenizer/tokenchunks.mojo; mojo tokenizer/tests.mojo && rm temp.tok", cwd = "src" }
-sanitize = { cmd = "mojo build -g2 -O1 --sanitize=address -Xlinker -lm main.mojo && ./main"}
-cdebug = { cmd = "mojo build -g2 -O1 --debug-info-language=C -Xlinker -lm main.mojo"}
-buildmain = { cmd = "mojo build -Xlinker -lm main.mojo", cwd = "src" }
-#flamegraphs = { cmd = "./flamegraphing/graphmain.sh; ./flamegraphing/graphtokenizer.sh;", cwd = "src" }
+test-cpu-arena = { cmd = "mojo cpu/arena.mojo" }
+test-gpu-arena = { cmd = "mojo accel/arena.mojo" }
+sanitize = { cmd = "mojo build -g2 -O1 --sanitize=address -Xlinker -lm main.mojo && ./main" }
+cdebug = { cmd = "mojo build -g2 -O1 --debug-info-language=C -Xlinker -lm main.mojo" }
 
 [dependencies]
 matplotlib = ">=3.10.9,<4"
 numpy = ">=2.4.6,<3"
-mojo = ">=1.0.0b2.dev2026052006,<2"
+mojo = ">=1.0.0b2.dev2026052215,<2"
 pandas = ">=3.0.3,<4"
 cuda-toolkit = ">=13.2.1,<14"
