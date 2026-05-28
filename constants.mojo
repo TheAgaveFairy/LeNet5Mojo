@@ -34,7 +34,7 @@ comptime PADDED_SIZE = IMAGE_SIZE + 2 * PADDING  # == LENGTH_FEATURE0
 
 # Numeric type — change 'ftype' (floating point type) here to switch the whole model (float64, bf16, etc.)
 # comptime ftype = DType.float64 #defines.get_defined_dtype["ftype", DType.float32]() # doesn't want to work
-comptime ftype = DType.float32  # if defines.is_defined["float64"]() else DType.float32https://www.instagram.com/reel/DWzkX7GPoPa/?igsh=bDNzYmV0bzhxbHVn
+comptime ftype = DType.float32  # if defines.is_defined["float64"]() else DType.float32
 comptime sftype = Scalar[ftype]
 comptime nelts = simd_width_of[ftype]()
 
