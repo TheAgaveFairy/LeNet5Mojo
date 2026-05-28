@@ -1,8 +1,15 @@
 from layout import Layout, LayoutTensor
 from std.math import ceil, log2, abs, sqrt, max
-from std.bit import next_power_of_two # prev_power_of_two
+from std.bit import next_power_of_two  # prev_power_of_two
+from std.sys import size_of, stderr
 
-from std.gpu.host import DeviceContext, DeviceBuffer, DeviceFunction
+from std.gpu.host import (
+    DeviceContext,
+    DeviceBuffer,
+    HostBuffer,
+    DeviceFunction,
+    DeviceStream,
+)
 from std.gpu import thread_idx, block_idx, block_dim, barrier
 from std.gpu.memory import AddressSpace
 
@@ -31,6 +38,8 @@ from constants import (
     IMAGE_SIZE,
     PADDED_SIZE,
     PADDING,
+    NUM_GPU_STREAMS,
+    GPU_BATCH_SIZE,
 )
 from image import Image
 from accel.model import LeNet5GPU
@@ -39,19 +48,42 @@ from accel.arena import GPUBumpArenaAllocator
 from dataloader import MNISTBatch
 
 comptime div_chans_conv2 = 8  # any lower uses too many resources
-comptime div_chans_conv3 = 60 #8  # needs to be a factor of 120
+comptime div_chans_conv3 = 8  # 8  # needs to be a factor of 120
 
-def normalizeInputsKernel[batch_size: Int](raw_pixels: LayoutTensor[DType.uint8, Layout.row_major(batch_size, IMAGE_SIZE, IMAGE_SIZE), ImmutAnyOrigin], feats: InlineArray[FeatureGPU, batch_size]):
-    """Call with blocks = batch_size, threads_per_block = (IMAGE_SIZE, IMAGE_SIZE). Remember, IMAGE_SIZE is unpadded. We need to both pad *and* normalize into our feature buffer inputs."""
+
+def normalizeInputsKernel[
+    batch_size: Int
+](
+    raw_pixels: LayoutTensor[
+        DType.uint8,
+        Layout.row_major(batch_size, IMAGE_SIZE, IMAGE_SIZE),
+        ImmutAnyOrigin,
+    ],
+    feats: InlineArray[FeatureGPU, batch_size],
+):
+    """Call with blocks = batch_size, threads_per_block = (IMAGE_SIZE, IMAGE_SIZE). Remember, IMAGE_SIZE is unpadded. We need to both pad *and* normalize into our feature buffer inputs.
+    """
     var img = block_idx.x
-    var row = thread_idx.y # 0..IMAGE_SIZE
-    var col = thread_idx.x # 0..IMAGE_SIZE
+    var row = thread_idx.y  # 0..IMAGE_SIZE
+    var col = thread_idx.x  # 0..IMAGE_SIZE
     var flat = row * IMAGE_SIZE + col
 
-    #reduction
-    comptime reduction_size = next_power_of_two(IMAGE_SIZE * IMAGE_SIZE) # 1024 from 768
-    var add_buffer = LayoutTensor[DType.uint64, Layout.row_major(reduction_size), MutAnyOrigin, address_space = AddressSpace.SHARED].stack_allocation()# dtype needs to fit hypothetical max of (UInt8.MAX * IMAGE_SIZE * IMAGE_SIZE) which requires at least 18bits
-    var std_buffer = LayoutTensor[DType.uint64, Layout.row_major(reduction_size), MutAnyOrigin, address_space = AddressSpace.SHARED].stack_allocation() # dtype needs to fit hypothetical max of (UInt8.MAX * IMAGE_SIZE * IMAGE_SIZE * 2) which requires at least 36bits
+    # reduction
+    comptime reduction_size = next_power_of_two(
+        IMAGE_SIZE * IMAGE_SIZE
+    )  # 1024 from 768
+    var add_buffer = LayoutTensor[
+        DType.uint64,
+        Layout.row_major(reduction_size),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()  # dtype needs to fit hypothetical max of (UInt8.MAX * IMAGE_SIZE * IMAGE_SIZE) which requires at least 18bits
+    var std_buffer = LayoutTensor[
+        DType.uint64,
+        Layout.row_major(reduction_size),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()  # dtype needs to fit hypothetical max of (UInt8.MAX * IMAGE_SIZE * IMAGE_SIZE * 2) which requires at least 36bits
     var pix = UInt64(rebind[UInt8](raw_pixels[img, row, col]))
     add_buffer[flat] = pix
     std_buffer[flat] = pix * pix
@@ -66,35 +98,72 @@ def normalizeInputsKernel[batch_size: Int](raw_pixels: LayoutTensor[DType.uint8,
 
     var i = 1
     while i < reduction_size:
-        if flat % (2 * i) == 0:# and (flat + i) < reduction_size:
+        if flat % (2 * i) == 0:  # and (flat + i) < reduction_size:
             add_buffer[flat] += add_buffer[flat + i]
             std_buffer[flat] += std_buffer[flat + i]
         barrier()
         i *= 2
-    var mean = sftype(rebind[UInt64](add_buffer[0])) / sftype(IMAGE_SIZE * IMAGE_SIZE)
-    var temp = sftype(rebind[UInt64](std_buffer[0])) / sftype(IMAGE_SIZE * IMAGE_SIZE) - (mean * mean)
-    var std = sqrt(max(Float32(temp), Float32(0))) + sftype(1e-7)  # clamp to avoid NaN from negative temp (float32 cancellation)
+    var mean = sftype(rebind[UInt64](add_buffer[0])) / sftype(
+        IMAGE_SIZE * IMAGE_SIZE
+    )
+    var temp = sftype(rebind[UInt64](std_buffer[0])) / sftype(
+        IMAGE_SIZE * IMAGE_SIZE
+    ) - (mean * mean)
+    var std = sqrt(max(Float32(temp), Float32(0))) + sftype(
+        1e-7
+    )  # clamp to avoid NaN from negative temp (float32 cancellation)
     barrier()
 
     # normalize and load
     var norm: sftype = (sftype(pix) - mean) / sftype(std)
-    feats[img].input[0, row + PADDING, col + PADDING] = norm # buffers are zeroed at arena / allocator init
+    feats[img].input[
+        0, row + PADDING, col + PADDING
+    ] = norm  # buffers are zeroed at arena / allocator init
 
-def normalizeInputs[batch_size: Int](ctx: DeviceContext, raw_pixels: LayoutTensor[DType.uint8, Layout.row_major(batch_size, IMAGE_SIZE, IMAGE_SIZE), ImmutAnyOrigin], feats: InlineArray[FeatureGPU, batch_size], norm_kernel: DeviceFunction) raises -> None:
-    ctx.enqueue_function(norm_kernel, raw_pixels, feats, grid_dim=(batch_size), block_dim=(IMAGE_SIZE, IMAGE_SIZE))
+
+def normalizeInputs[
+    batch_size: Int
+](
+    ctx: DeviceContext,
+    raw_pixels: LayoutTensor[
+        DType.uint8,
+        Layout.row_major(batch_size, IMAGE_SIZE, IMAGE_SIZE),
+        ImmutAnyOrigin,
+    ],
+    feats: InlineArray[FeatureGPU, batch_size],
+    norm_kernel: DeviceFunction,
+) raises -> None:
+    ctx.enqueue_function(
+        norm_kernel,
+        raw_pixels,
+        feats,
+        grid_dim=(batch_size),
+        block_dim=(IMAGE_SIZE, IMAGE_SIZE),
+    )
     # TODO: since we're passing the ctx around now, these kernel wrapper functions are much simplified. we should either force inlining or maybe just call the kernels directly
 
-def gatherOutputsKernel[batch_size: Int](feats: InlineArray[FeatureGPU, batch_size], outputs: LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin]):
+
+def gatherOutputsKernel[
+    batch_size: Int
+](
+    feats: InlineArray[FeatureGPU, batch_size],
+    outputs: LayoutTensor[
+        ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin
+    ],
+):
     var img = block_idx.x
     var i = thread_idx.x
     outputs[img, i] = feats[img].output[i]
+
 
 def gatherOutputs[
     batch_size: Int
 ](
     ctx: DeviceContext,
     feats: InlineArray[FeatureGPU, batch_size],
-    outputs: LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin],
+    outputs: LayoutTensor[
+        ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin
+    ],
     gather_kernel: DeviceFunction,
 ) raises -> None:
     ctx.enqueue_function(
@@ -104,6 +173,7 @@ def gatherOutputs[
         grid_dim=(batch_size),
         block_dim=(OUTPUT),
     )
+
 
 def matMulFusedKernel[
     batch_size: Int
@@ -617,8 +687,7 @@ def compareBuffers[
                             round(dev[i], 3),
                             "host:",
                             round(host_buffer[i], 3),
-                            ((dev[i] - host_buffer[i]) * 100)
-                            / host_buffer[i],
+                            ((dev[i] - host_buffer[i]) * 100) / host_buffer[i],
                             "% difference",
                         )
     except e:
@@ -682,10 +751,15 @@ def singleForward(
     return UInt8(gpu_guess)
 
 
-def batchedArgMax[batch_size: Int](outputs: LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), _], out guesses: InlineArray[UInt8, batch_size]):
-    guesses = type_of(guesses)(uninitialized = True) # out arg
+def batchedArgMax[
+    batch_size: Int
+](
+    outputs: LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), _],
+    out guesses: InlineArray[UInt8, batch_size],
+):
+    guesses = type_of(guesses)(uninitialized=True)  # out arg
     for b in range(batch_size):
-        var max_idx: UInt8 = 17 # nonsense sentinel
+        var max_idx: UInt8 = 17  # nonsense sentinel
         var max_val = sftype.MIN
         for i in range(OUTPUT):
             var v = rebind[sftype](outputs[b, i])
@@ -694,13 +768,16 @@ def batchedArgMax[batch_size: Int](outputs: LayoutTensor[ftype, Layout.row_major
                 max_idx = UInt8(i)
         guesses[b] = max_idx
 
+
 # TODO: refactor batchedForward to take exactly one pre-sliced batch (batch_size images) rather than
 # the full dataset. Move the loop to the caller. Benefits: (1) caller can own the GPU pixel staging
 # buffer (allocated once, reused across calls, avoiding re-alloc per call), (2) enables ping-pong
 # streaming where the caller submits the next H2D copy on a second stream before syncing the current
 # compute stream, (3) makes batchedForward usable for training loops that need per-batch logic.
 # Suggested caller pattern: for i in range(0, total, batch_size): batchedForward(ctx, data.slice(i, batch_size), ...)
-def batchedForward[batch_size: Int](
+def batchedForward[
+    batch_size: Int
+](
     ctx: DeviceContext,
     data: MNISTBatch,
     model: LeNet5GPU,
@@ -723,19 +800,29 @@ def batchedForward[batch_size: Int](
     var correct = 0
 
     try:
-        var arena = GPUBumpArenaAllocator(ctx, batch_size * FeatureGPUBuffers.sizeInBytes())
+        var arena = GPUBumpArenaAllocator(
+            ctx, batch_size * FeatureGPUBuffers.sizeInBytes()
+        )
         var all_bufs = alloc[FeatureGPUBuffers](batch_size)
         var features = InlineArray[FeatureGPU, batch_size](uninitialized=True)
         for j in range(batch_size):
             (all_bufs + j).init_pointee_move(FeatureGPUBuffers(arena))
-            (features.unsafe_ptr() + j).init_pointee_move(FeatureGPU((all_bufs + j)[]))
-        var outputs_buffer = ctx.enqueue_create_buffer[ftype](batch_size * OUTPUT)
-        ctx.synchronize()
-        var outputs = LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin](outputs_buffer)
+            (features.unsafe_ptr() + j).init_pointee_move(
+                FeatureGPU((all_bufs + j)[])
+            )
+        var outputs_buffer = ctx.enqueue_create_buffer[ftype](
+            batch_size * OUTPUT
+        )
+        # ctx.synchronize()
+        var outputs = LayoutTensor[
+            ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin
+        ](outputs_buffer)
 
         comptime batch_bytes = batch_size * IMAGE_SIZE * IMAGE_SIZE
-        var gpu_raw_pixels_arena = GPUBumpArenaAllocator(ctx, batch_bytes) # already just "bytes"
-        
+        var gpu_raw_pixels_arena = GPUBumpArenaAllocator(
+            ctx, batch_bytes
+        )  # already just "bytes"
+
         for i in range(0, count, batch_size):
             var batch_start = i * IMAGE_SIZE * IMAGE_SIZE
             gpu_raw_pixels_arena.buffer.enqueue_copy_from(
@@ -743,9 +830,13 @@ def batchedForward[batch_size: Int](
             )
 
             ctx.synchronize()
-            comptime batch_pixels_layout = Layout.row_major(batch_size, IMAGE_SIZE, IMAGE_SIZE)
-            var raw_pixels_tensor = LayoutTensor[DType.uint8, batch_pixels_layout, ImmutAnyOrigin](gpu_raw_pixels_arena.buffer)
-            
+            comptime batch_pixels_layout = Layout.row_major(
+                batch_size, IMAGE_SIZE, IMAGE_SIZE
+            )
+            var raw_pixels_tensor = LayoutTensor[
+                DType.uint8, batch_pixels_layout, ImmutAnyOrigin
+            ](gpu_raw_pixels_arena.buffer)
+
             _ = """
             if i == 0:
                 print("ref")
@@ -768,11 +859,13 @@ def batchedForward[batch_size: Int](
             conv3Forward(ctx, model, features, conv3)
             matMulForward(ctx, model, features, matmul)
             gatherOutputs(ctx, features, outputs, gather)
-            
-            ctx.synchronize()
+
+            # ctx.synchronize()
 
             with outputs_buffer.map_to_host() as outs:
-                var hosted_outputs = LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin](outs.unsafe_ptr())
+                var hosted_outputs = LayoutTensor[
+                    ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin
+                ](outs.unsafe_ptr())
                 var results = batchedArgMax(hosted_outputs)
                 for j in range(batch_size):
                     if results[j] == UInt8(data.raw_labels[i + j]):
@@ -785,3 +878,255 @@ def batchedForward[batch_size: Int](
         raise e^
 
     return correct
+
+
+struct StreamSlot[batch_size: Int](Movable):
+    var ctx: DeviceContext
+    var device_arena: GPUBumpArenaAllocator
+    var device_buffers: UnsafePointer[FeatureGPUBuffers, MutAnyOrigin]
+    var features: InlineArray[FeatureGPU, Self.batch_size]
+    var hosted_inputs: HostBuffer[DType.uint8]
+    var hosted_outputs: HostBuffer[ftype]
+    var device_inputs: DeviceBuffer[DType.uint8]
+    var outputs_buffer: DeviceBuffer[ftype]  # staging buffer for d2h
+    var outputs: LayoutTensor[
+        ftype, Layout.row_major(Self.batch_size, OUTPUT), MutAnyOrigin
+    ]
+
+    def __init__(out self) raises:
+        comptime img_sz = IMAGE_SIZE * IMAGE_SIZE
+        self.ctx = DeviceContext()
+        self.device_arena = GPUBumpArenaAllocator(
+            self.ctx, Self.batch_size * FeatureGPUBuffers.sizeInBytes()
+        )
+        self.device_buffers = alloc[FeatureGPUBuffers](Self.batch_size)
+        self.features = InlineArray[FeatureGPU, Self.batch_size](
+            uninitialized=True
+        )
+        for j in range(Self.batch_size):
+            (self.device_buffers + j).init_pointee_move(
+                FeatureGPUBuffers(self.device_arena)
+            )
+            (self.features.unsafe_ptr() + j).init_pointee_move(
+                FeatureGPU((self.device_buffers + j)[])
+            )
+        self.device_inputs = self.ctx.enqueue_create_buffer[DType.uint8](
+            img_sz * Self.batch_size
+        )
+        self.hosted_inputs = self.ctx.enqueue_create_host_buffer[DType.uint8](
+            img_sz * Self.batch_size
+        )
+        self.hosted_outputs = self.ctx.enqueue_create_host_buffer[ftype](
+            Self.batch_size * OUTPUT
+        )
+        self.outputs_buffer = self.ctx.enqueue_create_buffer[ftype](
+            Self.batch_size * OUTPUT
+        )
+        self.outputs = LayoutTensor[
+            ftype, Layout.row_major(Self.batch_size, OUTPUT), MutAnyOrigin
+        ](self.outputs_buffer)
+        self.ctx.synchronize()
+
+    def __del__(deinit self):
+        for i in range(Self.batch_size):
+            (self.device_buffers + i).destroy_pointee()
+        self.device_buffers.free()
+
+    def loadBatch(self, batch: Span[UInt8, _]) raises:
+        """
+        Takes in a Span that should represent (batch_size * 768) bytes.
+
+        If the span size isn't a multiple of the image size, that's a serious problem. Raise!
+
+        If the span size is valid but doesn't match what the StreamSlot expects (num_images < batch_size)
+        we'll just pad zeros and probably nothing needs to be done otherwise (non-fatal).
+
+        While we could limit the scope of our strategy to load, store, and transfer raw
+        image pixels around and avoid some complexity and checks,
+        this function is set to undertake the following:
+
+        We take in a constructed, contiguous span of UInt8 (raw pixels) from somewhere
+        and memcpy to a pinned HostBuffer. The HostBuffer allows for async uploading operation
+        to the GPU, so this intermediate is effectively required to make use of multiple streams.
+        For such a small, host-side copy, we shouldn't expect that cost to hold us back.
+        """
+        comptime img_sz = size_of[UInt8]() * IMAGE_SIZE * IMAGE_SIZE
+
+        if len(batch) % img_sz != 0:
+            raise Error(
+                "Error! StreamSlot input batch (Span) invalid - not a multiple"
+                " of image size!"
+            )
+
+        if (
+            len(batch) / img_sz != Self.batch_size
+        ):  # expected to have a perfect batch
+            print(
+                "Rest of GPU StreamSlot batch padded with zeros.", file=stderr
+            )  # TODO: proper logging
+            self.hosted_inputs.enqueue_fill(0)
+
+        self.hosted_inputs.enqueue_copy_from(batch.unsafe_ptr())
+        self.device_inputs.enqueue_copy_from(self.hosted_inputs)
+
+    def doWork(
+        self,
+        norm: DeviceFunction,
+        conv1: DeviceFunction,
+        pool1: DeviceFunction,
+        conv2: DeviceFunction,
+        pool2: DeviceFunction,
+        conv3: DeviceFunction,
+        matmul: DeviceFunction,
+        gather: DeviceFunction,
+        model: LeNet5GPU,
+    ) raises:
+        comptime batch_pixels_layout = Layout.row_major(
+            Self.batch_size, IMAGE_SIZE, IMAGE_SIZE
+        )
+        var raw_pixels_tensor = LayoutTensor[
+            DType.uint8, batch_pixels_layout, ImmutAnyOrigin
+        ](self.device_inputs)
+
+        self.ctx.enqueue_function(
+            norm,
+            raw_pixels_tensor,
+            self.features,
+            grid_dim=(Self.batch_size),
+            block_dim=(IMAGE_SIZE, IMAGE_SIZE),
+        )
+        self.ctx.enqueue_function(
+            conv1,
+            model,
+            self.features,
+            grid_dim=(Self.batch_size),
+            block_dim=(LENGTH_FEATURE1, LENGTH_FEATURE1),
+        )
+        self.ctx.enqueue_function(
+            pool1,
+            model,
+            self.features,
+            grid_dim=(Self.batch_size, LAYER1),
+            block_dim=(LENGTH_FEATURE1, LENGTH_FEATURE1),
+        )
+        self.ctx.enqueue_function(
+            conv2,
+            model,
+            self.features,
+            grid_dim=(Self.batch_size, div_chans_conv2),
+            block_dim=(
+                LAYER3 // div_chans_conv2,
+                LENGTH_FEATURE3,
+                LENGTH_FEATURE3,
+            ),
+        )
+        self.ctx.enqueue_function(
+            pool2,
+            model,
+            self.features,
+            grid_dim=(Self.batch_size),
+            block_dim=(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4),
+        )
+        self.ctx.enqueue_function(
+            conv3,
+            model,
+            self.features,
+            grid_dim=(Self.batch_size, div_chans_conv3),
+            block_dim=(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4),
+        )
+        self.ctx.enqueue_function(
+            matmul,
+            model,
+            self.features,
+            grid_dim=(Self.batch_size),
+            block_dim=(next_power_of_two(LAYER5)),
+        )
+        self.ctx.enqueue_function(
+            gather,
+            self.features,
+            self.outputs,
+            grid_dim=(Self.batch_size),
+            block_dim=(OUTPUT),
+        )
+        self.hosted_outputs.enqueue_copy_from(self.outputs_buffer)
+
+    def getResults(self, labels: Span[UInt8, _]) raises -> Int:
+        """Returns number correct for a batch. Syncs the slot's stream first."""
+        self.ctx.synchronize()
+        var correct = 0
+        var hosted_outputs = LayoutTensor[
+            ftype, Layout.row_major(Self.batch_size, OUTPUT), MutAnyOrigin
+        ](self.hosted_outputs.unsafe_ptr())
+        var results = batchedArgMax(hosted_outputs)
+        for j in range(Self.batch_size):
+            if results[j] == UInt8(labels[j]):
+                correct += 1
+        return correct
+
+
+def batchedForwardMultiStream[
+    batch_size: Int = GPU_BATCH_SIZE, num_streams: Int = NUM_GPU_STREAMS
+](
+    ctx: DeviceContext,
+    data: MNISTBatch,
+    model: LeNet5GPU,
+    norm: DeviceFunction,
+    conv1: DeviceFunction,
+    pool1: DeviceFunction,
+    conv2: DeviceFunction,
+    pool2: DeviceFunction,
+    conv3: DeviceFunction,
+    matmul: DeviceFunction,
+    gather: DeviceFunction,
+) raises -> Int:
+    var count = len(data)
+    print(
+        t"batchedForwardMultiStream: batch_size={batch_size},"
+        t" num_streams={num_streams}, count={count}"
+    )
+
+    var total_correct = 0
+    comptime batch_bytes = batch_size * IMAGE_SIZE * IMAGE_SIZE
+    var total_batches = count // batch_size
+
+    try:
+        var stream_slots = alloc[StreamSlot[batch_size]](num_streams)
+        for s in range(num_streams):
+            (stream_slots + s).init_pointee_move(StreamSlot[batch_size]())
+
+        for batch_num in range(total_batches):
+            var slot_idx = batch_num % num_streams
+            var batch_start = batch_num * batch_size * IMAGE_SIZE * IMAGE_SIZE
+            var batch_span = data.raw_pixels[
+                batch_start : batch_start + batch_bytes
+            ]
+
+            if batch_num >= num_streams:
+                var stale = batch_num - num_streams
+                var stale_start = stale * batch_size
+                total_correct += (stream_slots + slot_idx)[].getResults(
+                    data.raw_labels[stale_start : stale_start + batch_size]
+                )
+
+            (stream_slots + slot_idx)[].loadBatch(batch_span)
+            (stream_slots + slot_idx)[].doWork(
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather, model
+            )
+
+        var epilogue_start = max(0, total_batches - num_streams)
+        for batch_num in range(epilogue_start, total_batches):
+            var slot_idx = batch_num % num_streams
+            var label_start = batch_num * batch_size
+            total_correct += (stream_slots + slot_idx)[].getResults(
+                data.raw_labels[label_start : label_start + batch_size]
+            )
+
+        for s in range(num_streams):
+            (stream_slots + s).destroy_pointee()
+        stream_slots.free()
+
+    except e:
+        print("batchedForwardMultiStream ERROR", e)
+        raise e^
+
+    return total_correct

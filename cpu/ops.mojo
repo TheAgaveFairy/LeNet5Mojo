@@ -25,6 +25,7 @@ from constants import (
 from image import Image
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena
 
+
 def showProgress(progress: Int, total: Int) -> None:
     comptime bar_width = 50
     var ratio = Float32(progress) / Float32(total)
@@ -36,6 +37,7 @@ def showProgress(progress: Int, total: Int) -> None:
     for _ in range(filled, bar_width):
         print(" ", end="")
     print("]", round(ratio * 100, 3), "%", end="")
+
 
 def argMax[layout: Layout](output: LayoutTensor[ftype, layout, _]) -> Int:
     var largest_value: sftype = FloatLiteral[].negative_infinity
@@ -592,15 +594,15 @@ def matmulForward[
 
 
 def loadInput(features: Feature, image: Image):
-    #var normed_buffer = InlineArray[ftype, Image.DataLayout.size()](fill = 0.0)
-    #var normed_tensor = LayoutTensor[ftype, Feature.input_layout, MutAnyOrigin](features.input.ptr) # [1, IMAGE_SIZE, IMAGE_SIZE] from [IMAGE_SIZE, IMAGE_SIZE]
+    # var normed_buffer = InlineArray[ftype, Image.DataLayout.size()](fill = 0.0)
+    # var normed_tensor = LayoutTensor[ftype, Feature.input_layout, MutAnyOrigin](features.input.ptr) # [1, IMAGE_SIZE, IMAGE_SIZE] from [IMAGE_SIZE, IMAGE_SIZE]
     var normed_tensor = Image.DataTensor(features.input.ptr)
     image.normalized(normed_tensor)
-    #memcpy(
+    # memcpy(
     #    src=normed_tensor.ptr,#image.pixels.ptr,
     #    dest=features.input.ptr,
     #    count=PADDED_SIZE * PADDED_SIZE, #Image.DataLayout.size()
-    #)
+    # )
 
 
 def forward(lenet: LeNet5, features: Feature):
@@ -929,7 +931,10 @@ def testing(model: LeNet5, data: List[Image]) -> Int:
     benchmark.keep(feat_arena)
     return correct
 
-def testingParallel(model: LeNet5, data: List[Image], batch_size: Int = 50) -> Int:
+
+def testingParallel(
+    model: LeNet5, data: List[Image], batch_size: Int = 50
+) -> Int:
     var correct = 0
     var feat_arena = CPUArena(Feature._calcArenaSize() * batch_size)
     var feats = alloc[Feature](batch_size)
@@ -937,15 +942,18 @@ def testingParallel(model: LeNet5, data: List[Image], batch_size: Int = 50) -> I
     for i in range(batch_size):
         # doing feats[i] = Feature() will try and __del__ what "was already there" - bad
         (feats + i).init_pointee_move(Feature(feat_arena))
-    var corrects = List[Int](length = batch_size, fill = 0)
+    var corrects = List[Int](length=batch_size, fill=0)
 
-    for i in range(0, len(data), batch_size): # TODO: handle case where len(data) % batch_size != 0
+    for i in range(
+        0, len(data), batch_size
+    ):  # TODO: handle case where len(data) % batch_size != 0
         feat_arena.zero()
+
         def work(tid: Int) {read, mut corrects}:
             var pred = predictNew(model, feats[tid], data[i + tid])
             var actual = Int(data[i + tid].label)
             corrects[tid] += 1 if pred == actual else 0
-            
+
         parallelize(work, batch_size)
     benchmark.keep(feat_arena)
     for i in range(batch_size):

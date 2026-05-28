@@ -13,13 +13,19 @@ from std.gpu.host import DeviceContext
 
 from image import Image
 from cpu.model import LeNet5
-from constants import ftype, act_fn, ALPHA, DISPLAY
-from cpu.ops import training, trainingParallel, testing, testingParallel#, trainBatch
+from constants import ftype, act_fn, ALPHA, DISPLAY, GPU_BATCH_SIZE, NUM_GPU_STREAMS
+from cpu.ops import (
+    training,
+    trainingParallel,
+    testing,
+    testingParallel,
+)  # , trainBatch
 from cpu.arena import CPUBumpArenaAllocator, CPUSystemAllocator
 
 from accel import (
     # LeNet5GPU,
     batchedForward,
+    batchedForwardMultiStream,
     DeviceSession,
     GPUBumpArenaAllocator,
 )
@@ -36,7 +42,7 @@ from accel.ops import (
 )
 
 from dataloader import MNISTDataRepository
-from resultlogger import MultiFileLogger
+from resultlogger import MultiFileLogger, ResultLogger
 
 # note this technically isn't LeNet5 as some of the final connections are full instead of sparse, see their paper
 # the penultimate layer of size 84 isnt included either, see their paper
@@ -69,7 +75,7 @@ def runTrain(
     var start_time = perf_counter_ns()
     if parallel:
         trainingParallel(model, data, batch_size)
-        #training(model, data, batch_size)
+        # training(model, data, batch_size)
     else:
         training(model, data, batch_size)
     return TrainingSummary(perf_counter_ns() - start_time)
@@ -86,7 +92,7 @@ def runTrain(
     var start_time = perf_counter_ns()
     if parallel:
         trainingParallel(model, data, batch_size, logger)
-        #training(model, data, batch_size, logger)
+        # training(model, data, batch_size, logger)
     else:
         training(model, data, batch_size, logger)
     return TrainingSummary(perf_counter_ns() - start_time)
@@ -102,7 +108,7 @@ def runTest(
     var correct: Int
     if parallel:
         correct = testingParallel(model, data)
-        #correct = testing(model, data)
+        # correct = testing(model, data)
     else:
         correct = testing(model, data)
     return InferenceSummary(correct, len(data), perf_counter_ns() - start_time)
@@ -119,7 +125,7 @@ def runTest(
     var correct: Int
     if parallel:
         correct = testingParallel(model, data)
-        #correct = testing(model, data)
+        # correct = testing(model, data)
     else:
         correct = testing(model, data)
     var elapsed_ns = perf_counter_ns() - start_time
@@ -159,7 +165,9 @@ def trainAndTest(
         print(
             t"\n\t{alloc} training:", train_res.elapsed_ns // 1_000_000, "ms."
         )
-    var infer_res = runTest(model, data_repo.test_data, logger, parallel = parallel)
+    var infer_res = runTest(
+        model, data_repo.test_data, logger, parallel=parallel
+    )
     if DISPLAY:
         print(
             "\t",
@@ -199,7 +207,7 @@ def main() raises:
     var batch_sizes = [300]  # 100, 300, 600, 1000] # prefer 300
     for b_sz in batch_sizes:  # range(tests_to_run):
         seed(42069)  # seeds 'random', we could 'search' for a better seed
-        #data_repo.shuffle()
+        # data_repo.shuffle()
 
         var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
         var arena_model = LeNet5(arena)
@@ -239,14 +247,14 @@ def main() raises:
         with DeviceContext() as ctx:
             var gpu_session = DeviceSession[GPUBumpArenaAllocator](ctx)
             gpu_session.bufs.loadCPUWeights(modelCPU)
-            #compareBuffers[LeNet5.w01_layout](ctx, gpu_session.bufs.w01_storage, modelCPU.weight0_1.ptr, label = "layer1")
+            # compareBuffers[LeNet5.w01_layout](ctx, gpu_session.bufs.w01_storage, modelCPU.weight0_1.ptr, label = "layer1")
             var device_name = ctx.name()
             print(
                 "\nDevice found:",
                 device_name,
                 ". Compiling kernels and testing...",
             )
-            comptime batch_size = get_defined_int["BATCH_SIZE", 50]()  # more than ~120 fails on my RTX3070
+            comptime batch_size = GPU_BATCH_SIZE  # get_defined_int["GPU_BATCH_SIZE", 50]()  # more than ~120 fails on my RTX3070
 
             var norm = ctx.compile_function[normalizeInputsKernel[batch_size]]()
             var conv1 = ctx.compile_function[conv1FusedKernel[batch_size]]()
@@ -257,10 +265,12 @@ def main() raises:
             var matmul = ctx.compile_function[matMulFusedKernel[batch_size]]()
             var gather = ctx.compile_function[gatherOutputsKernel[batch_size]]()
 
-            var start_time = perf_counter_ns()
-
             var batched_data = data_repo.getTrainBatch(0, COUNT_TRAIN)
-            
+            var gpu_logger = ResultLogger(
+                String(t"results/gpu_infer_bs{batch_size}_act={act_fn_name}_run={run_id}.csv")
+            )
+
+            var t0 = perf_counter_ns()
             var correct = batchedForward[batch_size](
                 ctx,
                 batched_data,
@@ -274,15 +284,67 @@ def main() raises:
                 matmul,
                 gather,
             )
-            var end_time = perf_counter_ns()
-            var elapsed = end_time - start_time  # // 1_000_000
+            var t1 = perf_counter_ns()
+            print(
+                t"batchedForward:          {correct}/{COUNT_TRAIN} correct,"
+                t" {(t1-t0)//1_000_000}ms"
+            )
+            try:
+                gpu_logger.logInferenceResult(
+                    "GPU_single", t1 - t0, correct, COUNT_TRAIN, batch_size, ftype
+                )
+            except e:
+                print(e, file=stderr)
 
-            print("\t", correct, "/", COUNT_TRAIN, "correct")
-            print("\t", elapsed // 1_000_000, "ms")
-            # TODO: wire up logger for GPU inference result
-            # logger.logInferenceResult(
-            #     device_name, elapsed, correct, COUNT_TRAIN, batch_size, ftype
-            # )
+            var correct_s1 = batchedForwardMultiStream[batch_size, 1](
+                ctx,
+                batched_data,
+                gpu_session.model,
+                norm,
+                conv1,
+                pool1,
+                conv2,
+                pool2,
+                conv3,
+                matmul,
+                gather,
+            )
+            var t2 = perf_counter_ns()
+            print(
+                t"batchedForwardMultiStream[s=1]:  {correct_s1}/{COUNT_TRAIN} correct,"
+                t" {(t2-t1)//1_000_000}ms"
+            )
+            try:
+                gpu_logger.logInferenceResult(
+                    "GPU_multi_s1", t2 - t1, correct_s1, COUNT_TRAIN, batch_size, ftype
+                )
+            except e:
+                print(e, file=stderr)
+
+            var correct_ms = batchedForwardMultiStream[batch_size, NUM_GPU_STREAMS](
+                ctx,
+                batched_data,
+                gpu_session.model,
+                norm,
+                conv1,
+                pool1,
+                conv2,
+                pool2,
+                conv3,
+                matmul,
+                gather,
+            )
+            var t3 = perf_counter_ns()
+            print(
+                t"batchedForwardMultiStream[s={NUM_GPU_STREAMS}]: {correct_ms}/{COUNT_TRAIN} correct,"
+                t" {(t3-t2)//1_000_000}ms"
+            )
+            try:
+                gpu_logger.logInferenceResult(
+                    "GPU_multi_s" + String(NUM_GPU_STREAMS), t3 - t2, correct_ms, COUNT_TRAIN, batch_size, ftype
+                )
+            except e:
+                print(e, file=stderr)
             benchmark.keep(gpu_session)
     except e:
         print("ERROR IN MAIN", e, file=stderr)

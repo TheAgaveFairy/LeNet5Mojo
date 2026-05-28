@@ -7,6 +7,7 @@ from image import Image
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as Arena
 from constants import ftype, sftype
 
+
 # TODO: rename MNISTBatch — when used as a full-dataset view (getTrainBatch(0, 60000)) the name is
 # misleading. Consider MNISTDataView or MNISTData, with a .slice(i, batch_size) -> MNISTBatch method
 # to make the call site at the loop level explicit.
@@ -15,17 +16,22 @@ from constants import ftype, sftype
 # SoA spans directly. Image would become a lightweight view rather than an owned arena-backed struct.
 @fieldwise_init
 struct MNISTBatch[
-        #is_mutable: Bool,
-        #//,
-        #origin: Origin[mut = is_mutable],
-        ](TrivialRegisterPassable, Sized):
+    # is_mutable: Bool,
+    # //,
+    # origin: Origin[mut = is_mutable],
+](Sized, TrivialRegisterPassable):
     var raw_pixels: Span[UInt8, ImmutAnyOrigin]
     var raw_labels: Span[UInt8, ImmutAnyOrigin]
 
     # TODO: remove or fix — this custom init is dead code. It memcpys Image.pixels but the count
     # was wrong (DataTensor size vs PixelLayout size) and nothing calls this path anymore.
-    def __init__(out self, images: List[Image], pixel_buffer: Span[UInt8, MutAnyOrigin], label_buffer: Span[UInt8, MutAnyOrigin]) raises: # CANNOT take Some[CPUAllocator] - memory must be guaranteed to be contiguous. could also accept a mut Span, UnsafePointer, etc
-        #comptime o = origin_of(a, b)
+    def __init__(
+        out self,
+        images: List[Image],
+        pixel_buffer: Span[UInt8, MutAnyOrigin],
+        label_buffer: Span[UInt8, MutAnyOrigin],
+    ) raises:  # CANNOT take Some[CPUAllocator] - memory must be guaranteed to be contiguous. could also accept a mut Span, UnsafePointer, etc
+        # comptime o = origin_of(a, b)
         comptime size = Image.PixelLayout.size()  # 784 raw bytes, NOT DataTensor (1024)
         var num_images = len(images)
         if pixel_buffer == label_buffer:
@@ -39,8 +45,10 @@ struct MNISTBatch[
         var pptr = pixel_buffer.unsafe_ptr()
         for i in range(num_images):
             var img = images[i]
-            memcpy(src = img.pixels.ptr, dest = pptr + offset, count = size)
-            label_buffer.unsafe_get(i) = img.label # we already bounds checked above
+            memcpy(src=img.pixels.ptr, dest=pptr + offset, count=size)
+            label_buffer.unsafe_get(
+                i
+            ) = img.label  # we already bounds checked above
             offset += size
         self.raw_pixels = pixel_buffer
         self.raw_labels = label_buffer
@@ -48,7 +56,8 @@ struct MNISTBatch[
     def __len__(self) -> Int:
         return len(self.raw_labels)
 
-struct MNISTDataRepository():
+
+struct MNISTDataRepository:
     comptime COUNT_TRAIN = 60000
     comptime COUNT_TEST = 10000
 
@@ -97,7 +106,9 @@ struct MNISTDataRepository():
             var data_file = open(self.train_image_file, "r")
             var label_file = open(self.train_label_file, "r")
 
-            _ = data_file.seek(16, os.SEEK_SET)  # data has a magic header # 2049
+            _ = data_file.seek(
+                16, os.SEEK_SET
+            )  # data has a magic header # 2049
             _ = label_file.seek(8, os.SEEK_SET)  # labels too # 2051
 
             comptime size = Image.PixelLayout.size()
@@ -126,7 +137,9 @@ struct MNISTDataRepository():
             var data_file = open(self.test_image_file, "r")
             var label_file = open(self.test_label_file, "r")
 
-            _ = data_file.seek(16, os.SEEK_SET)  # data has a magic header # 2049
+            _ = data_file.seek(
+                16, os.SEEK_SET
+            )  # data has a magic header # 2049
             _ = label_file.seek(8, os.SEEK_SET)  # labels too # 2051
 
             comptime size = Image.PixelLayout.size()
@@ -151,28 +164,38 @@ struct MNISTDataRepository():
     def getTrainBatch(self, start: Int, end: Int) -> MNISTBatch:
         """Get a view / span / slice from the arena directly as raw Bytes."""
         if end <= start or end > Self.COUNT_TRAIN:
-            print(t"getTrainBatch error: invalid slice {start}:{end}).", file=stderr)
+            print(
+                t"getTrainBatch error: invalid slice {start}:{end}).",
+                file=stderr,
+            )
         comptime image_size_in_bytes = Image.PixelLayout.size()  # 784 bytes/image
-        var pixels_ptr_start = self._train_pixels_arena.buffer + (start * image_size_in_bytes)
+        var pixels_ptr_start = self._train_pixels_arena.buffer + (
+            start * image_size_in_bytes
+        )
         var count_bytes = (end - start) * image_size_in_bytes
-        var pixels_span = Span(ptr = pixels_ptr_start, length = count_bytes)
+        var pixels_span = Span(ptr=pixels_ptr_start, length=count_bytes)
 
         var labels_ptr_start = self._train_labels_arena.buffer + start
-        var labels_span = Span(ptr = labels_ptr_start, length = (end - start))
+        var labels_span = Span(ptr=labels_ptr_start, length=(end - start))
         var batch = MNISTBatch(pixels_span, labels_span)
         return batch
 
     def getTestBatch(self, start: Int, end: Int) -> MNISTBatch:
         """Get a view / span / slice from the arena directly as raw Bytes."""
         if end <= start or end > Self.COUNT_TEST:
-            print(t"getTestBatch error: invalid slice {start}:{end}).", file=stderr)
+            print(
+                t"getTestBatch error: invalid slice {start}:{end}).",
+                file=stderr,
+            )
         comptime image_size_in_bytes = Image.PixelLayout.size()  # 784 bytes/image
-        var pixels_ptr_start = self._test_pixels_arena.buffer + (start * image_size_in_bytes)
+        var pixels_ptr_start = self._test_pixels_arena.buffer + (
+            start * image_size_in_bytes
+        )
         var count_bytes = (end - start) * image_size_in_bytes
-        var pixels_span = Span(ptr = pixels_ptr_start, length = count_bytes)
+        var pixels_span = Span(ptr=pixels_ptr_start, length=count_bytes)
 
         var labels_ptr_start = self._test_labels_arena.buffer + start
-        var labels_span = Span(ptr = labels_ptr_start, length = (end - start))
+        var labels_span = Span(ptr=labels_ptr_start, length=(end - start))
         var batch = MNISTBatch(pixels_span, labels_span)
         return batch
 
@@ -218,7 +241,9 @@ struct MNISTDataRepository():
                     dest=image_buffer.unsafe_ptr(),
                     count=materialize[Image.PixelLayout.size()](),
                 )
-                var img = Image(image_buffer, data_label, self._train_pixels_arena) # FIXME: this arena won't work
+                var img = Image(
+                    image_buffer, data_label, self._train_pixels_arena
+                )  # FIXME: this arena won't work
                 if test_or_train == "test":
                     self.test_data.append(img^)
                 else:

@@ -59,31 +59,58 @@ struct FeatureGPUBuffers(Movable):
         Arena already zero-fills on creation; no enqueue_fill needed here.
         """
         self.allocator_owns_memory = True
-        self.input = arena.alloc[ftype](comptime (FeatureGPU.input_layout.size()))
-        self.layer1 = arena.alloc[ftype](comptime (FeatureGPU.layer1_layout.size()))
-        self.layer2 = arena.alloc[ftype](comptime (FeatureGPU.layer2_layout.size()))
-        self.layer3 = arena.alloc[ftype](comptime (FeatureGPU.layer3_layout.size()))
-        self.layer4 = arena.alloc[ftype](comptime (FeatureGPU.layer4_layout.size()))
-        self.layer5 = arena.alloc[ftype](comptime (FeatureGPU.layer5_layout.size()))
-        self.output = arena.alloc[ftype](comptime (FeatureGPU.output_layout.size()))
+        self.input = arena.alloc[ftype](
+            comptime (FeatureGPU.input_layout.size())
+        )
+        self.layer1 = arena.alloc[ftype](
+            comptime (FeatureGPU.layer1_layout.size())
+        )
+        self.layer2 = arena.alloc[ftype](
+            comptime (FeatureGPU.layer2_layout.size())
+        )
+        self.layer3 = arena.alloc[ftype](
+            comptime (FeatureGPU.layer3_layout.size())
+        )
+        self.layer4 = arena.alloc[ftype](
+            comptime (FeatureGPU.layer4_layout.size())
+        )
+        self.layer5 = arena.alloc[ftype](
+            comptime (FeatureGPU.layer5_layout.size())
+        )
+        self.output = arena.alloc[ftype](
+            comptime (FeatureGPU.output_layout.size())
+        )
 
     def __init__(out self, ctx: DeviceContext) raises:
         self.allocator_owns_memory = False
-        self.input  = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.input_layout.size()))
+        self.input = ctx.enqueue_create_buffer[ftype](
+            comptime (FeatureGPU.input_layout.size())
+        )
         self.input.enqueue_fill(0.0)
-        self.layer1 = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.layer1_layout.size()))
+        self.layer1 = ctx.enqueue_create_buffer[ftype](
+            comptime (FeatureGPU.layer1_layout.size())
+        )
         self.layer1.enqueue_fill(0.0)
-        self.layer2 = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.layer2_layout.size()))
+        self.layer2 = ctx.enqueue_create_buffer[ftype](
+            comptime (FeatureGPU.layer2_layout.size())
+        )
         self.layer2.enqueue_fill(0.0)
-        self.layer3 = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.layer3_layout.size()))
+        self.layer3 = ctx.enqueue_create_buffer[ftype](
+            comptime (FeatureGPU.layer3_layout.size())
+        )
         self.layer3.enqueue_fill(0.0)
-        self.layer4 = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.layer4_layout.size()))
+        self.layer4 = ctx.enqueue_create_buffer[ftype](
+            comptime (FeatureGPU.layer4_layout.size())
+        )
         self.layer4.enqueue_fill(0.0)
-        self.layer5 = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.layer5_layout.size()))
+        self.layer5 = ctx.enqueue_create_buffer[ftype](
+            comptime (FeatureGPU.layer5_layout.size())
+        )
         self.layer5.enqueue_fill(0.0)
-        self.output = ctx.enqueue_create_buffer[ftype](comptime (FeatureGPU.output_layout.size()))
+        self.output = ctx.enqueue_create_buffer[ftype](
+            comptime (FeatureGPU.output_layout.size())
+        )
         self.output.enqueue_fill(0.0)
-
 
     def loadInput(mut self, image: Image) -> None:
         try:

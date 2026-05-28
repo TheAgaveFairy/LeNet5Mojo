@@ -18,8 +18,8 @@ struct Image(ImplicitlyCopyable):
         UInt8, Self.PixelLayout.size()
     ]  # raw bytes
     comptime PixelTensor = LayoutTensor[
-            DType.uint8, Self.PixelLayout, MutAnyOrigin
-    ] # raw pixels
+        DType.uint8, Self.PixelLayout, MutAnyOrigin
+    ]  # raw pixels
 
     comptime DataLayout = Layout.row_major(PADDED_SIZE, PADDED_SIZE)
     comptime DataTensor = LayoutTensor[
@@ -29,7 +29,9 @@ struct Image(ImplicitlyCopyable):
     var pixels: Self.PixelTensor
     var label: UInt8  # digits [0, 9] MNIST, could store as "Int"
 
-    def __init__(out self, raw: List[Byte], label: UInt8, mut arena: Arena) raises:
+    def __init__(
+        out self, raw: List[Byte], label: UInt8, mut arena: Arena
+    ) raises:
         comptime layout_size = Self.PixelLayout.size()
         if len(raw) != layout_size:
             raise Error(t"List[Byte] for Image unexpected len: {len(raw)}.")
@@ -37,7 +39,7 @@ struct Image(ImplicitlyCopyable):
             raise Error(t"Error with image label: {label}.")  # could raise
         self.label = label
         self.pixels = Self.PixelTensor(arena.alloc[UInt8](layout_size))
-        memcpy(src = raw.unsafe_ptr(), dest = self.pixels.ptr, count = layout_size)
+        memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
 
     def __init__(
         out self, raw: Self.PixelStorage, label: UInt8, mut arena: Arena
@@ -48,7 +50,7 @@ struct Image(ImplicitlyCopyable):
             print("Error with image label:", label, file=stderr)  # could raise
         self.label = label
         self.pixels = Self.PixelTensor(arena.alloc[UInt8](layout_size))
-        memcpy(src = raw.unsafe_ptr(), dest = self.pixels.ptr, count = layout_size)
+        memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
 
         # no longer normalizing at init because we don't know the end device and that's a separate task
 
@@ -61,7 +63,7 @@ struct Image(ImplicitlyCopyable):
     #     self.label = copy.label
 
     def normalized[
-            padded: Bool = True # TODO: implement or remove this flag
+        padded: Bool = True  # TODO: implement or remove this flag
     ](self: Self, tensor: Self.DataTensor):
         var sum: UInt64 = 0
         var std_sum: UInt64 = 0
@@ -95,7 +97,7 @@ struct Image(ImplicitlyCopyable):
     @deprecated("Use non-static self.normalized(output_tensor).")
     @staticmethod
     def _normalize[
-            padded: Bool = True # TODO: implement or remove this flag
+        padded: Bool = True  # TODO: implement or remove this flag
     ](raw: Self.PixelStorage, tensor: Self.DataTensor):
         var sum: UInt64 = 0
         var std_sum: UInt64 = 0

@@ -6,7 +6,7 @@ from std.reflection.reflect import reflect
 from std.sys import size_of
 
 from cpu.model import LeNet5
-from accel.arena import GPUAllocator, GPUBumpArenaAllocator, GPUSystemAllocator 
+from accel.arena import GPUAllocator, GPUBumpArenaAllocator, GPUSystemAllocator
 from constants import (
     ftype,
     sftype,
@@ -29,14 +29,16 @@ from constants import (
 )
 from image import Image
 
+
 struct DeviceSession[Allocator: GPUAllocator]():
     """Ties lifetimes of arena, buffers, etc all together."""
+
     var bufs: LeNet5GPUBuffers
     var model: LeNet5GPU
     var alloc: Self.Allocator
 
     def __init__(out self, ctx: DeviceContext) raises:
-        self.alloc = Self.Allocator(ctx, LeNet5GPU.sizeInBytes()) # default
+        self.alloc = Self.Allocator(ctx, LeNet5GPU.sizeInBytes())  # default
         self.bufs = LeNet5GPUBuffers(self.alloc)
         self.model = LeNet5GPU(self.bufs)
 
@@ -48,10 +50,12 @@ struct DeviceSession[Allocator: GPUAllocator]():
     # def __del__(deinit self):
     #     pass
 
-struct LeNet5GPUBuffers():
+
+struct LeNet5GPUBuffers:
     """Stays on CPU — holds DeviceBuffers for host-side access (map_to_host, enqueue_copy_from, etc.).
     """
-    var allocator_owns_memory: Bool # TODO: AcceptsAllocator trait idea (along with static sizeInBytes())
+
+    var allocator_owns_memory: Bool  # TODO: AcceptsAllocator trait idea (along with static sizeInBytes())
     var w01_storage: DeviceBuffer[ftype]
     var w23_storage: DeviceBuffer[ftype]
     var w45_storage: DeviceBuffer[ftype]
@@ -63,32 +67,65 @@ struct LeNet5GPUBuffers():
 
     def __init__(out self, mut arena: Some[GPUAllocator]) raises:
         self.allocator_owns_memory = True
-        self.w01_storage = arena.alloc[ftype](comptime(LeNet5GPU.w0_1_layout.size()))
-        self.w23_storage = arena.alloc[ftype](comptime(LeNet5GPU.w2_3_layout.size()))
-        self.w45_storage = arena.alloc[ftype](comptime(LeNet5GPU.w4_5_layout.size()))
-        self.w56_storage = arena.alloc[ftype](comptime(LeNet5GPU.w5_6_layout.size()))
-        self.b01_storage = arena.alloc[ftype](comptime(LeNet5GPU.b0_1_layout.size()))
-        self.b23_storage = arena.alloc[ftype](comptime(LeNet5GPU.b2_3_layout.size()))
-        self.b45_storage = arena.alloc[ftype](comptime(LeNet5GPU.b4_5_layout.size()))
-        self.b56_storage = arena.alloc[ftype](comptime(LeNet5GPU.b5_6_layout.size()))
-
+        self.w01_storage = arena.alloc[ftype](
+            comptime (LeNet5GPU.w0_1_layout.size())
+        )
+        self.w23_storage = arena.alloc[ftype](
+            comptime (LeNet5GPU.w2_3_layout.size())
+        )
+        self.w45_storage = arena.alloc[ftype](
+            comptime (LeNet5GPU.w4_5_layout.size())
+        )
+        self.w56_storage = arena.alloc[ftype](
+            comptime (LeNet5GPU.w5_6_layout.size())
+        )
+        self.b01_storage = arena.alloc[ftype](
+            comptime (LeNet5GPU.b0_1_layout.size())
+        )
+        self.b23_storage = arena.alloc[ftype](
+            comptime (LeNet5GPU.b2_3_layout.size())
+        )
+        self.b45_storage = arena.alloc[ftype](
+            comptime (LeNet5GPU.b4_5_layout.size())
+        )
+        self.b56_storage = arena.alloc[ftype](
+            comptime (LeNet5GPU.b5_6_layout.size())
+        )
 
     def __init__(out self, ctx: DeviceContext) raises:
         self.allocator_owns_memory = False
-        self.w01_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.w0_1_layout.size()))
-        self.w23_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.w2_3_layout.size()))
-        self.w45_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.w4_5_layout.size()))
-        self.w56_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.w5_6_layout.size()))
-        self.b01_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.b0_1_layout.size()))
-        self.b23_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.b2_3_layout.size()))
-        self.b45_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.b4_5_layout.size()))
-        self.b56_storage = ctx.enqueue_create_buffer[ftype](comptime(LeNet5GPU.b5_6_layout.size()))
-        self.zero(sync_ctx = ctx)
-        #ctx.synchronize() # or pass no ctx (sync_ctx = None) and do it yourself here
+        self.w01_storage = ctx.enqueue_create_buffer[ftype](
+            comptime (LeNet5GPU.w0_1_layout.size())
+        )
+        self.w23_storage = ctx.enqueue_create_buffer[ftype](
+            comptime (LeNet5GPU.w2_3_layout.size())
+        )
+        self.w45_storage = ctx.enqueue_create_buffer[ftype](
+            comptime (LeNet5GPU.w4_5_layout.size())
+        )
+        self.w56_storage = ctx.enqueue_create_buffer[ftype](
+            comptime (LeNet5GPU.w5_6_layout.size())
+        )
+        self.b01_storage = ctx.enqueue_create_buffer[ftype](
+            comptime (LeNet5GPU.b0_1_layout.size())
+        )
+        self.b23_storage = ctx.enqueue_create_buffer[ftype](
+            comptime (LeNet5GPU.b2_3_layout.size())
+        )
+        self.b45_storage = ctx.enqueue_create_buffer[ftype](
+            comptime (LeNet5GPU.b4_5_layout.size())
+        )
+        self.b56_storage = ctx.enqueue_create_buffer[ftype](
+            comptime (LeNet5GPU.b5_6_layout.size())
+        )
+        self.zero(sync_ctx=ctx)
+        # ctx.synchronize() # or pass no ctx (sync_ctx = None) and do it yourself here
 
     @staticmethod
     def sizeInBytes() -> Int:
-        return LeNet5GPU.sizeInBytes() # TODO: consolodate this pattern into an AcceptsAllocator trait or similar
+        return (
+            LeNet5GPU.sizeInBytes()
+        )  # TODO: consolodate this pattern into an AcceptsAllocator trait or similar
 
     def loadCPUWeights(mut self, cpu_model: LeNet5) raises:
         self.w01_storage.enqueue_copy_from(cpu_model.weight0_1.ptr)
@@ -113,6 +150,7 @@ struct LeNet5GPUBuffers():
             sync_ctx.value().synchronize()
 
     # TODO:def __del__(deinit self):
+
 
 struct LeNet5GPU(DevicePassable, TrivialRegisterPassable):
     """
@@ -164,7 +202,7 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable):
         var w0 = bufs.w01_storage
         var w2 = bufs.w23_storage
         var w4 = bufs.w45_storage
-        var w5 = bufs.w56_storage 
+        var w5 = bufs.w56_storage
         self.weight0_1 = LayoutTensor[ftype, Self.w0_1_layout, MutAnyOrigin](w0)
         self.weight2_3 = LayoutTensor[ftype, Self.w2_3_layout, MutAnyOrigin](w2)
         self.weight4_5 = LayoutTensor[ftype, Self.w4_5_layout, MutAnyOrigin](w4)
@@ -172,7 +210,7 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable):
         var b0 = bufs.b01_storage
         var b2 = bufs.b23_storage
         var b4 = bufs.b45_storage
-        var b5 = bufs.b56_storage 
+        var b5 = bufs.b56_storage
         self.bias0_1 = LayoutTensor[ftype, Self.b0_1_layout, MutAnyOrigin](b0)
         self.bias2_3 = LayoutTensor[ftype, Self.b2_3_layout, MutAnyOrigin](b2)
         self.bias4_5 = LayoutTensor[ftype, Self.b4_5_layout, MutAnyOrigin](b4)
@@ -180,15 +218,15 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable):
 
     @staticmethod
     def sizeInBytes() -> Int:
-        var num_ftypes = comptime(
-                Self.w0_1_layout.size() +
-                Self.w2_3_layout.size() +
-                Self.w4_5_layout.size() +
-                Self.w5_6_layout.size() +
-                Self.b0_1_layout.size() +
-                Self.b2_3_layout.size() +
-                Self.b4_5_layout.size() +
-                Self.b5_6_layout.size()
+        var num_ftypes = comptime (
+            Self.w0_1_layout.size()
+            + Self.w2_3_layout.size()
+            + Self.w4_5_layout.size()
+            + Self.w5_6_layout.size()
+            + Self.b0_1_layout.size()
+            + Self.b2_3_layout.size()
+            + Self.b4_5_layout.size()
+            + Self.b5_6_layout.size()
         )
         return num_ftypes * size_of[ftype]()
 
@@ -196,12 +234,14 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable):
     def get_type_name() -> String:
         return reflect[Self].name()
 
-    def _to_device_type(self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]):
-        #target.bitcast[Self.device_type]()[] = self
+    def _to_device_type(
+        self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]
+    ):
+        # target.bitcast[Self.device_type]()[] = self
         encoder.encode(self, target)
 
 
-struct FeatureGPUBuffers():
+struct FeatureGPUBuffers:
     """Stays on CPU — holds DeviceBuffers for host-side access (map_to_host, enqueue_copy_from, etc.).
     """
 
