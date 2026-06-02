@@ -1,4 +1,4 @@
-from layout import Layout, LayoutTensor, print_layout
+from layout import Layout, LayoutTensor
 from std.math import sqrt
 from std.memory import memcpy
 from std.sys import stderr, simd_width_of, size_of
@@ -62,9 +62,7 @@ struct Image(ImplicitlyCopyable):
     #     self.pixels = copy.pixels.copy()
     #     self.label = copy.label
 
-    def normalized[
-        padded: Bool = True  # TODO: implement or remove this flag
-    ](self: Self, tensor: Self.DataTensor):
+    def normalized[padded: Bool = True](self: Self, tensor: Self.DataTensor):
         var sum: UInt64 = 0
         var std_sum: UInt64 = 0
 
@@ -85,19 +83,18 @@ struct Image(ImplicitlyCopyable):
         var temp = Float64(std_sum) / Float64(N) - (mean * mean)
         var std = sqrt(temp)
 
+        comptime off = PADDING if padded else 0
         for r in range(IMAGE_SIZE):
             for c in range(IMAGE_SIZE):
                 var idx = r * IMAGE_SIZE + c
                 var curr = Float64(Int(self.pixels.ptr[idx]))
-                tensor[r + PADDING, c + PADDING] = ((curr - mean) / std).cast[
-                    ftype
-                ]()
+                tensor[r + off, c + off] = ((curr - mean) / std).cast[ftype]()
 
     # TODO: delete _normalize once all callers are confirmed migrated to self.normalized(tensor).
     @deprecated("Use non-static self.normalized(output_tensor).")
     @staticmethod
     def _normalize[
-        padded: Bool = True  # TODO: implement or remove this flag
+        padded: Bool = True
     ](raw: Self.PixelStorage, tensor: Self.DataTensor):
         var sum: UInt64 = 0
         var std_sum: UInt64 = 0
@@ -119,10 +116,9 @@ struct Image(ImplicitlyCopyable):
         var temp = Float64(std_sum) / Float64(N) - (mean * mean)
         var std = sqrt(temp)
 
+        comptime off = PADDING if padded else 0
         for r in range(IMAGE_SIZE):
             for c in range(IMAGE_SIZE):
                 var idx = r * IMAGE_SIZE + c
                 var curr = Float64(Int(raw[idx]))
-                tensor[r + PADDING, c + PADDING] = ((curr - mean) / std).cast[
-                    ftype
-                ]()
+                tensor[r + off, c + off] = ((curr - mean) / std).cast[ftype]()

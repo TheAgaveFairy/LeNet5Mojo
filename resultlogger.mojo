@@ -35,8 +35,10 @@ struct InferenceResult(LogEntry):
     var elapsed_ns: UInt  # perf_counter_ns() -> UInt
     var correct: Int
     var test_size: Int
-    var batch_size: Int
+    var stream_batch_size: Int
+    var num_streams: Int
     var ftype: DType
+    var activation_fn: String
 
     def __init__(
         out self,
@@ -44,7 +46,8 @@ struct InferenceResult(LogEntry):
         elapsed_ns: UInt,
         correct: Int,
         test_size: Int,
-        batch_size: Int,
+        stream_batch_size: Int,
+        num_streams: Int,
         ftype: DType,
     ):
         try:
@@ -57,8 +60,10 @@ struct InferenceResult(LogEntry):
         self.elapsed_ns = elapsed_ns
         self.correct = correct
         self.test_size = test_size
-        self.batch_size = batch_size
+        self.stream_batch_size = stream_batch_size
+        self.num_streams = num_streams
         self.ftype = ftype
+        self.activation_fn = reflect[act_fn].base_name()
 
     def toCSV(self) -> String:
         var datatype_string = "Float32"
@@ -75,16 +80,25 @@ struct InferenceResult(LogEntry):
             + ","
             + String(self.test_size)
             + ","
-            + String(self.batch_size)
+            + String(self.stream_batch_size)
+            + ","
+            + String(self.num_streams)
             + ","
             + datatype_string
             + ","
-            + materialize[reflect[act_fn].name()]().split(".")[1]
+            + self.activation_fn
         )
 
     @staticmethod
     def getHeaders() -> String:
-        return "timestamp,device,elapsed_ns,correct,test_size,batch_size,ftype,activation_fn"
+        comptime r = reflect[Self]
+        comptime names = r.field_names()
+        var header = String("")
+        comptime for i in range(r.field_count()):
+            if i > 0:
+                header += ","
+            header += String(names[i])
+        return header
 
 
 struct TrainingResult(LogEntry):
@@ -97,6 +111,7 @@ struct TrainingResult(LogEntry):
     var loss: Float32
     var learning_rate: Float32
     var ftype: DType
+    var activation_fn: String
 
     def __init__(
         out self,
@@ -123,6 +138,7 @@ struct TrainingResult(LogEntry):
         self.loss = loss
         self.learning_rate = learning_rate
         self.ftype = ftype
+        self.activation_fn = reflect[act_fn].base_name()
 
     def toCSV(self) -> String:
         var datatype_string = "Float32"
@@ -147,12 +163,19 @@ struct TrainingResult(LogEntry):
             + ","
             + datatype_string
             + ","
-            + materialize[reflect[act_fn].name()]().split(".")[1]
+            + self.activation_fn
         )
 
     @staticmethod
     def getHeaders() -> String:
-        return "timestamp,device,epoch,elapsed_ns,correct,test_size,loss,learning_rate,ftype,activation_fn"
+        comptime r = reflect[Self]
+        comptime names = r.field_names()
+        var header = String("")
+        comptime for i in range(r.field_count()):
+            if i > 0:
+                header += ","
+            header += String(names[i])
+        return header
 
 
 trait MyLogger:
@@ -162,7 +185,8 @@ trait MyLogger:
         elapsed_ns: UInt,
         correct: Int,
         test_size: Int,
-        batch_size: Int,
+        stream_batch_size: Int,
+        num_streams: Int,
         ftype: DType,
     ) raises -> None:
         ...
@@ -214,11 +238,18 @@ struct ResultLogger(LeNet5Logger):
         elapsed_ns: UInt,
         correct: Int,
         test_size: Int,
-        batch_size: Int,
+        stream_batch_size: Int,
+        num_streams: Int,
         ftype: DType,
     ) raises -> None:
         var result = InferenceResult(
-            device, elapsed_ns, correct, test_size, batch_size, ftype
+            device,
+            elapsed_ns,
+            correct,
+            test_size,
+            stream_batch_size,
+            num_streams,
+            ftype,
         )
         self._writeResult(result)
 
@@ -261,21 +292,8 @@ struct ResultLogger(LeNet5Logger):
         else:
             content += "INVALID CONTENT\n"
 
-        # self._appendToFile(content)
         with open(self.output_path, "a") as file:
             file.write(content)
-
-    @deprecated("can open files in append mode now")
-    def _appendToFile(mut self, content: String) raises -> None:
-        var existing: String
-
-        if not os.path.exists(self.output_path):
-            with open(self.output_path, "w") as f:
-                pass
-        with open(self.output_path, "r") as file:
-            existing = file.read()
-        with open(self.output_path, "w") as file:
-            file.write(existing + content)
 
 
 @fieldwise_init
@@ -313,11 +331,18 @@ struct MultiFileLogger(LeNet5Logger):
         elapsed_ns: UInt,
         correct: Int,
         test_size: Int,
-        batch_size: Int,
+        stream_batch_size: Int,
+        num_streams: Int,
         ftype: DType,
     ) raises -> None:
         self.inference_logger.logInferenceResult(
-            device, elapsed_ns, correct, test_size, batch_size, ftype
+            device,
+            elapsed_ns,
+            correct,
+            test_size,
+            stream_batch_size,
+            num_streams,
+            ftype,
         )
 
     def logTrainingEpoch(
@@ -347,8 +372,8 @@ def main() raises:
     comptime output_path = "results/"
     var logger = MultiFileLogger(output_path)
 
-    logger.logInferenceResult("RTX6069", 420, 99, 100, 10, DType.float64)
-    logger.logInferenceResult("GTX730", 9001, 98, 100, 10, DType.float32)
+    logger.logInferenceResult("RTX6069", 420, 99, 100, 10, 4, DType.float64)
+    logger.logInferenceResult("GTX730", 9001, 98, 100, 10, 1, DType.float32)
 
     logger.logTrainingEpoch(
         "7600X", 1, 69, 11, 100, 0.1337, 0.10, DType.float32

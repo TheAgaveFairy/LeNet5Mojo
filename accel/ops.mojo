@@ -8,7 +8,6 @@ from std.gpu.host import (
     DeviceBuffer,
     HostBuffer,
     DeviceFunction,
-    DeviceStream,
 )
 from std.gpu import thread_idx, block_idx, block_dim, barrier
 from std.gpu.memory import AddressSpace
@@ -39,7 +38,7 @@ from constants import (
     PADDED_SIZE,
     PADDING,
     NUM_GPU_STREAMS,
-    GPU_BATCH_SIZE,
+    GPU_STREAM_BATCH_SIZE,
 )
 from image import Image
 from accel.model import LeNet5GPU
@@ -714,41 +713,33 @@ def singleForward(
     conv3: DeviceFunction,
     matmul: DeviceFunction,
     gather: DeviceFunction,
-) raises -> UInt8:
-    var gpu_guess = 10  # invalid sentinel — TODO: make Optional[Int]
-    var img_copy = img
-
+) raises -> Int:
     comptime batch_size = 1
 
-    try:
-        with DeviceContext() as ctx:
-            var feat_cpu = Feature()
-            loadInput(feat_cpu, img_copy)
-            forward(lenet_cpu, feat_cpu)
-            var cpu_guess = argMax(feat_cpu.output)
+    with DeviceContext() as ctx:
+        var feat_cpu = Feature()
+        loadInput(feat_cpu, img)
+        forward(lenet_cpu, feat_cpu)
+        var cpu_guess = argMax(feat_cpu.output)
 
-            var feat_bufs = FeatureGPUBuffers(ctx)
-            var feats = InlineArray[FeatureGPU, batch_size](
-                fill=FeatureGPU(feat_bufs)
-            )
-            feat_bufs.loadInput(img)
-            conv1Forward[batch_size](ctx, model, feats, conv1)
-            maxPool1Forward[batch_size](ctx, model, feats, pool1)
-            conv2Forward[batch_size](ctx, model, feats, conv2)
-            maxPool2Forward[batch_size](ctx, model, feats, pool2)
-            conv3Forward[batch_size](ctx, model, feats, conv3)
-            matMulForward[batch_size](ctx, model, feats, matmul)
-            ctx.synchronize()
+        var feat_bufs = FeatureGPUBuffers(ctx)
+        var feats = InlineArray[FeatureGPU, batch_size](
+            fill=FeatureGPU(feat_bufs)
+        )
+        feat_bufs.loadInput(img)
+        conv1Forward[batch_size](ctx, model, feats, conv1)
+        maxPool1Forward[batch_size](ctx, model, feats, pool1)
+        conv2Forward[batch_size](ctx, model, feats, conv2)
+        maxPool2Forward[batch_size](ctx, model, feats, pool2)
+        conv3Forward[batch_size](ctx, model, feats, conv3)
+        matMulForward[batch_size](ctx, model, feats, matmul)
+        ctx.synchronize()
 
-            var host_output_layer = type_of(feat_cpu.output).stack_allocation()
-            with feat_bufs.output.map_to_host() as ans:
-                for i in range(host_output_layer.size()):
-                    host_output_layer.ptr[i] = ans[i]
-            gpu_guess = argMax(host_output_layer)
-    except e:
-        print(e)
-
-    return UInt8(gpu_guess)
+        var host_output_layer = type_of(feat_cpu.output).stack_allocation()
+        with feat_bufs.output.map_to_host() as ans:
+            for i in range(host_output_layer.size()):
+                host_output_layer.ptr[i] = ans[i]
+        return argMax(host_output_layer)
 
 
 def batchedArgMax[
@@ -775,6 +766,7 @@ def batchedArgMax[
 # streaming where the caller submits the next H2D copy on a second stream before syncing the current
 # compute stream, (3) makes batchedForward usable for training loops that need per-batch logic.
 # Suggested caller pattern: for i in range(0, total, batch_size): batchedForward(ctx, data.slice(i, batch_size), ...)
+@deprecated("Use the multi-stream version, even if only with 1 stream.")
 def batchedForward[
     batch_size: Int
 ](
@@ -1065,8 +1057,8 @@ struct StreamSlot[batch_size: Int](Movable):
 
 
 def batchedForwardMultiStream[
-    batch_size: Int = GPU_BATCH_SIZE, num_streams: Int = NUM_GPU_STREAMS
-](
+    batch_size: Int = GPU_STREAM_BATCH_SIZE, num_streams: Int = NUM_GPU_STREAMS
+](  # TODO: clarify what precisely "batch_size" means in the context of multistreams
     ctx: DeviceContext,
     data: MNISTBatch,
     model: LeNet5GPU,

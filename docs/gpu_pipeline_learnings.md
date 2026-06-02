@@ -68,10 +68,10 @@ slots.free()
 
 ```bash
 # WRONG — defines ignored
-mojo main.mojo -D GPU_BATCH_SIZE=75
+mojo main.mojo -D GPU_STREAM_BATCH_SIZE=75
 
 # CORRECT
-mojo -D GPU_BATCH_SIZE=75 -D NUM_GPU_STREAMS=3 main.mojo
+mojo -D GPU_STREAM_BATCH_SIZE=75 -D NUM_GPU_STREAMS=3 main.mojo
 ```
 
 ## Pipeline structure

@@ -5,13 +5,11 @@ from std.sys import size_of, stderr
 
 from image import Image
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as Arena
-from constants import ftype, sftype
 
 
 # TODO: rename MNISTBatch — when used as a full-dataset view (getTrainBatch(0, 60000)) the name is
 # misleading. Consider MNISTDataView or MNISTData, with a .slice(i, batch_size) -> MNISTBatch method
 # to make the call site at the loop level explicit.
-# TODO: add num_images() -> Int method = len(raw_labels), so callers don't need to know which span defines count.
 # TODO: (future) if CPU hot path also moves off List[Image] AoS, both CPU and GPU can share these
 # SoA spans directly. Image would become a lightweight view rather than an owned arena-backed struct.
 @fieldwise_init
@@ -20,6 +18,11 @@ struct MNISTBatch[
     # //,
     # origin: Origin[mut = is_mutable],
 ](Sized, TrivialRegisterPassable):
+    # FIXME: raw_pixels and raw_labels are non-owning Spans into MNISTDataRepository's arena.
+    # Mojo does not track this origin dependency — ImmutAnyOrigin erases the link to the repo.
+    # Callers must keep the MNISTDataRepository alive (e.g. via benchmark.compiler.keep) until
+    # all consumers (including async GPU copies) finish. Fix: parameterize MNISTBatch on the
+    # arena's origin so the borrow checker enforces the lifetime relationship automatically.
     var raw_pixels: Span[UInt8, ImmutAnyOrigin]
     var raw_labels: Span[UInt8, ImmutAnyOrigin]
 
@@ -198,61 +201,6 @@ struct MNISTDataRepository:
         var labels_span = Span(ptr=labels_ptr_start, length=(end - start))
         var batch = MNISTBatch(pixels_span, labels_span)
         return batch
-
-    @deprecated("Use separate readTrainData and readTestData")
-    def _readData(mut self, test_or_train: String) raises:
-        """
-        The span for the data we send in we'll fill with normalized images.
-        """
-        var data_filename = (
-            self.test_image_file if test_or_train
-            == "test" else self.train_image_file
-        )
-        var label_filename = (
-            self.test_label_file if test_or_train
-            == "test" else self.train_label_file
-        )
-        var cap = (
-            Self.COUNT_TEST if test_or_train == "test" else Self.COUNT_TRAIN
-        )
-
-        try:
-            var data_file = open(data_filename, "r")
-            var label_file = open(label_filename, "r")
-
-            _ = data_file.seek(16, os.SEEK_SET)  # data has an unknown header
-            _ = label_file.seek(8, os.SEEK_SET)  # labels too
-
-            comptime buffer_size = Image.PixelLayout.size()  # IMAGE_SIZE * IMAGE_SIZE
-            var image_buffer = Image.PixelStorage(
-                uninitialized=True
-            )  # TODO: skip this InlineArray intermediate and send List[Byte]
-
-            for c in range(cap):
-                var data_list = data_file.read_bytes(
-                    buffer_size
-                )  # -> List[Byte]
-
-                var temp = label_file.read_bytes(1)
-                var data_label: UInt8 = temp[0]
-
-                memcpy(
-                    src=data_list.unsafe_ptr(),
-                    dest=image_buffer.unsafe_ptr(),
-                    count=materialize[Image.PixelLayout.size()](),
-                )
-                var img = Image(
-                    image_buffer, data_label, self._train_pixels_arena
-                )  # FIXME: this arena won't work
-                if test_or_train == "test":
-                    self.test_data.append(img^)
-                else:
-                    self.train_data.append(img^)
-
-            data_file.close()
-            label_file.close()
-        except e:
-            print("Error with input binary files:", e, file=stderr)
 
     # Shuffle helpers
 

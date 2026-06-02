@@ -15,12 +15,17 @@ Check items off as they are completed.
     reusable for training loops with per-batch logic.
   - Suggested caller pattern: `for i in range(0, total, batch_size): batchedForward(ctx, data.slice(i, batch_size), ...)`
 
+- [ ] **`MNISTBatch` lifetime not tracked — callers must `keep(data_repo)`** (`dataloader.mojo`, `profile_gpu.mojo`)
+  - `MNISTBatch` holds `Span[UInt8, ImmutAnyOrigin]` into `MNISTDataRepository`'s arena. `ImmutAnyOrigin`
+    erases the borrow link, so Mojo may destroy the repo before GPU copies finish. Workaround: `keep(data_repo)`
+    at call sites (already done in `profile_gpu.mojo`, `main.mojo` avoids this by calling `batchedForward` first).
+  - Fix: parameterize `MNISTBatch` on the arena origin (the commented-out `is_mutable/origin` params are the
+    right shape — just wire them up). Then `getTrainBatch` can return `MNISTBatch[origin=origin_of(self)]`,
+    which the compiler will enforce outlives its spans.
+
 - [ ] **Rename `MNISTBatch` — name is misleading when used as a full-dataset view** (`dataloader.mojo`)
   - `getTrainBatch(0, 60000)` returns the whole dataset, not a batch. Consider `MNISTData` / `MNISTDataView`.
   - Add `.slice(i, batch_size) -> MNISTBatch` method so batch-level access is explicit at the call site.
-
-- [ ] **Add `MNISTBatch.num_images() -> Int` method** (`dataloader.mojo`)
-  - Returns `len(raw_labels)`. Makes it explicit which span defines image count.
 
 - [ ] **Define `AcceptsAllocator` trait** (`accel/model.mojo:54`, `accel/model.mojo:91`)
   - `LeNet5GPUBuffers` and `LeNet5GPU` both carry an `allocator_owns_memory: Bool` workaround
@@ -64,9 +69,6 @@ Check items off as they are completed.
 
 - [ ] **Implement `LeNet5GPUBuffers.__del__`** (`accel/model.mojo:115`)
   - Placeholder comment exists. Needed to properly release GPU memory when not using an arena.
-
-- [ ] **`getResults` (deprecated) is broken post-deprecation** (`accel/ops.mojo:686`)
-  - Body is commented out and returns a sentinel array. Either restore or fully delete.
 
 - [ ] **`comptime for` explodes compile time in arena/buffer setup** (`accel/ops.mojo:746`)
   - Noted during `batchedForward` implementation. Investigate if a runtime loop is acceptable.

@@ -1,4 +1,4 @@
-from std.algorithm.functional import vectorize, parallelize
+from std.algorithm.functional import vectorize
 from layout import Layout, LayoutTensor
 from std.math import tanh, exp, sqrt, erf, log, pi, tau
 from std.testing import (

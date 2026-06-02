@@ -27,7 +27,6 @@ from constants import (
     OUTPUT,
     PADDED_SIZE,
 )
-from image import Image
 
 
 struct DeviceSession[Allocator: GPUAllocator]():
@@ -42,10 +41,10 @@ struct DeviceSession[Allocator: GPUAllocator]():
         self.bufs = LeNet5GPUBuffers(self.alloc)
         self.model = LeNet5GPU(self.bufs)
 
-    def __init__(out self, mut arena: Self.Allocator) raises:
-        self.alloc = arena^
-        self.bufs = LeNet5GPUBuffers(self.alloc)
+    def __init__(out self, var arena: Self.Allocator) raises:
+        self.bufs = LeNet5GPUBuffers(arena)
         self.model = LeNet5GPU(self.bufs)
+        self.alloc = arena^
 
     # def __del__(deinit self):
     #     pass
@@ -239,147 +238,3 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable):
     ):
         # target.bitcast[Self.device_type]()[] = self
         encoder.encode(self, target)
-
-
-struct FeatureGPUBuffers:
-    """Stays on CPU — holds DeviceBuffers for host-side access (map_to_host, enqueue_copy_from, etc.).
-    """
-
-    var input_storage: DeviceBuffer[ftype]
-    var layer1_storage: DeviceBuffer[ftype]
-    var layer2_storage: DeviceBuffer[ftype]
-    var layer3_storage: DeviceBuffer[ftype]
-    var layer4_storage: DeviceBuffer[ftype]
-    var layer5_storage: DeviceBuffer[ftype]
-    var output_storage: DeviceBuffer[ftype]
-
-    def __init__(out self, ctx: DeviceContext, feat: FeatureGPU) raises:
-        self.input_storage = feat.input.to_device_buffer(ctx)
-        self.layer1_storage = feat.layer1.to_device_buffer(ctx)
-        self.layer2_storage = feat.layer2.to_device_buffer(ctx)
-        self.layer3_storage = feat.layer3.to_device_buffer(ctx)
-        self.layer4_storage = feat.layer4.to_device_buffer(ctx)
-        self.layer5_storage = feat.layer5.to_device_buffer(ctx)
-        self.output_storage = feat.output.to_device_buffer(ctx)
-
-    def loadInput(mut self, image: Image) raises -> None:
-        try:
-            with self.input_storage.map_to_host() as load_me:
-                for i in range(PADDED_SIZE):
-                    for j in range(PADDED_SIZE):
-                        load_me[i * PADDED_SIZE + j] = rebind[sftype](
-                            image.pixels[i, j]
-                        )
-        except e:
-            raise Error("loadInput FeatureGPUBuffers ERROR", e)
-
-
-struct FeatureGPU(Copyable, Movable):
-    """Holds intermediate results on the GPU. LayoutTensors only — DeviceBuffers live in FeatureGPUBuffers.
-    """
-
-    comptime input_layout = Layout.row_major(
-        INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0
-    )
-    var input: LayoutTensor[ftype, FeatureGPU.input_layout, MutAnyOrigin]
-
-    comptime layer1_layout = Layout.row_major(
-        LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE1
-    )
-    var layer1: LayoutTensor[ftype, FeatureGPU.layer1_layout, MutAnyOrigin]
-
-    comptime layer2_layout = Layout.row_major(
-        LAYER2, LENGTH_FEATURE2, LENGTH_FEATURE2
-    )
-    var layer2: LayoutTensor[ftype, FeatureGPU.layer2_layout, MutAnyOrigin]
-
-    comptime layer3_layout = Layout.row_major(
-        LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE3
-    )
-    var layer3: LayoutTensor[ftype, FeatureGPU.layer3_layout, MutAnyOrigin]
-
-    comptime layer4_layout = Layout.row_major(
-        LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4
-    )
-    var layer4: LayoutTensor[ftype, FeatureGPU.layer4_layout, MutAnyOrigin]
-
-    comptime layer5_layout = Layout.row_major(
-        LAYER5, LENGTH_FEATURE5, LENGTH_FEATURE5
-    )
-    var layer5: LayoutTensor[ftype, FeatureGPU.layer5_layout, MutAnyOrigin]
-
-    comptime output_layout = Layout.row_major(OUTPUT)
-    var output: LayoutTensor[ftype, FeatureGPU.output_layout, MutAnyOrigin]
-
-    def __init__(out self, ctx: DeviceContext) raises:
-        """All buffers start zeroed."""
-        var in_buf = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.input_layout.size())
-        )
-        in_buf.enqueue_fill(0)
-        var l1_buf = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.layer1_layout.size())
-        )
-        l1_buf.enqueue_fill(0)
-        var l2_buf = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.layer2_layout.size())
-        )
-        l2_buf.enqueue_fill(0)
-        var l3_buf = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.layer3_layout.size())
-        )
-        l3_buf.enqueue_fill(0)
-        var l4_buf = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.layer4_layout.size())
-        )
-        l4_buf.enqueue_fill(0)
-        var l5_buf = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.layer5_layout.size())
-        )
-        l5_buf.enqueue_fill(0)
-        var out_buf = ctx.enqueue_create_buffer[ftype](
-            comptime (Self.output_layout.size())
-        )
-        out_buf.enqueue_fill(0)
-        ctx.synchronize()
-        self.input = LayoutTensor[ftype, Self.input_layout, MutAnyOrigin](
-            in_buf
-        )
-        self.layer1 = LayoutTensor[ftype, Self.layer1_layout, MutAnyOrigin](
-            l1_buf
-        )
-        self.layer2 = LayoutTensor[ftype, Self.layer2_layout, MutAnyOrigin](
-            l2_buf
-        )
-        self.layer3 = LayoutTensor[ftype, Self.layer3_layout, MutAnyOrigin](
-            l3_buf
-        )
-        self.layer4 = LayoutTensor[ftype, Self.layer4_layout, MutAnyOrigin](
-            l4_buf
-        )
-        self.layer5 = LayoutTensor[ftype, Self.layer5_layout, MutAnyOrigin](
-            l5_buf
-        )
-        self.output = LayoutTensor[ftype, Self.output_layout, MutAnyOrigin](
-            out_buf
-        )
-
-    #
-    # def __init__(out self, *, copy: Self):
-    #     self.input  = copy.input
-    #     self.layer1 = copy.layer1
-    #     self.layer2 = copy.layer2
-    #     self.layer3 = copy.layer3
-    #     self.layer4 = copy.layer4
-    #     self.layer5 = copy.layer5
-    #     self.output = copy.output
-    #
-    # def __init__(out self, *, deinit take: Self):
-    #     self.input  = take.input
-    #     self.layer1 = take.layer1
-    #     self.layer2 = take.layer2
-    #     self.layer3 = take.layer3
-    #     self.layer4 = take.layer4
-    #     self.layer5 = take.layer5
-    #     self.output = take.output
-    #

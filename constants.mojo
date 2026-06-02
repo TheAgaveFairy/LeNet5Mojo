@@ -38,8 +38,8 @@ comptime ftype = DType.float32  # if defines.is_defined["float64"]() else DType.
 comptime sftype = Scalar[ftype]
 comptime nelts = simd_width_of[ftype]()
 
-comptime GPU_BATCH_SIZE = defines.get_defined_int[
-    "GPU_BATCH_SIZE", 50
+comptime GPU_STREAM_BATCH_SIZE = defines.get_defined_int[
+    "GPU_STREAM_BATCH_SIZE", 50
 ]()  # more than ~120 fails on my RTX3070
 comptime NUM_GPU_STREAMS = defines.get_defined_int[
     "NUM_GPU_STREAMS", 3

@@ -2,6 +2,8 @@ from layout import Layout, LayoutTensor
 
 from std.gpu.host import DeviceBuffer, DeviceContext
 from std.sys.info import size_of
+from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
+from std.reflection.reflect import reflect
 
 from constants import (
     ftype,
@@ -124,11 +126,13 @@ struct FeatureGPUBuffers(Movable):
             print("loadInput FeatureGPUBuffers ERROR", e)
 
 
-struct FeatureGPU(Copyable, Movable):
+struct FeatureGPU(Copyable, DevicePassable, Movable):
     """GPU-side — LayoutTensors only, for passing to kernels.
     Constructed from a FeatureGPUBuffers; caller must keep the buffers (and arena) alive.
     No GPU ops in __init__ — just pointer wiring.
     """
+
+    comptime device_type: AnyType = Self
 
     comptime input_layout = Layout.row_major(
         INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0
@@ -157,6 +161,15 @@ struct FeatureGPU(Copyable, Movable):
     var layer4: LayoutTensor[ftype, FeatureGPU.layer4_layout, MutAnyOrigin]
     var layer5: LayoutTensor[ftype, FeatureGPU.layer5_layout, MutAnyOrigin]
     var output: LayoutTensor[ftype, FeatureGPU.output_layout, MutAnyOrigin]
+
+    @staticmethod
+    def get_type_name() -> String:
+        return reflect[Self].name()
+
+    def _to_device_type(
+        self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]
+    ):
+        encoder.encode(self, target)
 
     def __init__(out self, bufs: FeatureGPUBuffers):
         var b_input = bufs.input

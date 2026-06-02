@@ -5,7 +5,6 @@ from std.sys import stderr, is_big_endian, size_of, simd_width_of
 from std.utils.index import IndexList
 import std.os as os
 from std.memory import memcpy
-from std.time import perf_counter_ns
 from std.pathlib import Path
 from std.algorithm.functional import vectorize
 
