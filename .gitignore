@@ -11,6 +11,7 @@ ignoreme/
 models/
 scripts/
 results/*.csv
+results/oldbak/
 *.save
 *.bak
 main

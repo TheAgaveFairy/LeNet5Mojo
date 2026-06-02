@@ -15,7 +15,6 @@ from cpu.ops import (
     matmulBackward, convoluteBackward, maxPoolBackward,
     argMax,
 )
-from helpers import showProgress  # , reLu, reLuGrad
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena
 from activation_fn import ActivationFunction
 from constants import (

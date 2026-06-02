@@ -6,16 +6,14 @@ platforms = ["linux-64"]
 version = "0.2.0"
 
 [tasks]
-formatall = "mojo format *.mojo; mojo format cpu/*.mojo; mojo format accel/*.mojo"
+formatall = "mojo format src/*.mojo; mojo format src/cpu/*.mojo; mojo format src/accel/*.mojo"
 
-#tests = { cmd = "mojo arena.mojo; mojo mylogger.mojo; mojo ops.mojo; mojo tokenizer/tokenchunks.mojo; mojo tokenizer/tests.mojo && rm temp.tok", cwd = "src" }
-sanitize = { cmd = "mojo build -g2 -O1 --sanitize=address -Xlinker -lm main.mojo && ./main"}
-cdebug = { cmd = "mojo build -g2 -O1 --debug-info-language=C -Xlinker -lm main.mojo"}
+sanitize = { cmd = "mojo build -g2 -O1 --sanitize=address -Xlinker -lm src/main.mojo && ./main"}
+cdebug = { cmd = "mojo build -g2 -O1 --debug-info-language=C -Xlinker -lm src/main.mojo"}
 buildmain = { cmd = "mojo build -Xlinker -lm main.mojo", cwd = "src" }
-#flamegraphs = { cmd = "./flamegraphing/graphmain.sh; ./flamegraphing/graphtokenizer.sh;", cwd = "src" }
-nsysprofile = { cmd = "nsys profile --trace=nvtx,cuda --force-overwrite=true --output=basic mojo main.mojo && nsys stats --force-export=true basic.nsys-rep", cwd = "."}
-nsysprofile_gpu = { cmd = "nsys profile --trace=nvtx,cuda --force-overwrite=true --output=gpu_profile mojo -I . tests/profile_gpu.mojo && nsys stats --force-export=true gpu_profile.nsys-rep", cwd = "."}
-ncuprofile_gpu = { cmd = "ncu --set basic --launch-count 80 --target-processes all -o ncu_gpu mojo -I . tests/profile_gpu.mojo", cwd = "."}
+nsysprofile = { cmd = "nsys profile --trace=nvtx,cuda --force-overwrite=true --output=basic mojo src/main.mojo && nsys stats --force-export=true basic.nsys-rep", cwd = "."}
+nsysprofile_gpu = { cmd = "nsys profile --trace=nvtx,cuda --force-overwrite=true --output=gpu_profile mojo -I src tests/profile_gpu.mojo && nsys stats --force-export=true gpu_profile.nsys-rep", cwd = "."}
+ncuprofile_gpu = { cmd = "ncu --set basic --launch-count 80 --target-processes all -o ncu_gpu mojo -I src tests/profile_gpu.mojo", cwd = "."}
 
 [dependencies]
 matplotlib = ">=3.10.9,<4"
