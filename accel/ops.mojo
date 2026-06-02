@@ -15,7 +15,7 @@ from std.gpu.memory import AddressSpace
 from std.benchmark.compiler import keep
 
 from cpu.model import LeNet5, Feature
-from cpu.ops import loadInput, forward, argMax
+from cpu.ops import argMax
 from constants import (
     ftype,
     sftype,
@@ -718,8 +718,8 @@ def singleForward(
 
     with DeviceContext() as ctx:
         var feat_cpu = Feature()
-        loadInput(feat_cpu, img)
-        forward(lenet_cpu, feat_cpu)
+        feat_cpu.loadInput(img)
+        lenet_cpu.forward(feat_cpu)
         var cpu_guess = argMax(feat_cpu.output)
 
         var feat_bufs = FeatureGPUBuffers(ctx)

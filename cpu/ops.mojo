@@ -590,120 +590,6 @@ def matmulForward[
     # FIXME: just a louder reminder
 
 
-# BECOME STRUCT METHODS
-
-
-def loadInput(features: Feature, image: Image):
-    # var normed_buffer = InlineArray[ftype, Image.DataLayout.size()](fill = 0.0)
-    # var normed_tensor = LayoutTensor[ftype, Feature.input_layout, MutAnyOrigin](features.input.ptr) # [1, IMAGE_SIZE, IMAGE_SIZE] from [IMAGE_SIZE, IMAGE_SIZE]
-    var normed_tensor = Image.DataTensor(features.input.ptr)
-    image.normalized(normed_tensor)
-    # memcpy(
-    #    src=normed_tensor.ptr,#image.pixels.ptr,
-    #    dest=features.input.ptr,
-    #    count=PADDED_SIZE * PADDED_SIZE, #Image.DataLayout.size()
-    # )
-
-
-def forward(lenet: LeNet5, features: Feature):
-    convoluteForward(
-        lenet.weight0_1, lenet.bias0_1, features.input, features.layer1
-    )
-    # input, l1, lf0, lk
-
-    maxPoolForward(features.layer1, features.layer2)
-    # l1 lf1 lf2
-
-    convoluteForward(
-        lenet.weight2_3, lenet.bias2_3, features.layer2, features.layer3
-    )
-    # l2 l3 lf2 lk
-
-    maxPoolForward(features.layer3, features.layer4)
-    # l3 lf3 lf4
-
-    convoluteForward(
-        lenet.weight4_5, lenet.bias4_5, features.layer4, features.layer5
-    )
-    # l4 l5 lf4 lk
-
-    matmulForward(
-        features.layer5, features.output, lenet.weight5_6, lenet.bias5_6
-    )
-    # LAYER5, LEA_f5, output
-
-
-def backward(
-    lenet: LeNet5, deltas: LeNet5, errors: Feature, features: Feature
-) -> None:
-    matmulBackward(
-        features.layer5,
-        errors.layer5,
-        errors.output,
-        lenet.weight5_6,
-        deltas.weight5_6,
-        deltas.bias5_6,
-    )
-    # l5, lf5, output
-
-    convoluteBackward[
-        kernel_size=LENGTH_KERNEL
-    ](  # not sure why this needs specifying now #FIXME:
-        features.layer4,
-        errors.layer4,
-        errors.layer5,
-        lenet.weight4_5,
-        deltas.weight4_5,
-        deltas.bias4_5,
-    )
-    # l4 l5 lf4 lk
-
-    maxPoolBackward(features.layer3, errors.layer3, errors.layer4)
-    # l3 lf3 lf4
-
-    convoluteBackward[
-        kernel_size=LENGTH_KERNEL
-    ](  # not sure why this needs specifying now #FIXME:
-        features.layer2,
-        errors.layer2,
-        errors.layer3,
-        lenet.weight2_3,
-        deltas.weight2_3,
-        deltas.bias2_3,
-    )
-    # l2 l3 lf2 lk
-
-    maxPoolBackward(features.layer1, errors.layer1, errors.layer2)
-    # l1 lf1 lf2
-
-    convoluteBackward[
-        kernel_size=LENGTH_KERNEL
-    ](  # not sure why this needs specifying now #FIXME:
-        features.input,
-        errors.input,
-        errors.layer1,
-        lenet.weight0_1,
-        deltas.weight0_1,
-        deltas.bias0_1,
-    )
-    # input l1 lf0 lk
-
-
-def predict(lenet: LeNet5, image: Image) -> Int:
-    # TODO: Probably could be a method of LeNet5.
-    var feat_arena = CPUArena(Feature._calcArenaSize())
-    var feat = Feature(feat_arena)
-    loadInput(feat, image)
-    forward(lenet, feat)
-    return argMax(feat.output)
-
-
-def predictNew(lenet: LeNet5, feat: Feature, image: Image) -> Int:
-    loadInput(feat, image)
-    forward(lenet, feat)
-    return argMax(feat.output)
-
-
 def trainBatchParallel(
     mut model: LeNet5, inputs: Span[mut=False, Image, _]
 ) -> Tuple[Int, Float32]:
@@ -734,8 +620,8 @@ def trainBatchParallel(
         corrects[i] = 0
 
     def work(tid: Int) {read, mut intermediate_arena, mut corrects, mut losses}:
-        loadInput(features[tid], inputs[tid])
-        forward(model, features[tid])
+        features[tid].loadInput(inputs[tid])
+        model.forward(features[tid])
         var pred = argMax(features[tid].output)
         var the_label = Int(inputs[tid].label)
         if pred == the_label:
@@ -744,7 +630,7 @@ def trainBatchParallel(
         var loss = crossEntropyLossSIMD(features[tid].output, the_label)
         losses[tid] = loss
         loadTarget(features[tid], errors[tid], the_label)
-        backward(model, deltas[tid], errors[tid], features[tid])
+        model.backward(deltas[tid], errors[tid], features[tid])
 
     parallelize(work, batch_size)
 
@@ -794,8 +680,8 @@ def trainBatch(
         # var feat = Feature()
         # var errors = Feature()
         # var deltas = LeNet5()
-        loadInput(feat, inputs[i])
-        forward(model, feat)
+        feat.loadInput(inputs[i])
+        model.forward(feat)
         var pred = argMax(feat.output)
         var the_label = Int(inputs[i].label)
         if pred == the_label:
@@ -804,7 +690,7 @@ def trainBatch(
         var loss = crossEntropyLossSIMD(feat.output, the_label)
         total_loss += loss
         loadTarget(feat, errors, the_label)
-        backward(model, deltas, errors, feat)
+        model.backward(deltas, errors, feat)
         buffer.accumulateFromOther(deltas, 1.0)
 
         feat_arena.wipe()
@@ -924,8 +810,7 @@ def testing(model: LeNet5, data: List[Image]) -> Int:
     var feat = Feature(feat_arena)
     for i in range(len(data)):
         feat_arena.zero()
-        # var pred = predict(model, data[i])
-        var pred = predictNew(model, feat, data[i])
+        var pred = model.predict(feat, data[i])
         var actual = Int(data[i].label)
         correct += 1 if pred == actual else 0
     benchmark.keep(feat_arena)
@@ -950,7 +835,7 @@ def testingParallel(
         feat_arena.zero()
 
         def work(tid: Int) {read, mut corrects}:
-            var pred = predictNew(model, feats[tid], data[i + tid])
+            var pred = model.predict(feats[tid], data[i + tid])
             var actual = Int(data[i + tid].label)
             corrects[tid] += 1 if pred == actual else 0
 
