@@ -8,6 +8,7 @@ from std.sys import argv
 import std.benchmark as benchmark
 from std.reflection.reflect import reflect
 from std.gpu.host import DeviceContext
+import std.sys.defines as defines
 
 from image import Image
 from cpu.model import LeNet5
@@ -53,6 +54,26 @@ comptime COUNT_TRAIN = MNISTDataRepository.COUNT_TRAIN
 comptime COUNT_TEST = MNISTDataRepository.COUNT_TEST
 
 comptime act_fn_name = reflect[act_fn].base_name()
+
+comptime N_WARMUP = defines.get_defined_int["N_WARMUP", 3]()
+comptime N_PASSES = defines.get_defined_int["N_PASSES", 10]()
+
+
+@fieldwise_init
+struct TimingStats(Copyable, Movable):
+    var median_ns: UInt
+    var min_ns: UInt
+    var max_ns: UInt
+
+
+def _timing_stats(mut times: List[UInt]) -> TimingStats:
+    @parameter
+    def less_than(a: UInt, b: UInt) capturing -> Bool:
+        return a < b
+    sort[cmp_fn=less_than](Span(times))
+    var n = len(times)
+    var median = (times[n // 2] + times[(n - 1) // 2]) // 2
+    return TimingStats(median, times[0], times[n - 1])
 
 
 @fieldwise_init
@@ -136,6 +157,36 @@ def runTest(
     return InferenceSummary(correct, len(data), elapsed_ns)
 
 
+def benchCPUInference(
+    model: LeNet5,
+    data: List[Image],
+    mut logger: MultiFileLogger,
+    *,
+    parallel: Bool = True,
+) raises -> InferenceSummary:
+    for _ in range(N_WARMUP):
+        var warmup = runTest(model, data, parallel=parallel)
+        benchmark.keep(warmup)
+    var times = List[UInt]()
+    var correct = 0
+    for i in range(N_PASSES):
+        var res = runTest(model, data, parallel=parallel)
+        times.append(res.elapsed_ns)
+        if i == 0:
+            correct = res.correct
+    var stats = _timing_stats(times)
+    try:
+        logger.logInferenceResult("CPU", stats.median_ns, correct, len(data), 1, 1, ftype)
+    except e:
+        print(e, file=stderr)
+    var us_per_img = stats.median_ns // UInt(len(data)) // 1000
+    print(
+        t"  median={stats.median_ns//1_000_000}ms ({us_per_img}µs/img),"
+        t" min={stats.min_ns//1_000_000}ms, max={stats.max_ns//1_000_000}ms"
+    )
+    return InferenceSummary(correct, len(data), stats.median_ns)
+
+
 def trainAndTest(
     mut model: LeNet5,
     data_repo: MNISTDataRepository,
@@ -163,9 +214,7 @@ def trainAndTest(
         print(
             t"\n\t{alloc} training:", train_res.elapsed_ns // 1_000_000, "ms."
         )
-    var infer_res = runTest(
-        model, data_repo.test_data, logger, parallel=parallel
-    )
+    var infer_res = benchCPUInference(model, data_repo.test_data, logger, parallel=parallel)
     if DISPLAY:
         print(
             "\t",
@@ -178,11 +227,13 @@ def trainAndTest(
         )
     var training_ms = train_res.elapsed_ns // 1_000_000
     var testing_ms = infer_res.elapsed_ns // 1_000_000
+    var cpu_fps = UInt(infer_res.count) * 1_000_000_000 // infer_res.elapsed_ns
+    var accuracy_pct = infer_res.correct * 100 // infer_res.count
     print(
         t"alloc={alloc}, act_fn={act_name}, threads={threads}, ALPHA={ALPHA},"
         t" correct={infer_res.correct}, total_count={infer_res.count},"
         t" ftype={ftype}, batch_size={batch_size}, training_ms={training_ms},"
-        t" testing_ms={testing_ms}"
+        t" testing_ms={testing_ms}, fps={cpu_fps}, accuracy_pct={accuracy_pct}"
     )
 
 
@@ -208,66 +259,83 @@ def runGPUTest(
         var matmul = ctx.compile_function[matMulFusedKernel[batch_size]]()
         var gather = ctx.compile_function[gatherOutputsKernel[batch_size]]()
 
-        var batched_data = data_repo.getTrainBatch(0, COUNT_TRAIN)
+        var batched_data = data_repo.getTestBatch(0, COUNT_TEST)
         var gpu_logger = ResultLogger(
             String(
                 t"results/gpu_infer_bs{batch_size}_act={act_fn_name}_run={run_id}.csv"
             )
         )
+        # actual images processed: drop remainder that doesn't fill a full batch
+        comptime n_proc = (COUNT_TEST // batch_size) * batch_size
+        comptime eff_batch_ms = batch_size * NUM_GPU_STREAMS
 
-        var t0 = perf_counter_ns()
-        var correct_s1 = batchedForwardMultiStream[batch_size, 1](
-            ctx,
-            batched_data,
-            gpu_session.model,
-            norm,
-            conv1,
-            pool1,
-            conv2,
-            pool2,
-            conv3,
-            matmul,
-            gather,
-        )
-        var t1 = perf_counter_ns()
+        # warmup both stream configs
+        for _ in range(N_WARMUP):
+            var wc1 = batchedForwardMultiStream[batch_size, 1](
+                ctx, batched_data, gpu_session.model,
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+            )
+            var wcN = batchedForwardMultiStream[batch_size, NUM_GPU_STREAMS](
+                ctx, batched_data, gpu_session.model,
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+            )
+            benchmark.keep(wc1)
+            benchmark.keep(wcN)
+
+        # single-stream: N_PASSES timed, take median
+        var times_s1 = List[UInt]()
+        var correct_s1 = 0
+        for i in range(N_PASSES):
+            var t = perf_counter_ns()
+            var c = batchedForwardMultiStream[batch_size, 1](
+                ctx, batched_data, gpu_session.model,
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+            )
+            times_s1.append(perf_counter_ns() - t)
+            if i == 0:
+                correct_s1 = c
+        var stats_s1 = _timing_stats(times_s1)
+        var fps_s1 = UInt(n_proc) * 1_000_000_000 // stats_s1.median_ns
+        var us_s1 = stats_s1.median_ns // UInt(n_proc) // 1000
+        var acc_s1 = correct_s1 * 100 // n_proc
         print(
-            t"batchedForwardMultiStream[s=1]: "
-            t" {correct_s1}/{COUNT_TRAIN} correct, {(t1-t0)//1_000_000}ms"
+            t"batchedForwardMultiStream[s=1]: eff_batch={batch_size},"
+            t" {correct_s1}/{n_proc} ({acc_s1}%) correct,"
+            t" {stats_s1.median_ns//1_000_000}ms ({us_s1}µs/img), {fps_s1} fps"
+            t" [min={stats_s1.min_ns//1_000_000}ms max={stats_s1.max_ns//1_000_000}ms]"
         )
         try:
             gpu_logger.logInferenceResult(
-                "GPU", t1 - t0, correct_s1, COUNT_TRAIN, batch_size, 1, ftype
+                "GPU", stats_s1.median_ns, correct_s1, n_proc, batch_size, 1, ftype
             )
         except e:
             print(e, file=stderr)
 
-        var correct_ms = batchedForwardMultiStream[batch_size, NUM_GPU_STREAMS](
-            ctx,
-            batched_data,
-            gpu_session.model,
-            norm,
-            conv1,
-            pool1,
-            conv2,
-            pool2,
-            conv3,
-            matmul,
-            gather,
-        )
-        var t2 = perf_counter_ns()
+        # multi-stream: N_PASSES timed, take median
+        var times_ms = List[UInt]()
+        var correct_ms = 0
+        for i in range(N_PASSES):
+            var t = perf_counter_ns()
+            var c = batchedForwardMultiStream[batch_size, NUM_GPU_STREAMS](
+                ctx, batched_data, gpu_session.model,
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+            )
+            times_ms.append(perf_counter_ns() - t)
+            if i == 0:
+                correct_ms = c
+        var stats_ms = _timing_stats(times_ms)
+        var fps_ms = UInt(n_proc) * 1_000_000_000 // stats_ms.median_ns
+        var us_ms = stats_ms.median_ns // UInt(n_proc) // 1000
+        var acc_ms = correct_ms * 100 // n_proc
         print(
-            t"batchedForwardMultiStream[s={NUM_GPU_STREAMS}]:"
-            t" {correct_ms}/{COUNT_TRAIN} correct, {(t2-t1)//1_000_000}ms"
+            t"batchedForwardMultiStream[s={NUM_GPU_STREAMS}]: eff_batch={eff_batch_ms},"
+            t" {correct_ms}/{n_proc} ({acc_ms}%) correct,"
+            t" {stats_ms.median_ns//1_000_000}ms ({us_ms}µs/img), {fps_ms} fps"
+            t" [min={stats_ms.min_ns//1_000_000}ms max={stats_ms.max_ns//1_000_000}ms]"
         )
         try:
             gpu_logger.logInferenceResult(
-                "GPU",
-                t2 - t1,
-                correct_ms,
-                COUNT_TRAIN,
-                batch_size,
-                NUM_GPU_STREAMS,
-                ftype,
+                "GPU", stats_ms.median_ns, correct_ms, n_proc, batch_size, NUM_GPU_STREAMS, ftype
             )
         except e:
             print(e, file=stderr)

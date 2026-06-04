@@ -1,7 +1,8 @@
-
 # pixi environments
 .pixi
 *.egg-info
+
+batchedops.mojo
 
 # thank you for the refactor help, Claude Opus 4.7
 .agents/
@@ -18,7 +19,7 @@ main
 *.out
 
 #nvidia profiling
-timeline.*
+#timeline.*
 
 #flamegraphing
 out.*

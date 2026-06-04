@@ -1072,11 +1072,6 @@ def batchedForwardMultiStream[
     gather: DeviceFunction,
 ) raises -> Int:
     var count = len(data)
-    print(
-        t"batchedForwardMultiStream: batch_size={batch_size},"
-        t" num_streams={num_streams}, count={count}"
-    )
-
     var total_correct = 0
     comptime batch_bytes = batch_size * IMAGE_SIZE * IMAGE_SIZE
     var total_batches = count // batch_size
