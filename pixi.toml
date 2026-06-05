@@ -7,7 +7,7 @@ version = "0.2.0"
 
 [tasks]
 formatall = "mojo format src/*.mojo; mojo format src/cpu/*.mojo; mojo format src/accel/*.mojo"
-
+doit = {cmd = "mojo src/main.mojo", cwd = "."}
 sanitize = { cmd = "mojo build -g2 -O1 --sanitize=address -Xlinker -lm src/main.mojo && ./main"}
 cdebug = { cmd = "mojo build -g2 -O1 --debug-info-language=C -Xlinker -lm src/main.mojo"}
 buildmain = { cmd = "mojo build -Xlinker -lm main.mojo", cwd = "src" }

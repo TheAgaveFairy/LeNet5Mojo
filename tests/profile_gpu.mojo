@@ -2,7 +2,13 @@ from std.gpu.host import DeviceContext
 from std.sys import argv
 from std.benchmark.compiler import keep
 
-from constants import ftype, act_fn, GPU_STREAM_BATCH_SIZE, NUM_GPU_STREAMS
+from constants import (
+    ftype,
+    act_fn,
+    GPU_STREAM_BATCH_SIZE,
+    NUM_GPU_STREAMS,
+    IMAGE_SIZE,
+)
 from cpu.model import LeNet5
 from cpu.ops import testing
 from dataloader import MNISTDataRepository, MNISTBatch
@@ -20,6 +26,7 @@ from accel.ops import (
     conv3FusedKernel,
     matMulFusedKernel,
     gatherOutputsKernel,
+    StreamSlot,
 )
 
 comptime model_path = "models/deleteme.test"
@@ -52,6 +59,21 @@ def main() raises:
         var conv3 = ctx.compile_function[conv3FusedKernel[batch_size]]()
         var matmul = ctx.compile_function[matMulFusedKernel[batch_size]]()
         var gather = ctx.compile_function[gatherOutputsKernel[batch_size]]()
+
+        # Warmup: one throwaway all-zero forward pass through a single StreamSlot.
+        # Absorbs JIT + lazy CUDA context init + first-launch cache warmup so the
+        # timed run's first batch isn't a profiling outlier. Result discarded.
+        var warm_slot = StreamSlot[batch_size]()
+        var zero_pixels = InlineArray[
+            UInt8, batch_size * IMAGE_SIZE * IMAGE_SIZE
+        ](fill=0)
+        var zero_labels = InlineArray[UInt8, batch_size](fill=0)
+        warm_slot.loadBatch(Span(zero_pixels))
+        warm_slot.doWork(
+            norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+            gpu_session.model,
+        )
+        _ = warm_slot.getResults(Span(zero_labels))
 
         var data: MNISTBatch
         var total: Int

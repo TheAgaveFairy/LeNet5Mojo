@@ -1,5 +1,5 @@
 from layout import Layout, LayoutTensor
-from std.math import ceil, log2, abs, sqrt, max
+from std.math import abs, sqrt, max
 from std.bit import next_power_of_two  # prev_power_of_two
 from std.sys import size_of, stderr
 
@@ -10,6 +10,7 @@ from std.gpu.host import (
     DeviceFunction,
 )
 from std.gpu import thread_idx, block_idx, block_dim, barrier
+from std.gpu.primitives import block
 from std.gpu.memory import AddressSpace
 
 from std.benchmark.compiler import keep
@@ -48,6 +49,12 @@ from dataloader import MNISTBatch
 
 comptime div_chans_conv2 = 8  # any lower uses too many resources
 comptime div_chans_conv3 = 8  # 8  # needs to be a factor of 120
+
+# conv3 reduces LAYER4 * 5 * 5 = 400 products per output channel via block.sum.
+# block.sum needs a 1D block whose size is a multiple of the warp size, so we
+# pad up to the next power of two (512) and let threads >= 400 contribute 0.
+comptime conv3_feat_total = LAYER4 * LENGTH_KERNEL * LENGTH_KERNEL
+comptime conv3_reduction_threads = next_power_of_two(conv3_feat_total)
 
 
 def normalizeInputsKernel[
@@ -173,7 +180,6 @@ def gatherOutputs[
         block_dim=(OUTPUT),
     )
 
-
 def matMulFusedKernel[
     batch_size: Int
 ](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size]) -> None:
@@ -181,61 +187,21 @@ def matMulFusedKernel[
     Enough threads per block to do one output channel at a time as a reduction,
     so make it a power of two.
     Grid Dim = batch_size
-    Block Dim = 1 << ceil(log2(in_chans)).
+    Block Dim = next_power_of_two(in_chans)
     """
     var img_idx = block_idx.x
     var thread = thread_idx.x
-    comptime reduction_size = 1 << Int(
-        ceil(log2(Float64(LAYER5)))
-    )  # 128 when LAYER5 is 120
+    comptime reduction_size = next_power_of_two(LAYER5) # 120 -> 128
 
-    var local_weights = LayoutTensor[
-        ftype,
-        LeNet5GPU.w5_6_layout,
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-    ].stack_allocation()
-    var local_feats = LayoutTensor[
-        ftype,
-        Layout.row_major(LAYER5),
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-    ].stack_allocation()
+    # dram to local call possible
+    var feat = feats[img_idx].layer5[thread, 0, 0] if thread < LAYER5 else 0
 
-    for oc in range(OUTPUT):
-        if thread < LAYER5:
-            local_weights[thread, oc] = lenet.weight5_6[thread, oc]
-    if thread < LAYER5:
-        local_feats[thread] = feats[img_idx].layer5[thread, 0, 0]
-
-    barrier()
-
-    var reduction_buffer = LayoutTensor[
-        ftype,
-        Layout.row_major(reduction_size),
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-    ].stack_allocation()
-
-    for oc in range(OUTPUT):
-        if thread < LAYER5:
-            reduction_buffer[thread] = rebind[sftype](
-                local_weights[thread, oc]
-            ) * rebind[sftype](local_feats[thread])
-        else:
-            reduction_buffer[thread] = 0.0
-        barrier()
-
-        var i = 1
-        while i < reduction_size:
-            if thread % (2 * i) == 0:
-                reduction_buffer[thread] += reduction_buffer[thread + i]
-            barrier()
-            i *= 2
-
+    comptime for oc in range(OUTPUT):
+        var weight = lenet.weight5_6[thread, oc] if thread < LAYER5 else 0
+        var prod = feat * weight
+        var answer = block.sum[block_size = reduction_size, broadcast = False](prod)
         if thread == 0:
-            var temp = rebind[sftype](reduction_buffer[0] + lenet.bias5_6[oc])
-            feats[img_idx].output[oc] = rebind[sftype](temp)
+            feats[img_idx].output[oc] = answer + lenet.bias5_6[oc]
             # TODO: confirm we don't want to do act_fn.simdForward() call
 
 
@@ -247,7 +213,8 @@ def matMulForward[
     feats: InlineArray[FeatureGPU, batch_size],
     matmul_kernel: DeviceFunction,
 ) raises -> None:
-    comptime reduction_size = 1 << Int(ceil(log2(Float64(LAYER5))))  # 128
+    #comptime reduction_size = 1 << Int(ceil(log2(Float64(LAYER5))))  # 128
+    comptime reduction_size = next_power_of_two(LAYER5)
     ctx.enqueue_function(
         matmul_kernel,
         lenet,
@@ -363,73 +330,46 @@ def conv3FusedKernel[
 ](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size]) -> None:
     """
     Grid Dim = (batch_size, chan_div = 8)
-    Block Dim = (in_channels = 16, kernel_size = 5, ks = 5)
+    Block Dim = (conv3_reduction_threads = 512), 1D.
     Each block handles num_ocs = 120 // chan_div = 15 output channels for one image.
+    Each thread owns one of the LAYER4*5*5 = 400 (in_chan, row, col) products;
+    threads 400..511 are padding and contribute 0 to the block.sum reduction.
     """
-    comptime in_chans = LAYER4
     comptime out_chans = LAYER5
     comptime div_chans = div_chans_conv3
     comptime num_ocs = out_chans // div_chans
-    comptime feat_total = Float64(LAYER4 * LENGTH_KERNEL * LENGTH_KERNEL)
-    comptime reduction_size = 1 << Int(ceil(log2(feat_total)))
+    comptime ksq = LENGTH_KERNEL * LENGTH_KERNEL
 
-    var in_chan = thread_idx.x
-    var col = thread_idx.y
-    var row = thread_idx.z
-    var flat_idx = (
-        in_chan * LENGTH_KERNEL * LENGTH_KERNEL + row * LENGTH_KERNEL + col
-    )
-
+    var flat_idx = Int(thread_idx.x)  # 0..conv3_reduction_threads-1
     var img_idx = block_idx.x
     var chans_set = block_idx.y
     var offset = chans_set * num_ocs
 
-    var local_weights = LayoutTensor[
-        ftype,
-        Layout.row_major(in_chans, num_ocs, LENGTH_KERNEL, LENGTH_KERNEL),
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-    ].stack_allocation()
-    var local_feats = LayoutTensor[
-        ftype,
-        FeatureGPU.layer4_layout,
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-    ].stack_allocation()
-    var reduction_buffer = LayoutTensor[
-        ftype,
-        Layout.row_major(reduction_size),
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-    ].stack_allocation()
+    var active = flat_idx < conv3_feat_total
+    var in_chan = 0
+    var row = 0
+    var col = 0
+    var feat_val: sftype = 0
+    if active:
+        in_chan = flat_idx // ksq
+        var rem = flat_idx % ksq
+        row = rem // LENGTH_KERNEL
+        col = rem % LENGTH_KERNEL
+        # could also just use flat_idx and access things with layer4.ptr[flat_idx] etc - ordering doesn't matter for this reduction
+        feat_val = rebind[sftype](feats[img_idx].layer4[in_chan, row, col])
 
     comptime for oc in range(num_ocs):
-        local_weights[in_chan, oc, row, col] = lenet.weight4_5[
-            in_chan, oc + offset, row, col
-        ]
-    local_feats[in_chan, row, col] = feats[img_idx].layer4[in_chan, row, col]
-    barrier()
-
-    for oc in range(num_ocs):
-        var temp = rebind[sftype](
-            local_weights[in_chan, oc, row, col]
-            * local_feats[in_chan, row, col]
-        )
-        reduction_buffer[flat_idx] = temp
-        barrier()
-        var i = 1
-        while i < reduction_size:
-            if flat_idx % (2 * i) == 0 and (flat_idx + i) < Int(feat_total):
-                reduction_buffer[flat_idx] += reduction_buffer[flat_idx + i]
-            barrier()
-            i *= 2
-
-        if flat_idx == 0:
-            temp = rebind[sftype](
-                reduction_buffer[0] + lenet.bias4_5[oc + offset]
+        var prod: sftype = 0
+        if active:
+            prod = feat_val * rebind[sftype](
+                lenet.weight4_5[in_chan, oc + offset, row, col]
             )
-            feats[img_idx].layer5[oc + offset, 0, 0] = act_fn.simdForward(temp)
-
+        var total = block.sum[
+            block_size=conv3_reduction_threads, broadcast=False
+        ](prod)
+        if flat_idx == 0:
+            var biased = total + rebind[sftype](lenet.bias4_5[oc + offset])
+            feats[img_idx].layer5[oc + offset, 0, 0] = act_fn.simdForward(biased)
 
 def conv3Forward[
     batch_size: Int
@@ -448,7 +388,7 @@ def conv3Forward[
         lenet,
         feats,
         grid_dim=(batch_size, div_chans_conv3),
-        block_dim=(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4),
+        block_dim=(conv3_reduction_threads),
     )
 
 
@@ -1024,7 +964,7 @@ struct StreamSlot[batch_size: Int](Movable):
             model,
             self.features,
             grid_dim=(Self.batch_size, div_chans_conv3),
-            block_dim=(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4),
+            block_dim=(conv3_reduction_threads),
         )
         self.ctx.enqueue_function(
             matmul,
