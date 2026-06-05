@@ -70,6 +70,7 @@ def _timing_stats(mut times: List[UInt]) -> TimingStats:
     @parameter
     def less_than(a: UInt, b: UInt) capturing -> Bool:
         return a < b
+
     sort[cmp_fn=less_than](Span(times))
     var n = len(times)
     var median = (times[n // 2] + times[(n - 1) // 2]) // 2
@@ -176,7 +177,9 @@ def benchCPUInference(
             correct = res.correct
     var stats = _timing_stats(times)
     try:
-        logger.logInferenceResult("CPU", stats.median_ns, correct, len(data), 1, 1, ftype)
+        logger.logInferenceResult(
+            "CPU", stats.median_ns, correct, len(data), 1, 1, ftype
+        )
     except e:
         print(e, file=stderr)
     var us_per_img = stats.median_ns // UInt(len(data)) // 1000
@@ -214,7 +217,9 @@ def trainAndTest(
         print(
             t"\n\t{alloc} training:", train_res.elapsed_ns // 1_000_000, "ms."
         )
-    var infer_res = benchCPUInference(model, data_repo.test_data, logger, parallel=parallel)
+    var infer_res = benchCPUInference(
+        model, data_repo.test_data, logger, parallel=parallel
+    )
     if DISPLAY:
         print(
             "\t",
@@ -272,12 +277,30 @@ def runGPUTest(
         # warmup both stream configs
         for _ in range(N_WARMUP):
             var wc1 = batchedForwardMultiStream[batch_size, 1](
-                ctx, batched_data, gpu_session.model,
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+                ctx,
+                batched_data,
+                gpu_session.model,
+                norm,
+                conv1,
+                pool1,
+                conv2,
+                pool2,
+                conv3,
+                matmul,
+                gather,
             )
             var wcN = batchedForwardMultiStream[batch_size, NUM_GPU_STREAMS](
-                ctx, batched_data, gpu_session.model,
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+                ctx,
+                batched_data,
+                gpu_session.model,
+                norm,
+                conv1,
+                pool1,
+                conv2,
+                pool2,
+                conv3,
+                matmul,
+                gather,
             )
             benchmark.keep(wc1)
             benchmark.keep(wcN)
@@ -288,8 +311,17 @@ def runGPUTest(
         for i in range(N_PASSES):
             var t = perf_counter_ns()
             var c = batchedForwardMultiStream[batch_size, 1](
-                ctx, batched_data, gpu_session.model,
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+                ctx,
+                batched_data,
+                gpu_session.model,
+                norm,
+                conv1,
+                pool1,
+                conv2,
+                pool2,
+                conv3,
+                matmul,
+                gather,
             )
             times_s1.append(perf_counter_ns() - t)
             if i == 0:
@@ -302,11 +334,18 @@ def runGPUTest(
             t"batchedForwardMultiStream[s=1]: eff_batch={batch_size},"
             t" {correct_s1}/{n_proc} ({acc_s1}%) correct,"
             t" {stats_s1.median_ns//1_000_000}ms ({us_s1}µs/img), {fps_s1} fps"
-            t" [min={stats_s1.min_ns//1_000_000}ms max={stats_s1.max_ns//1_000_000}ms]"
+            t" [min={stats_s1.min_ns//1_000_000}ms"
+            t" max={stats_s1.max_ns//1_000_000}ms]"
         )
         try:
             gpu_logger.logInferenceResult(
-                "GPU", stats_s1.median_ns, correct_s1, n_proc, batch_size, 1, ftype
+                "GPU",
+                stats_s1.median_ns,
+                correct_s1,
+                n_proc,
+                batch_size,
+                1,
+                ftype,
             )
         except e:
             print(e, file=stderr)
@@ -317,8 +356,17 @@ def runGPUTest(
         for i in range(N_PASSES):
             var t = perf_counter_ns()
             var c = batchedForwardMultiStream[batch_size, NUM_GPU_STREAMS](
-                ctx, batched_data, gpu_session.model,
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+                ctx,
+                batched_data,
+                gpu_session.model,
+                norm,
+                conv1,
+                pool1,
+                conv2,
+                pool2,
+                conv3,
+                matmul,
+                gather,
             )
             times_ms.append(perf_counter_ns() - t)
             if i == 0:
@@ -328,14 +376,21 @@ def runGPUTest(
         var us_ms = stats_ms.median_ns // UInt(n_proc) // 1000
         var acc_ms = correct_ms * 100 // n_proc
         print(
-            t"batchedForwardMultiStream[s={NUM_GPU_STREAMS}]: eff_batch={eff_batch_ms},"
-            t" {correct_ms}/{n_proc} ({acc_ms}%) correct,"
-            t" {stats_ms.median_ns//1_000_000}ms ({us_ms}µs/img), {fps_ms} fps"
-            t" [min={stats_ms.min_ns//1_000_000}ms max={stats_ms.max_ns//1_000_000}ms]"
+            t"batchedForwardMultiStream[s={NUM_GPU_STREAMS}]:"
+            t" eff_batch={eff_batch_ms}, {correct_ms}/{n_proc} ({acc_ms}%)"
+            t" correct, {stats_ms.median_ns//1_000_000}ms ({us_ms}µs/img),"
+            t" {fps_ms} fps [min={stats_ms.min_ns//1_000_000}ms"
+            t" max={stats_ms.max_ns//1_000_000}ms]"
         )
         try:
             gpu_logger.logInferenceResult(
-                "GPU", stats_ms.median_ns, correct_ms, n_proc, batch_size, NUM_GPU_STREAMS, ftype
+                "GPU",
+                stats_ms.median_ns,
+                correct_ms,
+                n_proc,
+                batch_size,
+                NUM_GPU_STREAMS,
+                ftype,
             )
         except e:
             print(e, file=stderr)

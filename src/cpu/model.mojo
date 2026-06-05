@@ -11,8 +11,12 @@ from std.algorithm.functional import vectorize
 from image import Image
 from resultlogger import MultiFileLogger, LeNet5Logger
 from cpu.ops import (
-    convoluteForward, maxPoolForward, matmulForward,
-    matmulBackward, convoluteBackward, maxPoolBackward,
+    convoluteForward,
+    maxPoolForward,
+    matmulForward,
+    matmulBackward,
+    convoluteBackward,
+    maxPoolBackward,
     argMax,
 )
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena
@@ -280,31 +284,55 @@ struct LeNet5(Movable):
         Self._randHelper(self.weight5_6, (LAYER5 + OUTPUT))
 
     def forward(self, features: Feature):
-        convoluteForward(self.weight0_1, self.bias0_1, features.input, features.layer1)
+        convoluteForward(
+            self.weight0_1, self.bias0_1, features.input, features.layer1
+        )
         maxPoolForward(features.layer1, features.layer2)
-        convoluteForward(self.weight2_3, self.bias2_3, features.layer2, features.layer3)
+        convoluteForward(
+            self.weight2_3, self.bias2_3, features.layer2, features.layer3
+        )
         maxPoolForward(features.layer3, features.layer4)
-        convoluteForward(self.weight4_5, self.bias4_5, features.layer4, features.layer5)
-        matmulForward(features.layer5, features.output, self.weight5_6, self.bias5_6)
+        convoluteForward(
+            self.weight4_5, self.bias4_5, features.layer4, features.layer5
+        )
+        matmulForward(
+            features.layer5, features.output, self.weight5_6, self.bias5_6
+        )
 
     def backward(self, deltas: LeNet5, errors: Feature, features: Feature):
         matmulBackward(
-            features.layer5, errors.layer5, errors.output,
-            self.weight5_6, deltas.weight5_6, deltas.bias5_6,
+            features.layer5,
+            errors.layer5,
+            errors.output,
+            self.weight5_6,
+            deltas.weight5_6,
+            deltas.bias5_6,
         )
         convoluteBackward[kernel_size=LENGTH_KERNEL](
-            features.layer4, errors.layer4, errors.layer5,
-            self.weight4_5, deltas.weight4_5, deltas.bias4_5,
+            features.layer4,
+            errors.layer4,
+            errors.layer5,
+            self.weight4_5,
+            deltas.weight4_5,
+            deltas.bias4_5,
         )
         maxPoolBackward(features.layer3, errors.layer3, errors.layer4)
         convoluteBackward[kernel_size=LENGTH_KERNEL](
-            features.layer2, errors.layer2, errors.layer3,
-            self.weight2_3, deltas.weight2_3, deltas.bias2_3,
+            features.layer2,
+            errors.layer2,
+            errors.layer3,
+            self.weight2_3,
+            deltas.weight2_3,
+            deltas.bias2_3,
         )
         maxPoolBackward(features.layer1, errors.layer1, errors.layer2)
         convoluteBackward[kernel_size=LENGTH_KERNEL](
-            features.input, errors.input, errors.layer1,
-            self.weight0_1, deltas.weight0_1, deltas.bias0_1,
+            features.input,
+            errors.input,
+            errors.layer1,
+            self.weight0_1,
+            deltas.weight0_1,
+            deltas.bias0_1,
         )
 
     def predict(self, image: Image) -> Int:

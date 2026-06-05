@@ -44,7 +44,9 @@ def main() raises:
     model.loadFromFile[saved_model_dtype](model_path)
 
     var cpu_correct = testing(model, data_repo.test_data)
-    print("CPU test accuracy:", cpu_correct, "/", MNISTDataRepository.COUNT_TEST)
+    print(
+        "CPU test accuracy:", cpu_correct, "/", MNISTDataRepository.COUNT_TEST
+    )
 
     with DeviceContext() as ctx:
         var gpu_session = DeviceSession[GPUBumpArenaAllocator](ctx)
@@ -70,7 +72,14 @@ def main() raises:
         var zero_labels = InlineArray[UInt8, batch_size](fill=0)
         warm_slot.loadBatch(Span(zero_pixels))
         warm_slot.doWork(
-            norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+            norm,
+            conv1,
+            pool1,
+            conv2,
+            pool2,
+            conv3,
+            matmul,
+            gather,
             gpu_session.model,
         )
         _ = warm_slot.getResults(Span(zero_labels))
@@ -88,9 +97,23 @@ def main() raises:
             ctx,
             data,
             gpu_session.model,
-            norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+            norm,
+            conv1,
+            pool1,
+            conv2,
+            pool2,
+            conv3,
+            matmul,
+            gather,
         )
-        print("GPU", "test" if use_test_data else "train", "accuracy:", correct, "/", total)
+        print(
+            "GPU",
+            "test" if use_test_data else "train",
+            "accuracy:",
+            correct,
+            "/",
+            total,
+        )
         keep(gpu_session)
     # FIXME: MNISTBatch holds Spans into data_repo's arena. Mojo doesn't track this origin
     # dependency, so the compiler may destroy data_repo before inference completes.

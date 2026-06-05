@@ -6,7 +6,7 @@ platforms = ["linux-64"]
 version = "0.2.0"
 
 [tasks]
-formatall = "mojo format src/*.mojo; mojo format src/cpu/*.mojo; mojo format src/accel/*.mojo"
+formatall = "mojo format src/*.mojo src/cpu/*.mojo src/accel/*.mojo tests/*.mojo"
 doit = {cmd = "mojo src/main.mojo", cwd = "."}
 sanitize = { cmd = "mojo build -g2 -O1 --sanitize=address -Xlinker -lm src/main.mojo && ./main"}
 cdebug = { cmd = "mojo build -g2 -O1 --debug-info-language=C -Xlinker -lm src/main.mojo"}
@@ -22,3 +22,7 @@ mojo = ">=1.0.0b2.dev2026053106,<2"
 pandas = ">=3.0.3,<4"
 cuda-toolkit = ">=13.3.0,<14"
 max = ">=26.4.0.dev2026060406,<27"
+# Mojo's runtime .so's need glibc >=2.34 symbols (pthread/dl/sem merged into libc).
+# The default conda sysroot was 2.28, which broke `mojo build` (static link). Pin a
+# modern sysroot so the conda linker resolves @GLIBC_2.34/2.32 symbols.
+sysroot_linux-64 = ">=2.34"

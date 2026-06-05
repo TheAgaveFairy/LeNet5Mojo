@@ -5,9 +5,11 @@ from std.benchmark.compiler import keep
 from constants import ftype, sftype
 from std.sys.info import size_of
 
+
 def main() raises:
     for _ in range(1000000):
         testCV()
+
 
 def testCV() raises:
     comptime Tens[layout: Layout] = LayoutTensor[ftype, layout, MutAnyOrigin]
@@ -19,5 +21,4 @@ def testCV() raises:
     keep(r)
     keep(i)
     keep(k)
-    #print(r)
-
+    # print(r)
