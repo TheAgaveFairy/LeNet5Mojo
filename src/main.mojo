@@ -59,6 +59,58 @@ comptime N_WARMUP = defines.get_defined_int["N_WARMUP", 3]()
 comptime N_PASSES = defines.get_defined_int["N_PASSES", 10]()
 
 
+def main() raises:
+    var args = argv()
+    if len(args) > 1 and args[1] == "--help":
+        print("-D ALPHA=[1..1000], -D ACT_FN, see constants.mojo")
+        return
+
+    var run_id: String
+    try:
+        run_id = subProcessRun("date +%s")
+    except:
+        run_id = "unknown"
+
+    var data_repo = MNISTDataRepository()
+
+    comptime cpu_batch_size = 300
+    seed(42069)
+
+    var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
+    var arena_model = LeNet5(arena)
+    arena_model.zero()
+    arena_model.randomizeWeights()
+
+    trainAndTest(
+        arena_model,
+        data_repo,
+        "arena",
+        run_id,
+        parallel=True,
+        batch_size=cpu_batch_size,
+    )
+
+    try:
+        arena_model.saveToFile(Path("models/deleteme.test"))
+    except e:
+        print(e, file=stderr)
+    benchmark.keep(
+        arena
+    )  # FIXME: joint origins — could wrap into CPUSession.{LeNet5, Arena}
+
+    # load the model saved above and test it independently
+    comptime model_name = "models/deleteme.test"
+    print("Loading and testing a saved model: '" + model_name + "'")
+    var modelCPU = LeNet5()
+    modelCPU.loadFromFile[ftype](model_name)
+    var saved_res = runTest(modelCPU, data_repo.test_data)
+    print("\t", saved_res.correct, "/", saved_res.count, "correct")
+    print("\t", saved_res.elapsed_ns // 1_000_000, "ms")
+
+    runGPUTest(modelCPU, data_repo, run_id)
+    benchmark.keep(data_repo)
+
+
 @fieldwise_init
 struct TimingStats(Copyable, Movable):
     var median_ns: UInt
@@ -395,55 +447,3 @@ def runGPUTest(
         except e:
             print(e, file=stderr)
         benchmark.keep(gpu_session)
-
-
-def main() raises:
-    var args = argv()
-    if len(args) > 1 and args[1] == "--help":
-        print("-D ALPHA=[1..1000], -D ACT_FN, see constants.mojo")
-        return
-
-    var run_id: String
-    try:
-        run_id = subProcessRun("date +%s")
-    except:
-        run_id = "unknown"
-
-    var data_repo = MNISTDataRepository()
-
-    comptime cpu_batch_size = 300
-    seed(42069)
-
-    var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
-    var arena_model = LeNet5(arena)
-    arena_model.zero()
-    arena_model.randomizeWeights()
-
-    trainAndTest(
-        arena_model,
-        data_repo,
-        "arena",
-        run_id,
-        parallel=True,
-        batch_size=cpu_batch_size,
-    )
-
-    try:
-        arena_model.saveToFile(Path("models/deleteme.test"))
-    except e:
-        print(e, file=stderr)
-    benchmark.keep(
-        arena
-    )  # FIXME: joint origins — could wrap into CPUSession.{LeNet5, Arena}
-
-    # load the model saved above and test it independently
-    comptime model_name = "models/deleteme.test"
-    print("Loading and testing a saved model: '" + model_name + "'")
-    var modelCPU = LeNet5()
-    modelCPU.loadFromFile[ftype](model_name)
-    var saved_res = runTest(modelCPU, data_repo.test_data)
-    print("\t", saved_res.correct, "/", saved_res.count, "correct")
-    print("\t", saved_res.elapsed_ns // 1_000_000, "ms")
-
-    runGPUTest(modelCPU, data_repo, run_id)
-    benchmark.keep(data_repo)

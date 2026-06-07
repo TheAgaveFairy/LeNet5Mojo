@@ -70,8 +70,39 @@ Check items off as they are completed.
 - [ ] **Implement `LeNet5GPUBuffers.__del__`** (`accel/model.mojo:115`)
   - Placeholder comment exists. Needed to properly release GPU memory when not using an arena.
 
-- [ ] **`comptime for` explodes compile time in arena/buffer setup** (`accel/ops.mojo:746`)
-  - Noted during `batchedForward` implementation. Investigate if a runtime loop is acceptable.
+- [x] **Compile-time explosion in StreamSlot/buffer setup** (`accel/ops.mojo`) — RESOLVED 2026-06-05
+  - Root cause was NOT a `comptime for`: it was the `InlineArray[FeatureGPU, batch_size]` *field* on
+    StreamSlot — the synthesized struct move unrolled N element-moves at comptime (batch 256 = compiler
+    timeout, 1024 = never). Fixed by making the host handles a local in `__init__` (only needed to seed
+    the device copy), so StreamSlot's move is a pointer shuffle. Build now batch-independent (~60s).
+
+---
+
+## Benchmarking / Profiling
+
+- [ ] **Hoist StreamSlot construction OUT of the timed region — kills run-to-run variance** (`accel/ops.mojo`, `main.mojo`)
+  - `runGPUTest` times the whole `batchedForwardMultiStream` call, which `alloc`s + `free`s all
+    StreamSlots every pass. `cudaMalloc`/`cudaFree`/pinned-host-alloc are synchronous, pool-dependent,
+    and scale with eff_batch → ~10% variance, worst at eff_batch 1500. You're timing setup+teardown,
+    not steady-state compute.
+  - Fix: split `batchedForwardMultiStream` into setup (build N slots once) + run (loadBatch/doWork/
+    getResults). Benchmark loop times only `run` over the reused slots. This is the apples-to-apples
+    discipline every framework (PyTorch/JAX/ONNX-RT/MAX) uses.
+  - Note: a `DeviceContext` host-callback (cudaLaunchHostFunc-style) is NOT the tool here — that orders
+    host work *within* a stream; the prep just needs to move to `__init__`, before the timed loop.
+
+- [ ] **Lock GPU clocks for benchmark/profile runs** (`scripts/gpu_lock.sh`, `scripts/gpu_unlock.sh`)
+  - Consumer 3070 boosts/throttles → timing jitter. `pixi run gpulock` (sudo, real terminal) pins a
+    sustainable graphics clock + persistence mode; `pixi run gpuunlock` restores. Lock once per session.
+  - NOT auto-prepended to `nsysprofile_gpu`/`ncuprofile_gpu`: sudo needs an interactive password (breaks
+    non-interactive pixi), and you want to lock once per session, not per profile.
+
+- [ ] **Test fp64 and fp16 paths; document dtype parity vs other libs** (`constants.mojo` `ftype`)
+  - Try `ftype = DType.float64` and `float16`/`bfloat16`; note where the project struggles vs PyTorch/JAX.
+  - Apples-to-apples gotcha: PyTorch/JAX default to **TF32** matmuls on Ampere, not true FP32 — disable
+    (`torch.backends.cuda.matmul.allow_tf32=False`) or compare same-precision. State dtype in every number.
+  - Honesty-of-shortcomings is fine: if a dtype isn't easily supported, "hand it to the libraries" and
+    say so — that's legitimate framing for the writeup.
 
 ---
 
@@ -137,6 +168,17 @@ Check items off as they are completed.
 
 - [ ] **`headers_written: Bool` — make this better** (`resultlogger.mojo:191`)
   - Likely should be handled at file-open time or via a first-write check, not a mutable bool field.
+  - **Blocks the logger-overload unification below**: `headers_written` is why `logInferenceResult`/
+    `logTrainingEpoch` need `mut self`. Make header-writing idempotent (check file state in
+    `_writeResult` per write) so the log methods become `read self`.
+
+- [ ] **Collapse the `runTrain`/`runTest` logger overloads into one `Optional[Logger]` param** (`main.mojo`)
+  - Currently each has two overloads (with/without `mut logger: MultiFileLogger`). Goal: one signature
+    `logger: Optional[MultiFileLogger] = None`, log only when present.
+  - **Blocked by the `mut` issue**: confirmed empirically that `mut x: Optional[T] = None` is illegal
+    (`error: 'mut' arguments must not have defaults`), and a by-value `Optional` copy breaks header
+    dedup. So this REQUIRES the non-`mut` logger change above first, then the read-only Optional works.
+  - Mildly tedious (touches `resultlogger.mojo` + 4 functions in `main.mojo`); do them together.
 
 ---
 

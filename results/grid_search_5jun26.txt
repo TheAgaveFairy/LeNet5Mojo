@@ -1,0 +1,108 @@
+=== bs=25 streams=2 ===
+batchedForwardMultiStream[s=1]: eff_batch=25, 9648/10000 (96%) correct, 38ms (3µs/img), 258252 fps [min=38ms max=40ms]
+batchedForwardMultiStream[s=2]: eff_batch=50, 9648/10000 (96%) correct, 23ms (2µs/img), 430917 fps [min=22ms max=25ms]
+=== bs=25 streams=3 ===
+batchedForwardMultiStream[s=1]: eff_batch=25, 9648/10000 (96%) correct, 41ms (4µs/img), 242386 fps [min=38ms max=43ms]
+batchedForwardMultiStream[s=3]: eff_batch=75, 9648/10000 (96%) correct, 23ms (2µs/img), 428708 fps [min=22ms max=25ms]
+=== bs=25 streams=5 ===
+batchedForwardMultiStream[s=1]: eff_batch=25, 9648/10000 (96%) correct, 40ms (4µs/img), 245593 fps [min=38ms max=42ms]
+batchedForwardMultiStream[s=5]: eff_batch=125, 9648/10000 (96%) correct, 18ms (1µs/img), 529068 fps [min=17ms max=20ms]
+=== bs=50 streams=2 ===
+batchedForwardMultiStream[s=1]: eff_batch=50, 9648/10000 (96%) correct, 29ms (2µs/img), 339317 fps [min=28ms max=30ms]
+batchedForwardMultiStream[s=2]: eff_batch=100, 9648/10000 (96%) correct, 19ms (1µs/img), 514954 fps [min=17ms max=21ms]
+=== bs=50 streams=3 ===
+batchedForwardMultiStream[s=1]: eff_batch=50, 9648/10000 (96%) correct, 26ms (2µs/img), 378413 fps [min=25ms max=27ms]
+batchedForwardMultiStream[s=3]: eff_batch=150, 9648/10000 (96%) correct, 17ms (1µs/img), 584971 fps [min=16ms max=18ms]
+=== bs=50 streams=5 ===
+batchedForwardMultiStream[s=1]: eff_batch=50, 9648/10000 (96%) correct, 26ms (2µs/img), 370791 fps [min=25ms max=28ms]
+batchedForwardMultiStream[s=5]: eff_batch=250, 9648/10000 (96%) correct, 17ms (1µs/img), 586492 fps [min=16ms max=17ms]
+=== bs=75 streams=2 ===
+batchedForwardMultiStream[s=1]: eff_batch=75, 9625/9975 (96%) correct, 22ms (2µs/img), 447236 fps [min=21ms max=25ms]
+batchedForwardMultiStream[s=2]: eff_batch=150, 9625/9975 (96%) correct, 17ms (1µs/img), 577664 fps [min=16ms max=17ms]
+=== bs=75 streams=3 ===
+batchedForwardMultiStream[s=1]: eff_batch=75, 9625/9975 (96%) correct, 22ms (2µs/img), 445095 fps [min=21ms max=23ms]
+batchedForwardMultiStream[s=3]: eff_batch=225, 9625/9975 (96%) correct, 16ms (1µs/img), 593777 fps [min=16ms max=17ms]
+=== bs=75 streams=5 ===
+batchedForwardMultiStream[s=1]: eff_batch=75, 9625/9975 (96%) correct, 24ms (2µs/img), 407951 fps [min=22ms max=25ms]
+batchedForwardMultiStream[s=5]: eff_batch=375, 9625/9975 (96%) correct, 17ms (1µs/img), 573415 fps [min=17ms max=18ms]
+=== bs=100 streams=2 ===
+batchedForwardMultiStream[s=1]: eff_batch=100, 9648/10000 (96%) correct, 21ms (2µs/img), 459190 fps [min=20ms max=23ms]
+batchedForwardMultiStream[s=2]: eff_batch=200, 9648/10000 (96%) correct, 18ms (1µs/img), 551546 fps [min=16ms max=28ms]
+=== bs=100 streams=3 ===
+batchedForwardMultiStream[s=1]: eff_batch=100, 9648/10000 (96%) correct, 22ms (2µs/img), 454385 fps [min=21ms max=41ms]
+batchedForwardMultiStream[s=3]: eff_batch=300, 9648/10000 (96%) correct, 16ms (1µs/img), 598685 fps [min=16ms max=17ms]
+=== bs=100 streams=5 ===
+batchedForwardMultiStream[s=1]: eff_batch=100, 9648/10000 (96%) correct, 24ms (2µs/img), 416144 fps [min=22ms max=26ms]
+batchedForwardMultiStream[s=5]: eff_batch=500, 9648/10000 (96%) correct, 18ms (1µs/img), 528145 fps [min=17ms max=20ms]
+=== bs=120 streams=2 ===
+batchedForwardMultiStream[s=1]: eff_batch=120, 9610/9960 (96%) correct, 22ms (2µs/img), 443168 fps [min=21ms max=25ms]
+batchedForwardMultiStream[s=2]: eff_batch=240, 9610/9960 (96%) correct, 18ms (1µs/img), 541351 fps [min=17ms max=21ms]
+=== bs=120 streams=3 ===
+batchedForwardMultiStream[s=1]: eff_batch=120, 9610/9960 (96%) correct, 23ms (2µs/img), 424989 fps [min=21ms max=24ms]
+batchedForwardMultiStream[s=3]: eff_batch=360, 9610/9960 (96%) correct, 18ms (1µs/img), 531491 fps [min=17ms max=22ms]
+=== bs=120 streams=5 ===
+batchedForwardMultiStream[s=1]: eff_batch=120, 9610/9960 (96%) correct, 21ms (2µs/img), 457683 fps [min=20ms max=23ms]
+batchedForwardMultiStream[s=5]: eff_batch=600, 9610/9960 (96%) correct, 18ms (1µs/img), 539615 fps [min=17ms max=19ms]
+=== bs=150 streams=2 ===
+batchedForwardMultiStream[s=1]: eff_batch=150, 9555/9900 (96%) correct, 23ms (2µs/img), 422594 fps [min=21ms max=24ms]
+batchedForwardMultiStream[s=2]: eff_batch=300, 9555/9900 (96%) correct, 19ms (2µs/img), 498860 fps [min=18ms max=23ms]
+=== bs=150 streams=3 ===
+batchedForwardMultiStream[s=1]: eff_batch=150, 9555/9900 (96%) correct, 21ms (2µs/img), 462626 fps [min=20ms max=21ms]
+batchedForwardMultiStream[s=3]: eff_batch=450, 9555/9900 (96%) correct, 17ms (1µs/img), 562220 fps [min=16ms max=18ms]
+=== bs=150 streams=5 ===
+batchedForwardMultiStream[s=1]: eff_batch=150, 9555/9900 (96%) correct, 21ms (2µs/img), 455413 fps [min=21ms max=22ms]
+batchedForwardMultiStream[s=5]: eff_batch=750, 9555/9900 (96%) correct, 17ms (1µs/img), 561546 fps [min=16ms max=18ms]
+=== bs=200 streams=2 ===
+batchedForwardMultiStream[s=1]: eff_batch=200, 9648/10000 (96%) correct, 19ms (1µs/img), 508242 fps [min=19ms max=21ms]
+batchedForwardMultiStream[s=2]: eff_batch=400, 9648/10000 (96%) correct, 17ms (1µs/img), 563856 fps [min=16ms max=18ms]
+=== bs=200 streams=3 ===
+batchedForwardMultiStream[s=1]: eff_batch=200, 9648/10000 (96%) correct, 20ms (2µs/img), 495026 fps [min=18ms max=20ms]
+batchedForwardMultiStream[s=3]: eff_batch=600, 9648/10000 (96%) correct, 17ms (1µs/img), 565977 fps [min=16ms max=18ms]
+=== bs=200 streams=5 ===
+batchedForwardMultiStream[s=1]: eff_batch=200, 9648/10000 (96%) correct, 19ms (1µs/img), 500060 fps [min=18ms max=20ms]
+batchedForwardMultiStream[s=5]: eff_batch=1000, 9648/10000 (96%) correct, 17ms (1µs/img), 584252 fps [min=16ms max=18ms]
+=== bs=250 streams=2 ===
+batchedForwardMultiStream[s=1]: eff_batch=250, 9648/10000 (96%) correct, 19ms (1µs/img), 505461 fps [min=18ms max=20ms]
+batchedForwardMultiStream[s=2]: eff_batch=500, 9648/10000 (96%) correct, 17ms (1µs/img), 570250 fps [min=17ms max=17ms]
+=== bs=250 streams=3 ===
+batchedForwardMultiStream[s=1]: eff_batch=250, 9648/10000 (96%) correct, 19ms (1µs/img), 511054 fps [min=18ms max=20ms]
+batchedForwardMultiStream[s=3]: eff_batch=750, 9648/10000 (96%) correct, 17ms (1µs/img), 579244 fps [min=16ms max=18ms]
+=== bs=250 streams=5 ===
+batchedForwardMultiStream[s=1]: eff_batch=250, 9648/10000 (96%) correct, 19ms (1µs/img), 507326 fps [min=18ms max=20ms]
+batchedForwardMultiStream[s=5]: eff_batch=1250, 9648/10000 (96%) correct, 17ms (1µs/img), 563537 fps [min=17ms max=18ms]
+=== bs=400 streams=2 ===
+batchedForwardMultiStream[s=1]: eff_batch=400, 9648/10000 (96%) correct, 18ms (1µs/img), 530174 fps [min=17ms max=19ms]
+batchedForwardMultiStream[s=2]: eff_batch=800, 9648/10000 (96%) correct, 16ms (1µs/img), 594388 fps [min=16ms max=17ms]
+=== bs=400 streams=3 ===
+batchedForwardMultiStream[s=1]: eff_batch=400, 9648/10000 (96%) correct, 18ms (1µs/img), 536316 fps [min=18ms max=19ms]
+batchedForwardMultiStream[s=3]: eff_batch=1200, 9648/10000 (96%) correct, 17ms (1µs/img), 583531 fps [min=16ms max=17ms]
+=== bs=400 streams=5 ===
+batchedForwardMultiStream[s=1]: eff_batch=400, 9648/10000 (96%) correct, 18ms (1µs/img), 554730 fps [min=17ms max=18ms]
+batchedForwardMultiStream[s=5]: eff_batch=2000, 9648/10000 (96%) correct, 17ms (1µs/img), 567299 fps [min=17ms max=18ms]
+=== bs=500 streams=2 ===
+batchedForwardMultiStream[s=1]: eff_batch=500, 9648/10000 (96%) correct, 18ms (1µs/img), 551726 fps [min=16ms max=18ms]
+batchedForwardMultiStream[s=2]: eff_batch=1000, 9648/10000 (96%) correct, 16ms (1µs/img), 608332 fps [min=16ms max=17ms]
+=== bs=500 streams=3 ===
+batchedForwardMultiStream[s=1]: eff_batch=500, 9648/10000 (96%) correct, 17ms (1µs/img), 564720 fps [min=17ms max=18ms]
+batchedForwardMultiStream[s=3]: eff_batch=1500, 9648/10000 (96%) correct, 16ms (1µs/img), 596879 fps [min=16ms max=17ms]
+=== bs=500 streams=5 ===
+batchedForwardMultiStream[s=1]: eff_batch=500, 9648/10000 (96%) correct, 20ms (2µs/img), 491404 fps [min=18ms max=21ms]
+batchedForwardMultiStream[s=5]: eff_batch=2500, 9648/10000 (96%) correct, 19ms (1µs/img), 519741 fps [min=18ms max=19ms]
+=== bs=750 streams=2 ===
+batchedForwardMultiStream[s=1]: eff_batch=750, 9414/9750 (96%) correct, 18ms (1µs/img), 518255 fps [min=18ms max=19ms]
+batchedForwardMultiStream[s=2]: eff_batch=1500, 9414/9750 (96%) correct, 17ms (1µs/img), 551037 fps [min=16ms max=18ms]
+=== bs=750 streams=3 ===
+batchedForwardMultiStream[s=1]: eff_batch=750, 9414/9750 (96%) correct, 18ms (1µs/img), 525201 fps [min=17ms max=19ms]
+batchedForwardMultiStream[s=3]: eff_batch=2250, 9414/9750 (96%) correct, 18ms (1µs/img), 518274 fps [min=18ms max=19ms]
+=== bs=750 streams=5 ===
+batchedForwardMultiStream[s=1]: eff_batch=750, 9414/9750 (96%) correct, 19ms (1µs/img), 506879 fps [min=18ms max=20ms]
+batchedForwardMultiStream[s=5]: eff_batch=3750, 9414/9750 (96%) correct, 19ms (1µs/img), 500033 fps [min=18ms max=20ms]
+=== bs=1000 streams=2 ===
+batchedForwardMultiStream[s=1]: eff_batch=1000, 9648/10000 (96%) correct, 18ms (1µs/img), 534762 fps [min=17ms max=22ms]
+batchedForwardMultiStream[s=2]: eff_batch=2000, 9648/10000 (96%) correct, 19ms (1µs/img), 506900 fps [min=18ms max=21ms]
+=== bs=1000 streams=3 ===
+batchedForwardMultiStream[s=1]: eff_batch=1000, 9648/10000 (96%) correct, 17ms (1µs/img), 584054 fps [min=16ms max=17ms]
+batchedForwardMultiStream[s=3]: eff_batch=3000, 9648/10000 (96%) correct, 17ms (1µs/img), 572274 fps [min=17ms max=18ms]
+=== bs=1000 streams=5 ===
+batchedForwardMultiStream[s=1]: eff_batch=1000, 9648/10000 (96%) correct, 17ms (1µs/img), 587027 fps [min=16ms max=17ms]
+batchedForwardMultiStream[s=5]: eff_batch=5000, 9648/10000 (96%) correct, 18ms (1µs/img), 536196 fps [min=17ms max=19ms]

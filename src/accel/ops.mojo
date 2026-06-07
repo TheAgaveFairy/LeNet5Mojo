@@ -45,9 +45,6 @@ from dataloader import MNISTBatch
 comptime div_chans_conv2 = 8  # any lower uses too many resources
 comptime div_chans_conv3 = 8  # 8  # needs to be a factor of 120
 
-# conv3 reduces LAYER4 * 5 * 5 = 400 products per output channel via block.sum.
-# block.sum needs a 1D block whose size is a multiple of the warp size, so we
-# pad up to the next power of two (512) and let threads >= 400 contribute 0.
 comptime conv3_feat_total = LAYER4 * LENGTH_KERNEL * LENGTH_KERNEL
 comptime conv3_reduction_threads = next_power_of_two(conv3_feat_total)
 
@@ -60,7 +57,7 @@ def normalizeInputsKernel[
         Layout.row_major(batch_size, IMAGE_SIZE, IMAGE_SIZE),
         ImmutAnyOrigin,
     ],
-    feats: InlineArray[FeatureGPU, batch_size],
+    feats: UnsafePointer[FeatureGPU, MutAnyOrigin],
 ):
     """Call with blocks = batch_size, threads_per_block = (IMAGE_SIZE, IMAGE_SIZE). Remember, IMAGE_SIZE is unpadded. We need to both pad *and* normalize into our feature buffer inputs.
     """
@@ -97,6 +94,7 @@ def normalizeInputsKernel[
 
     barrier()
 
+    # TODO: block.sum() for reduction, check memory accesses (performance)
     var i = 1
     while i < reduction_size:
         if flat % (2 * i) == 0:  # and (flat + i) < reduction_size:
@@ -125,7 +123,7 @@ def normalizeInputsKernel[
 def gatherOutputsKernel[
     batch_size: Int
 ](
-    feats: InlineArray[FeatureGPU, batch_size],
+    feats: UnsafePointer[FeatureGPU, MutAnyOrigin],
     outputs: LayoutTensor[
         ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin
     ],
@@ -137,7 +135,7 @@ def gatherOutputsKernel[
 
 def matMulFusedKernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size]) -> None:
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
     """
     Enough threads per block to do one output channel at a time as a reduction,
     so make it a power of two.
@@ -148,7 +146,7 @@ def matMulFusedKernel[
     var thread = thread_idx.x
     comptime reduction_size = next_power_of_two(LAYER5)  # 120 -> 128
 
-    # dram to local call possible
+    # TODO: dram to local call possible
     var feat = feats[img_idx].layer5[thread, 0, 0] if thread < LAYER5 else 0
 
     comptime for oc in range(OUTPUT):
@@ -162,7 +160,7 @@ def matMulFusedKernel[
 
 def maxPool2Kernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size]) -> None:
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
     """
     Runs as block_dim = (LAYER4, LF4, LF4) = 16 * 5 * 5 = 400, grid_dim = (batch_size).
     """
@@ -188,6 +186,8 @@ def maxPool2Kernel[
     ]
     barrier()
 
+    # TODO: copy_dram_to_sram_async() call
+
     var temp: sftype = rebind[sftype](
         max(local_image[chan, tr, tc], local_image[chan, tr + 1, tc])
     )
@@ -199,7 +199,7 @@ def maxPool2Kernel[
 
 def maxPool1Kernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size]) -> None:
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
     """
     Runs as block_dim = (LF1, LF1), grid_dim = (batch_size, num_channels).
     """
@@ -215,6 +215,7 @@ def maxPool1Kernel[
         address_space=AddressSpace.SHARED,
     ].stack_allocation()
 
+    # TODO: copy_dram_to_sram_async() call
     local_image[row, col] = feats[img_idx].layer1[chan, row, col]
     barrier()
 
@@ -229,7 +230,7 @@ def maxPool1Kernel[
 
 def conv3FusedKernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size]) -> None:
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
     """
     Grid Dim = (batch_size, chan_div = 8)
     Block Dim = (conv3_reduction_threads = 512), 1D.
@@ -260,6 +261,7 @@ def conv3FusedKernel[
         # could also just use flat_idx and access things with layer4.ptr[flat_idx] etc - ordering doesn't matter for this reduction
         feat_val = rebind[sftype](feats[img_idx].layer4[in_chan, row, col])
 
+    # if this isn't a 'comptime for', accuracy goes down
     comptime for oc in range(num_ocs):
         var prod: sftype = 0
         if active:
@@ -278,7 +280,7 @@ def conv3FusedKernel[
 
 def conv2FusedKernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size]) -> None:
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
     """
     Grid Dim = (batch_size, channel_divisions).
     Block Dim = (LAYER3 // div_chans, LENGTH_FEATURE3, LENGTH_FEATURE3).
@@ -357,7 +359,7 @@ def conv2FusedKernel[
 
 def conv1FusedKernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size]) -> None:
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
     """
     Grid Dim = (batch_size)
     Block Dim = (LENGTH_FEATURE1, LENGTH_FEATURE1) = 28 x 28
@@ -384,6 +386,9 @@ def conv1FusedKernel[
         MutAnyOrigin,
         address_space=AddressSpace.SHARED,
     ].stack_allocation()
+
+    # TODO: copy_dram_to_sram_async() call
+
     var tid = flat_idx
     while tid < LENGTH_FEATURE0 * LENGTH_FEATURE0:
         var r = tid // LENGTH_FEATURE0
@@ -491,6 +496,7 @@ def batchedArgMax[
     outputs: LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), _],
     out guesses: InlineArray[UInt8, batch_size],
 ):
+    # TODO: take in an "actual length" argument that defaults to batch_size but allows for short batches
     guesses = type_of(guesses)(uninitialized=True)  # out arg
     for b in range(batch_size):
         var max_idx: UInt8 = 17  # nonsense sentinel
@@ -507,7 +513,10 @@ struct StreamSlot[batch_size: Int](Movable):
     var ctx: DeviceContext
     var device_arena: GPUBumpArenaAllocator
     var device_buffers: UnsafePointer[FeatureGPUBuffers, MutAnyOrigin]
-    var features: InlineArray[FeatureGPU, Self.batch_size]
+
+    # older version that used InlineArrays to store FeatureGPUs lead to the compiler synthesizeing moves that unrolled N times which *exploded* compile times
+    var device_features: DeviceBuffer[DType.uint8]
+    var features_ptr: UnsafePointer[FeatureGPU, MutAnyOrigin]
     var hosted_inputs: HostBuffer[DType.uint8]
     var hosted_outputs: HostBuffer[ftype]
     var device_inputs: DeviceBuffer[DType.uint8]
@@ -523,16 +532,29 @@ struct StreamSlot[batch_size: Int](Movable):
             self.ctx, Self.batch_size * FeatureGPUBuffers.sizeInBytes()
         )
         self.device_buffers = alloc[FeatureGPUBuffers](Self.batch_size)
-        self.features = InlineArray[FeatureGPU, Self.batch_size](
+        # Local, NOT a field: only needed to seed device_features below. Keeping it
+        # off the struct avoids unrolling N FeatureGPU moves on every StreamSlot move.
+        # TODO: could probably bypass this intermediate
+        var features = InlineArray[FeatureGPU, Self.batch_size](
             uninitialized=True
         )
         for j in range(Self.batch_size):
             (self.device_buffers + j).init_pointee_move(
                 FeatureGPUBuffers(self.device_arena)
             )
-            (self.features.unsafe_ptr() + j).init_pointee_move(
+            (features.unsafe_ptr() + j).init_pointee_move(
                 FeatureGPU((self.device_buffers + j)[])
             )
+        comptime feat_bytes = Self.batch_size * size_of[FeatureGPU]()
+        self.device_features = self.ctx.enqueue_create_buffer[DType.uint8](
+            feat_bytes
+        )
+        self.device_features.enqueue_copy_from(
+            features.unsafe_ptr().bitcast[UInt8]()
+        )
+        self.features_ptr = self.device_features.unsafe_ptr().bitcast[
+            FeatureGPU
+        ]()
         self.device_inputs = self.ctx.enqueue_create_buffer[DType.uint8](
             img_sz * Self.batch_size
         )
@@ -614,28 +636,28 @@ struct StreamSlot[batch_size: Int](Movable):
         self.ctx.enqueue_function(
             norm,
             raw_pixels_tensor,
-            self.features,
+            self.features_ptr,
             grid_dim=(Self.batch_size),
             block_dim=(IMAGE_SIZE, IMAGE_SIZE),
         )
         self.ctx.enqueue_function(
             conv1,
             model,
-            self.features,
+            self.features_ptr,
             grid_dim=(Self.batch_size),
             block_dim=(LENGTH_FEATURE1, LENGTH_FEATURE1),
         )
         self.ctx.enqueue_function(
             pool1,
             model,
-            self.features,
+            self.features_ptr,
             grid_dim=(Self.batch_size, LAYER1),
             block_dim=(LENGTH_FEATURE1, LENGTH_FEATURE1),
         )
         self.ctx.enqueue_function(
             conv2,
             model,
-            self.features,
+            self.features_ptr,
             grid_dim=(Self.batch_size, div_chans_conv2),
             block_dim=(
                 LAYER3 // div_chans_conv2,
@@ -646,27 +668,27 @@ struct StreamSlot[batch_size: Int](Movable):
         self.ctx.enqueue_function(
             pool2,
             model,
-            self.features,
+            self.features_ptr,
             grid_dim=(Self.batch_size),
             block_dim=(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4),
         )
         self.ctx.enqueue_function(
             conv3,
             model,
-            self.features,
+            self.features_ptr,
             grid_dim=(Self.batch_size, div_chans_conv3),
             block_dim=(conv3_reduction_threads),
         )
         self.ctx.enqueue_function(
             matmul,
             model,
-            self.features,
+            self.features_ptr,
             grid_dim=(Self.batch_size),
             block_dim=(next_power_of_two(LAYER5)),
         )
         self.ctx.enqueue_function(
             gather,
-            self.features,
+            self.features_ptr,
             self.outputs,
             grid_dim=(Self.batch_size),
             block_dim=(OUTPUT),
@@ -674,14 +696,14 @@ struct StreamSlot[batch_size: Int](Movable):
         self.hosted_outputs.enqueue_copy_from(self.outputs_buffer)
 
     def getResults(self, labels: Span[UInt8, _]) raises -> Int:
-        """Returns number correct for a batch. Syncs the slot's stream first."""
+        """Returns number correct for a batch. Syncs the slot's stream first. Does not check for a full batch - handle at call."""
         self.ctx.synchronize()
         var correct = 0
         var hosted_outputs = LayoutTensor[
             ftype, Layout.row_major(Self.batch_size, OUTPUT), MutAnyOrigin
         ](self.hosted_outputs.unsafe_ptr())
         var results = batchedArgMax(hosted_outputs)
-        for j in range(Self.batch_size):
+        for j in range(Self.batch_size): # TODO: technically this could segfault
             if results[j] == UInt8(labels[j]):
                 correct += 1
         return correct
@@ -689,7 +711,7 @@ struct StreamSlot[batch_size: Int](Movable):
 
 def batchedForwardMultiStream[
     batch_size: Int = GPU_STREAM_BATCH_SIZE, num_streams: Int = NUM_GPU_STREAMS
-](  # TODO: clarify what precisely "batch_size" means in the context of multistreams
+](
     ctx: DeviceContext,
     data: MNISTBatch,
     model: LeNet5GPU,
@@ -702,6 +724,7 @@ def batchedForwardMultiStream[
     matmul: DeviceFunction,
     gather: DeviceFunction,
 ) raises -> Int:
+    """Effective batch size is batch_size * num_streams."""
     var count = len(data)
     var total_correct = 0
     comptime batch_bytes = batch_size * IMAGE_SIZE * IMAGE_SIZE

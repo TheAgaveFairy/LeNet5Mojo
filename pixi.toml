@@ -14,6 +14,10 @@ buildmain = { cmd = "mojo build -Xlinker -lm main.mojo", cwd = "src" }
 nsysprofile = { cmd = "nsys profile --trace=nvtx,cuda --force-overwrite=true --output=basic mojo src/main.mojo && nsys stats --force-export=true basic.nsys-rep", cwd = "."}
 nsysprofile_gpu = { cmd = "nsys profile --trace=nvtx,cuda --force-overwrite=true --output=gpu_profile mojo -I src tests/profile_gpu.mojo && nsys stats --force-export=true gpu_profile.nsys-rep", cwd = "."}
 ncuprofile_gpu = { cmd = "ncu --set basic --launch-count 80 --target-processes all -o ncu_gpu mojo -I src tests/profile_gpu.mojo", cwd = "."}
+# Steady-state clock lock for reproducible benchmarking/profiling (needs sudo,
+# run in a real terminal). Lock once per session, not per profile run.
+gpulock = { cmd = "sudo scripts/gpu_lock.sh", cwd = "."}
+gpuunlock = { cmd = "sudo scripts/gpu_unlock.sh", cwd = "."}
 
 [dependencies]
 matplotlib = ">=3.10.9,<4"
