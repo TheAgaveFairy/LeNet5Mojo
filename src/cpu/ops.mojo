@@ -9,7 +9,7 @@ from std.sys import stderr
 from std.sys.info import size_of
 
 from std.time import perf_counter_ns
-from resultlogger import LeNet5Logger, MultiFileLogger
+from resultlogger import MultiFileLogger
 
 from cpu.model import LeNet5, Feature
 from constants import (
@@ -595,11 +595,11 @@ def trainBatchParallel(
 ) -> Tuple[Int, Float32]:
     var batch_size = len(inputs)
 
-    var buffer_arena = CPUArena(LeNet5._calcArenaSize())
+    var buffer_arena = CPUArena(LeNet5.sizeInBytes())
     var buffer = LeNet5(buffer_arena)
 
     var arena_size = batch_size * (
-        Feature._calcArenaSize() * 2 + LeNet5._calcArenaSize()
+        Feature.sizeInBytes() * 2 + LeNet5.sizeInBytes()
     )
     var intermediate_arena = CPUArena(arena_size)  # will abort if too big
 
@@ -665,12 +665,12 @@ def trainBatch(
     var correct = 0
     var total_loss: Float32 = 0.0
 
-    var buffer_arena = CPUArena(LeNet5._calcArenaSize())
+    var buffer_arena = CPUArena(LeNet5.sizeInBytes())
     var buffer = LeNet5(buffer_arena)
 
-    var feat_arena = CPUArena(Feature._calcArenaSize())
-    var error_arena = CPUArena(Feature._calcArenaSize())
-    var delta_arena = CPUArena(LeNet5._calcArenaSize())
+    var feat_arena = CPUArena(Feature.sizeInBytes())
+    var error_arena = CPUArena(Feature.sizeInBytes())
+    var delta_arena = CPUArena(LeNet5.sizeInBytes())
 
     var feat = Feature(feat_arena)
     var errors = Feature(error_arena)
@@ -714,26 +714,7 @@ def trainingParallel(
     mut model: LeNet5,
     data: List[Image],
     batch_size: Int,
-):
-    if DISPLAY:
-        print("Training: Multi-Threaded")
-    var total_size = len(data)
-    if total_size % batch_size != 0:
-        print(
-            "Warning: batch size doesn't evenly divide total size.", file=stderr
-        )
-
-    for i in range(0, total_size, batch_size):
-        if DISPLAY:
-            showProgress(i, total_size)
-        _ = trainBatchParallel(model, data[i : i + batch_size])
-
-
-def trainingParallel(
-    mut model: LeNet5,
-    data: List[Image],
-    batch_size: Int,
-    mut logger: Some[LeNet5Logger],
+    logger: Optional[MultiFileLogger] = None,
 ):
     if DISPLAY:
         print("Training: Multi-Threaded")
@@ -748,65 +729,47 @@ def trainingParallel(
             showProgress(i, total_size)
         var start_time = perf_counter_ns()
         var results_tuple = trainBatchParallel(model, data[i : i + batch_size])
-        var correct = results_tuple[0]
-        var avg_loss = results_tuple[1]
-        var end_time = perf_counter_ns()
-        var elapsed = end_time - start_time
-        try:
-            logger.logTrainingEpoch(
-                "CPU", i, elapsed, correct, total_size, avg_loss, ALPHA, ftype
-            )
-        except e:
-            print("logging error during CPU training:", e)
+        var elapsed = perf_counter_ns() - start_time
+        if logger:
+            try:
+                logger.value().logTrainingEpoch(
+                    "CPU", i, elapsed, results_tuple[0], total_size, results_tuple[1], ALPHA, ftype
+                )
+            except e:
+                print("logging error during CPU training:", e)
 
 
 def training(
     mut model: LeNet5,
     data: List[Image],
     batch_size: Int,
-    mut logger: Some[LeNet5Logger],
+    logger: Optional[MultiFileLogger] = None,
 ):
     if DISPLAY:
         print("Training: Single-Threaded")
-    var total_size = len(data)
-    for i in range(0, total_size, batch_size):
-        if DISPLAY:
-            showProgress(i, total_size)
-        var start_time = perf_counter_ns()
-        var results_tuple = trainBatch(model, data[i : i + batch_size])
-        var correct = results_tuple[0]
-        var avg_loss = results_tuple[1]
-        var end_time = perf_counter_ns()
-        var elapsed = end_time - start_time
-        try:
-            logger.logTrainingEpoch(
-                "CPU", i, elapsed, correct, total_size, avg_loss, ALPHA, ftype
-            )
-        except e:
-            print("logging error during CPU training:", e)
-
-
-def training(
-    mut model: LeNet5,
-    data: List[Image],
-    batch_size: Int,
-    # total_size: Int,
-):
-    if DISPLAY:
-        print("Training Single-Threaded")
     var total_size = len(data)
     if total_size % batch_size != 0:
         print(
             "Warning: batch size doesn't evenly divide total size.", file=stderr
         )
     for i in range(0, total_size, batch_size):
-        showProgress(i, total_size)
-        _ = trainBatch(model, data[i : i + batch_size])
+        if DISPLAY:
+            showProgress(i, total_size)
+        var start_time = perf_counter_ns()
+        var results_tuple = trainBatch(model, data[i : i + batch_size])
+        var elapsed = perf_counter_ns() - start_time
+        if logger:
+            try:
+                logger.value().logTrainingEpoch(
+                    "CPU", i, elapsed, results_tuple[0], total_size, results_tuple[1], ALPHA, ftype
+                )
+            except e:
+                print("logging error during CPU training:", e)
 
 
 def testing(model: LeNet5, data: List[Image]) -> Int:
     var correct = 0
-    var feat_arena = CPUArena(Feature._calcArenaSize())
+    var feat_arena = CPUArena(Feature.sizeInBytes())
     var feat = Feature(feat_arena)
     for i in range(len(data)):
         feat_arena.zero()
@@ -821,7 +784,7 @@ def testingParallel(
     model: LeNet5, data: List[Image], batch_size: Int = 50
 ) -> Int:
     var correct = 0
-    var feat_arena = CPUArena(Feature._calcArenaSize() * batch_size)
+    var feat_arena = CPUArena(Feature.sizeInBytes() * batch_size)
     var feats = alloc[Feature](batch_size)
 
     for i in range(batch_size):
@@ -829,9 +792,8 @@ def testingParallel(
         (feats + i).init_pointee_move(Feature(feat_arena))
     var corrects = List[Int](length=batch_size, fill=0)
 
-    for i in range(
-        0, len(data), batch_size
-    ):  # TODO: handle case where len(data) % batch_size != 0
+    var n_full = len(data) // batch_size
+    for i in range(0, n_full * batch_size, batch_size):
         feat_arena.zero()
 
         def work(tid: Int) {read, mut corrects}:
@@ -843,4 +805,14 @@ def testingParallel(
     benchmark.keep(feat_arena)
     for i in range(batch_size):
         correct += corrects[i]
+
+    var remainder = len(data) % batch_size
+    if remainder > 0:
+        feat_arena.zero()
+        var base = n_full * batch_size
+        for j in range(remainder):
+            var pred = model.predict(feats[j], data[base + j])
+            if pred == Int(data[base + j].label):
+                correct += 1
+
     return correct

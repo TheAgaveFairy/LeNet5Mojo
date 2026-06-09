@@ -6,6 +6,7 @@ from std.reflection.reflect import reflect
 from std.sys import size_of
 
 from cpu.model import LeNet5
+from cpu.arena import ArenaSizable
 from accel.arena import GPUAllocator, GPUBumpArenaAllocator, GPUSystemAllocator
 from constants import (
     ftype,
@@ -50,11 +51,11 @@ struct DeviceSession[Allocator: GPUAllocator]():
     #     pass
 
 
-struct LeNet5GPUBuffers:
+struct LeNet5GPUBuffers(ArenaSizable):
     """Stays on CPU — holds DeviceBuffers for host-side access (map_to_host, enqueue_copy_from, etc.).
     """
 
-    var allocator_owns_memory: Bool  # TODO: AcceptsAllocator trait idea (along with static sizeInBytes())
+    var allocator_owns_memory: Bool
     var w01_storage: DeviceBuffer[ftype]
     var w23_storage: DeviceBuffer[ftype]
     var w45_storage: DeviceBuffer[ftype]
@@ -124,7 +125,7 @@ struct LeNet5GPUBuffers:
     def sizeInBytes() -> Int:
         return (
             LeNet5GPU.sizeInBytes()
-        )  # TODO: consolodate this pattern into an AcceptsAllocator trait or similar
+        )
 
     def loadCPUWeights(mut self, cpu_model: LeNet5) raises:
         self.w01_storage.enqueue_copy_from(cpu_model.weight0_1.ptr)
@@ -148,10 +149,8 @@ struct LeNet5GPUBuffers:
         if sync_ctx:
             sync_ctx.value().synchronize()
 
-    # TODO:def __del__(deinit self):
 
-
-struct LeNet5GPU(DevicePassable, TrivialRegisterPassable):
+struct LeNet5GPU(DevicePassable, TrivialRegisterPassable, ArenaSizable):
     """
     Same as the CPU version, but storage is on the GPU.
     LayoutTensors only — DeviceBuffers live in LeNet5GPUBuffers.

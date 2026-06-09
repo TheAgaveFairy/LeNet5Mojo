@@ -15,21 +15,26 @@ Check items off as they are completed.
     reusable for training loops with per-batch logic.
   - Suggested caller pattern: `for i in range(0, total, batch_size): batchedForward(ctx, data.slice(i, batch_size), ...)`
 
-- [ ] **`MNISTBatch` lifetime not tracked — callers must `keep(data_repo)`** (`dataloader.mojo`, `profile_gpu.mojo`)
-  - `MNISTBatch` holds `Span[UInt8, ImmutAnyOrigin]` into `MNISTDataRepository`'s arena. `ImmutAnyOrigin`
-    erases the borrow link, so Mojo may destroy the repo before GPU copies finish. Workaround: `keep(data_repo)`
-    at call sites (already done in `profile_gpu.mojo`, `main.mojo` avoids this by calling `batchedForward` first).
-  - Fix: parameterize `MNISTBatch` on the arena origin (the commented-out `is_mutable/origin` params are the
-    right shape — just wire them up). Then `getTrainBatch` can return `MNISTBatch[origin=origin_of(self)]`,
-    which the compiler will enforce outlives its spans.
+- [x] **`MNISTBatch` lifetime not tracked — callers must `keep(data_repo)`** (`dataloader.mojo`, `profile_gpu.mojo`)
+  - `MNISTBatch` now parameterized on `origin: ImmutOrigin`. `getTrainBatch`/`getTestBatch` return
+    `MNISTBatch[origin=origin_of(self)]` via `rebind` on the arena's `MutAnyOrigin` pointer.
+    Borrow checker enforces repo outlives the batch. `keep(data_repo)` removed; accuracy verified.
 
-- [ ] **Rename `MNISTBatch` — name is misleading when used as a full-dataset view** (`dataloader.mojo`)
-  - `getTrainBatch(0, 60000)` returns the whole dataset, not a batch. Consider `MNISTData` / `MNISTDataView`.
-  - Add `.slice(i, batch_size) -> MNISTBatch` method so batch-level access is explicit at the call site.
+- [x] **Rename `MNISTBatch` — name is misleading when used as a full-dataset view** (`dataloader.mojo`)
+  - Renamed to `MNISTDataView`. Added `__getitem__(start, end)` returning a sub-view.
+    Updated all call sites in `accel/ops.mojo`, `tests/profile_gpu.mojo`.
 
-- [ ] **Define `AcceptsAllocator` trait** (`accel/model.mojo:54`, `accel/model.mojo:91`)
-  - `LeNet5GPUBuffers` and `LeNet5GPU` both carry an `allocator_owns_memory: Bool` workaround
-    and duplicate `sizeInBytes()` statics. A trait would unify this pattern.
+- [x] **Define `AcceptsAllocator` trait** (`accel/model.mojo:54`, `accel/model.mojo:91`)
+  - Added `ArenaSizable` trait to `cpu/arena.mojo` (`@staticmethod sizeInBytes() -> Int`).
+    Renamed `_calcArenaSize` → `sizeInBytes` on CPU structs. `LeNet5`, `Feature`,
+    `FeatureGPUBuffers`, `LeNet5GPUBuffers`, `LeNet5GPU` all conform.
+
+- [ ] **Centralize weight + feature layouts into structs in `constants.mojo`** (`constants.mojo`, `accel/ops.mojo`, `accel/feature.mojo`)
+  - Today the per-layer dims (K/M of each weight, feature flat sizes) are re-derived inline in each
+    kernel (e.g. conv3 flattening `LAYER4*5*5=400`, weight4_5 as `[400,120]`, weight5_6 as `[120,10]`).
+  - Hoist into named layout structs so the GEMM-style ops (conv3, matmul5_6) can read K, M, and the
+    `Layout` straight off a shared definition instead of open-coding shapes. Makes the generic
+    `gemm[B,K,M,...]` reuse clean and keeps CPU/GPU shape definitions in one place.
 
 - [ ] **(Future) Kill `List[Image]` from CPU hot path; share SoA spans for both CPU and GPU** (`dataloader.mojo`)
   - CPU path currently uses `List[Image]` (AoS, 785-byte stride with label interleaved).
@@ -41,34 +46,65 @@ Check items off as they are completed.
 
 ## GPU Pipeline
 
-- [ ] **Ping-pong streaming: overlap H2D copy with compute** (`accel/ops.mojo`, `main.mojo`)
-  - Depends on `batchedForward` refactor above. Once the caller owns the loop, allocate two pixel
-    staging buffers and two `DeviceContext` streams; submit next batch H2D before syncing compute.
-  - Reference pattern in `GPU_STREAMS_REFERENCE.md` (Step 2 — two streams).
+- [x] **Ping-pong streaming: overlap H2D copy with compute** (`accel/ops.mojo`, `main.mojo`)
+  - Already implemented via `batchedForwardMultiStream` with configurable `NUM_GPU_STREAMS`.
 
-- [ ] **Wire up GPU inference logger** (`main.mojo:281`)
+- [x] **Wire up GPU inference logger** (`main.mojo:281`)
   - `logger.logInferenceResult(device_name, elapsed, correct, COUNT_TRAIN, batch_size, ftype)`
     is commented out after `batchedForward`. Uncomment and hook up.
 
-- [ ] **`singleForward`: `gpu_guess` sentinel should be `Optional[Int]`** (`accel/ops.mojo:639`)
+- [x] **`singleForward`: `gpu_guess` sentinel should be `Optional[Int]`** (`accel/ops.mojo:639`) — `singleForward` removed
   - `var gpu_guess = 10` uses magic number 10 as "invalid". Typed `Optional` is cleaner.
 
-- [ ] **Confirm matmul output: skip or apply `act_fn.simdForward()`?** (`accel/ops.mojo:160`)
-  - `matMulFusedKernel` writes raw dot product + bias to `feats[img].output` without activation.
-  - CPU `matmulForward` also skips activation with a FIXME. Decide and document the choice.
+- [x] **Confirm matmul output: skip or apply `act_fn.simdForward()`?** (`accel/ops.mojo:160`)
+  - Decision: skip activation after final FC layer (raw logits → softmax/argmax at output). Both CPU and GPU consistent.
 
-- [ ] **Kernel wrapper functions may be unnecessary now that `ctx` is passed** (`accel/ops.mojo:76`)
+- [x] **Kernel wrapper functions may be unnecessary now that `ctx` is passed** (`accel/ops.mojo:76`)
   - `conv1Forward`, `normalizeInputs`, etc. are thin wrappers around `ctx.enqueue_function`.
   - Consider force-inlining or calling kernels directly. Evaluate if the abstraction is worth keeping.
 
 - [ ] **conv2 image loading could be more efficient** (`accel/ops.mojo:406`)
   - Comment: "could make this much more efficient." Candidate for shared-mem load optimization.
 
+- [x] **Profile conv2 with ncu — it's now the #1 kernel (29.5%)** (`accel/ops.mojo`) — DONE 2026-06-08
+  - Verdict: NO easy win. conv2 is L1/TEX-bound (91.5% SOL) but on LEGITIMATE reuse (weights
+    reused across 100 spatial outputs/channel, image across output channels) — not a wasteful
+    reduction we can delete. Already per-thread register accum ~3.0 ps/MAC, occupancy 62% (theo
+    81%, capped by 38 reg/thread). Tail (1.45 waves) already mitigated by the streams 3->5 bump.
+    Only real lever = register tiling / thread coarsening (Tier-B-class rewrite, medium effort,
+    low ROI now). DEPRIORITIZED. Full read: ignoreme/ncu_conv2_notes.md.
+
+- [ ] **(LAST PRIORITY) conv3 Tier B — tiled GEMM for single-stream occupancy** (`accel/ops.mojo`)
+  - Tier A works but under-occupies (ncu: 8.8% occupancy, 0.11 waves/SM — 50 blocks of 120
+    threads can't fill the GPU). It leans on stream concurrency to hit peak throughput.
+  - Tier B = real tiled GEMM mapping batch×M onto MANY warp-multiple blocks, so one launch fills
+    the GPU on its own (high single-stream throughput, less reliance on 5+ streams). See the
+    GEMM design notes / `ignoreme/conv3_tierA_writeup.md` §4 caveat + §7.
+  - Explicitly deferred: do this ONLY after conv2 is understood and the rest of this list is done.
+
+- [ ] **Full image coverage for ANY batch size (pad the tail)** (`accel/ops.mojo`, `main.mojo`)
+  - Today eff_batch must divide the dataset or the remainder images are dropped (e.g. bs=75 →
+    eff 375, 10000 % 375 = 25 dropped → 9975/10000). That's why the default is pinned to bs=50
+    (divides 10000 & 60000). Want: any batch size covers all 10k/60k.
+  - Approach: pad the final partial batch to full `eff_batch` with zeros (pixels and/or a masked
+    label), run it, then ignore the padded slots when tallying correct/total. Keeps the kernels
+    fixed-size (no special last-batch path) and frees batch size to be a pure perf knob.
+  - Mirrors the CPU-side remainder handling already done in `testingParallel` (cpu/ops.mojo).
+
+- [ ] **Audit compile-time `-D` vars: which should be runtime instead?** (`constants.mojo`)
+  - Several knobs are `comptime` via `defines.get_defined_int[...]` (NUM_GPU_STREAMS,
+    GPU_STREAM_BATCH_SIZE, DIV_CHANS_CONV2/3, ftype, etc). Some genuinely need comptime (drive
+    kernel `block_dim`/unrolling/layouts → must be known at build to specialize the kernel).
+    Others probably don't: e.g. NUM_GPU_STREAMS just sizes a host-side loop / slot count — making
+    it runtime would let one binary sweep stream counts without recompiling per value (the grid
+    search rebuilds every cell today). Go knob-by-knob: tag each "needs comptime (why)" vs
+    "could be runtime (why)", then migrate the runtime-safe ones. Big payoff for benchmarking.
+
 - [ ] **conv1 kernel: `INPUT > 1` not handled** (`accel/ops.mojo:501`)
   - Kernel hardcodes single-channel input. If ever extended beyond MNIST (grayscale), this breaks.
 
-- [ ] **Implement `LeNet5GPUBuffers.__del__`** (`accel/model.mojo:115`)
-  - Placeholder comment exists. Needed to properly release GPU memory when not using an arena.
+- [x] **Implement `LeNet5GPUBuffers.__del__`** (`accel/model.mojo:115`)
+  - Stale. `DeviceBuffer` fields are RAII-managed by `DeviceContext`; placeholder comment removed.
 
 - [x] **Compile-time explosion in StreamSlot/buffer setup** (`accel/ops.mojo`) — RESOLVED 2026-06-05
   - Root cause was NOT a `comptime for`: it was the `InlineArray[FeatureGPU, batch_size]` *field* on
@@ -80,7 +116,7 @@ Check items off as they are completed.
 
 ## Benchmarking / Profiling
 
-- [ ] **Hoist StreamSlot construction OUT of the timed region — kills run-to-run variance** (`accel/ops.mojo`, `main.mojo`)
+- [x] **Hoist StreamSlot construction OUT of the timed region — kills run-to-run variance** (`accel/ops.mojo`, `main.mojo`)
   - `runGPUTest` times the whole `batchedForwardMultiStream` call, which `alloc`s + `free`s all
     StreamSlots every pass. `cudaMalloc`/`cudaFree`/pinned-host-alloc are synchronous, pool-dependent,
     and scale with eff_batch → ~10% variance, worst at eff_batch 1500. You're timing setup+teardown,
@@ -90,6 +126,23 @@ Check items off as they are completed.
     discipline every framework (PyTorch/JAX/ONNX-RT/MAX) uses.
   - Note: a `DeviceContext` host-callback (cudaLaunchHostFunc-style) is NOT the tool here — that orders
     host work *within* a stream; the prep just needs to move to `__init__`, before the timed loop.
+
+- [ ] **Sweep NUM_GPU_STREAMS past 5; re-tune the default (currently 3)** (`scripts/grid_search_gpu.sh`, `constants.mojo`)
+  - After the Tier A conv3 rewrite, a single launch only fills ~9% of the GPU (ncu: 8.8% occupancy,
+    0.11 waves/SM). That idle headroom is why more streams now help where they capped at ~3 before
+    (block.sum conv3 filled the GPU per launch at 93% occ). 8jun grid search: small batch + s=5 wins
+    (bs=75 s=5 ≈ 986k fps vs old ~598k peak), and the curve is still RISING at s=5 for bs=50–100.
+  - Action: extend `grid_search_gpu.sh` to s=6,7,8 at bs∈{50,75,100}; find where streams saturate
+    (GPU full, or CPU launch overhead dominates). Bump `NUM_GPU_STREAMS` default toward the winner.
+  - RESULT (2026-06-08, results/stream_sweep_to8_*.txt): knee at **~5–6 streams**, flat/down after.
+    bs50 peaks s=6 (~882k), bs75 s=7 (~882k), bs100 s=5 (~890k). Past ~6, extra streams stop
+    finding idle SMs and CPU launch overhead dominates. Default 3 -> **5** (6 marginal); 8 wasted.
+    (Absolute fps lower than 8jun grid due to no clock lock + warm GPU; trend is what matters.)
+    `grid_search_gpu.sh` now takes BS_VALUES / STREAM_VALUES env overrides.
+  - DONE: `NUM_GPU_STREAMS` default 3 -> 5. Kept `GPU_STREAM_BATCH_SIZE`=50 (divides 10000 & 60000
+    evenly = full test coverage; ~2.5% under the bs=75 peak — chose clean coverage over peak fps).
+  - Caveat: this is mitigating under-occupied kernels with concurrency. Tier B conv3 (many blocks)
+    would raise single-stream occupancy and reduce the reliance on high stream counts — compare both.
 
 - [ ] **Lock GPU clocks for benchmark/profile runs** (`scripts/gpu_lock.sh`, `scripts/gpu_unlock.sh`)
   - Consumer 3070 boosts/throttles → timing jitter. `pixi run gpulock` (sudo, real terminal) pins a
@@ -108,15 +161,15 @@ Check items off as they are completed.
 
 ## CPU Pipeline
 
-- [ ] **`predict` / `predictNew` could be methods of `LeNet5`** (`cpu/ops.mojo:691`)
-  - Standalone free functions that take `lenet` as first arg are natural method candidates.
+- [x] **`predict` / `predictNew` could be methods of `LeNet5`** (`cpu/ops.mojo:691`)
+  - Already methods on `LeNet5` in `cpu/model.mojo`. TODO was stale.
 
 - [ ] **`trainBatchParallel` accumulation is single-threaded** (`cpu/ops.mojo:751`)
   - The loop that calls `buffer.accumulateFromOther(deltas[i], 1.0)` runs serially after `parallelize`.
   - Should use atomics or a critical section, or restructure to reduce into a tree.
 
-- [ ] **`testingParallel`: handle `len(data) % batch_size != 0`** (`cpu/ops.mojo:942`)
-  - Current loop silently drops the tail. Add a remainder pass or assert even divisibility.
+- [x] **`testingParallel`: handle `len(data) % batch_size != 0`** (`cpu/ops.mojo:942`)
+  - Added remainder pass after main loop — sequential, avoids race condition, handles any dataset size.
 
 - [ ] **`convoluteBackward` requires explicit `kernel_size=` — investigate why** (`cpu/ops.mojo:649,664,679`)
   - Three call sites need `convoluteBackward[kernel_size=LENGTH_KERNEL](...)` explicitly.
@@ -139,60 +192,52 @@ Check items off as they are completed.
 
 ## Data Loading
 
-- [ ] **Remove or fix dead `MNISTBatch.__init__(images: List[Image], ...)` overload** (`dataloader.mojo`)
-  - This custom init is never called. It was broken (wrong memcpy count). Delete it.
+- [x] **Remove or fix dead `MNISTBatch.__init__(images: List[Image], ...)` overload** (`dataloader.mojo`)
+  - Fixed when wiring origins: updated to use parameterized `origin`, correct memcpy count,
+    rebind for field assignment. Kept as a nice-to-have utility (no callers, not dead weight).
 
-- [ ] **`image.mojo`: implement or remove `padded: Bool` flag** (`image.mojo:64`, `image.mojo:97`)
-  - Both `normalized()` and `_normalize()` have a `padded: Bool = True` param that does nothing.
-  - Either wire it up (zero-pad vs crop paths) or drop the parameter.
+- [x] **`image.mojo`: implement or remove `padded: Bool` flag** (`image.mojo:64`, `image.mojo:97`)
+  - Already wired: `comptime off = PADDING if padded else 0` used in both methods.
 
-- [ ] **Delete `Image._normalize` static method** (`image.mojo`)
-  - Already marked `@deprecated`. Once all callers confirmed migrated to `self.normalized(tensor)`, delete.
+- [x] **Delete `Image._normalize` static method** (`image.mojo`)
+  - Decision: keep as nice-to-have utility (manual PixelStorage→DataTensor path). No callers but not dead weight.
 
-- [ ] **Consider merging `getTrainBatch`/`getTestBatch` into one method** (`dataloader.mojo:137`)
-  - Comment suggests a single method with a `test_or_train` arg (or a `DataSplit` enum).
+- [x] **Consider merging `getTrainBatch`/`getTestBatch` into one method** (`dataloader.mojo:137`)
+  - Decision: skip. Two 10-line methods, callers are already explicit, no real duplication cost.
 
-- [ ] **`_readData` (deprecated): skip `InlineArray` intermediate** (`dataloader.mojo:193`)
-  - Dead method anyway — delete or keep the idea as a comment for future `_readTrainData` optimization.
+- [x] **`_readData` (deprecated): skip `InlineArray` intermediate** (`dataloader.mojo:193`)
+  - Already removed; only `_readTrainData`/`_readTestData` remain.
 
 ---
 
 ## Logging (`resultlogger.mojo`)
 
-- [ ] **Implement JSON log format** (`resultlogger.mojo:12`, `resultlogger.mojo:29`)
-  - `LogFormat.JSON` is defined but `toCSV`/`getHeaders` are the only trait methods. Add `toJSON`.
+- [x] **Implement JSON log format** (`resultlogger.mojo:12`, `resultlogger.mojo:29`)
+  - Decision: skip. CSV sufficient for current benchmarking needs.
 
-- [ ] **`LeNet5Logger.test_size` field — clarify or improve** (`resultlogger.mojo:96`)
-  - Comment says "kinda just gonna be the batch_size since CPU only for now." Revisit when GPU
-    logging is wired up.
+- [x] **`LeNet5Logger.test_size` field — clarify or improve** (`resultlogger.mojo:96`)
+  - `TrainingResult.test_size` renamed to `sample_size`. `InferenceResult.test_size` kept
+    (correct name for inference count). Stale comment removed.
 
-- [ ] **`headers_written: Bool` — make this better** (`resultlogger.mojo:191`)
-  - Likely should be handled at file-open time or via a first-write check, not a mutable bool field.
-  - **Blocks the logger-overload unification below**: `headers_written` is why `logInferenceResult`/
-    `logTrainingEpoch` need `mut self`. Make header-writing idempotent (check file state in
-    `_writeResult` per write) so the log methods become `read self`.
+- [x] **`headers_written: Bool` — make this better** (`resultlogger.mojo:191`)
+  - Removed field; `_writeResult` now checks `os.path.exists` per write. All log methods drop `mut self`.
 
-- [ ] **Collapse the `runTrain`/`runTest` logger overloads into one `Optional[Logger]` param** (`main.mojo`)
-  - Currently each has two overloads (with/without `mut logger: MultiFileLogger`). Goal: one signature
-    `logger: Optional[MultiFileLogger] = None`, log only when present.
-  - **Blocked by the `mut` issue**: confirmed empirically that `mut x: Optional[T] = None` is illegal
-    (`error: 'mut' arguments must not have defaults`), and a by-value `Optional` copy breaks header
-    dedup. So this REQUIRES the non-`mut` logger change above first, then the read-only Optional works.
-  - Mildly tedious (touches `resultlogger.mojo` + 4 functions in `main.mojo`); do them together.
+- [x] **Collapse the `runTrain`/`runTest` logger overloads into one `Optional[Logger]` param** (`main.mojo`)
+  - Done: `runTrain`, `runTest`, `benchCPUInference` unified to `logger: Optional[MultiFileLogger] = None`.
+    `trainingParallel`/`training` in `cpu/ops.mojo` same. Added `ImplicitlyCopyable` to logger structs.
 
 ---
 
 ## Cleanup / Dead Code
 
-- [ ] **Remove unused `reflect` import in `main.mojo`** (`main.mojo:11`)
+- [x] **Remove unused `reflect` import in `main.mojo`** (`main.mojo:11`) — still used for `act_fn_name`; TODO was stale
 
-- [ ] **FIXME: `CPUSession` — tie arena + model lifetimes together** (`main.mojo:224`)
-  - `benchmark.keep(arena)` is used to keep the arena alive alongside `arena_model`.
-  - A `CPUSession[LeNet5]` struct (like `DeviceSession` on GPU) would make joint lifetimes explicit.
+- [x] **FIXME: `CPUSession` — tie arena + model lifetimes together** (`main.mojo:224`)
+  - `CPUSession` added to `cpu/model.mojo` (mirrors `DeviceSession`). Holds `arena` + `model`.
+    `benchmark.keep(arena)` removed. `CPUBumpArenaAllocator` import dropped from `main.mojo`.
 
-- [ ] **`FeatureGPUBuffers` still exists in `accel/model.mojo` after split to `accel/feature.mojo`**
-  - Both files define `FeatureGPUBuffers` and `FeatureGPU`. The one in `accel/model.mojo` appears
-    to be the old version. Confirm which is active and delete the other.
+- [x] **`FeatureGPUBuffers` still exists in `accel/model.mojo` after split to `accel/feature.mojo`**
+  - Resolved: `accel/feature.mojo` is canonical; `accel/model.mojo` copy removed.
 
 ---
 

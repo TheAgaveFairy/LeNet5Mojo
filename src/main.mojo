@@ -6,12 +6,13 @@ from std.time import perf_counter_ns
 from std.pathlib import Path
 from std.sys import argv
 import std.benchmark as benchmark
+import std.os as os
 from std.reflection.reflect import reflect
 from std.gpu.host import DeviceContext
 import std.sys.defines as defines
 
 from image import Image
-from cpu.model import LeNet5
+from cpu.model import LeNet5, CPUSession
 from constants import (
     ftype,
     act_fn,
@@ -26,14 +27,14 @@ from cpu.ops import (
     testing,
     testingParallel,
 )
-from cpu.arena import CPUBumpArenaAllocator
 
 from accel import (
-    batchedForwardMultiStream,
     DeviceSession,
     GPUBumpArenaAllocator,
 )
 from accel.ops import (
+    _batchRun,
+    StreamSlot,
     normalizeInputsKernel,
     conv1FusedKernel,
     maxPool1Kernel,
@@ -57,6 +58,7 @@ comptime act_fn_name = reflect[act_fn].base_name()
 
 comptime N_WARMUP = defines.get_defined_int["N_WARMUP", 3]()
 comptime N_PASSES = defines.get_defined_int["N_PASSES", 10]()
+comptime BENCH_ONLY = defines.is_defined["BENCH_ONLY"]()
 
 
 def main() raises:
@@ -73,42 +75,72 @@ def main() raises:
 
     var data_repo = MNISTDataRepository()
 
-    comptime cpu_batch_size = 300
-    seed(42069)
+    comptime if BENCH_ONLY:
+        var model_path = String("models/deleteme.test")
+        if not os.path.exists(model_path):
+            print("cannot load model: file not found:", model_path, file=stderr)
+            print(
+                "run without -D BENCH_ONLY first to train and save.",
+                file=stderr,
+            )
+            return
+        print("BENCH_ONLY: loading '" + model_path + "'...")
+        var modelCPU = LeNet5()
+        modelCPU.loadFromFile[ftype](Path(model_path))
+        var act_name = materialize[act_fn_name]()
+        var threads = num_logical_cores()
+        var bench_logger = MultiFileLogger(
+            "results/",
+            String(t"mode=bench_thread={threads}_act={act_name}_run={run_id}"),
+            String(t"mode=bench_train_noop_run={run_id}"),
+        )
+        var infer_res = benchCPUInference(
+            modelCPU, data_repo.test_data, bench_logger
+        )
+        var testing_ms = infer_res.elapsed_ns // 1_000_000
+        var cpu_fps = UInt(infer_res.count) * 1_000_000_000 // infer_res.elapsed_ns
+        var accuracy_pct = infer_res.correct * 100 // infer_res.count
+        print(
+            t"alloc=bench, act_fn={act_name}, threads={threads},"
+            t" correct={infer_res.correct}, total_count={infer_res.count},"
+            t" ftype={ftype}, testing_ms={testing_ms},"
+            t" fps={cpu_fps}, accuracy_pct={accuracy_pct}"
+        )
+        runGPUTest(modelCPU, data_repo, run_id)
+        benchmark.keep(data_repo)
+    else:
+        comptime cpu_batch_size = 300
+        seed(42069)
 
-    var arena = CPUBumpArenaAllocator(LeNet5._calcArenaSize())
-    var arena_model = LeNet5(arena)
-    arena_model.zero()
-    arena_model.randomizeWeights()
+        var session = CPUSession()
+        session.model.zero()
+        session.model.randomizeWeights()
 
-    trainAndTest(
-        arena_model,
-        data_repo,
-        "arena",
-        run_id,
-        parallel=True,
-        batch_size=cpu_batch_size,
-    )
+        trainAndTest(
+            session.model,
+            data_repo,
+            "arena",
+            run_id,
+            parallel=True,
+            batch_size=cpu_batch_size,
+        )
 
-    try:
-        arena_model.saveToFile(Path("models/deleteme.test"))
-    except e:
-        print(e, file=stderr)
-    benchmark.keep(
-        arena
-    )  # FIXME: joint origins — could wrap into CPUSession.{LeNet5, Arena}
+        try:
+            session.model.saveToFile(Path("models/deleteme.test"))
+        except e:
+            print(e, file=stderr)
 
-    # load the model saved above and test it independently
-    comptime model_name = "models/deleteme.test"
-    print("Loading and testing a saved model: '" + model_name + "'")
-    var modelCPU = LeNet5()
-    modelCPU.loadFromFile[ftype](model_name)
-    var saved_res = runTest(modelCPU, data_repo.test_data)
-    print("\t", saved_res.correct, "/", saved_res.count, "correct")
-    print("\t", saved_res.elapsed_ns // 1_000_000, "ms")
+        # load the model saved above and test it independently
+        comptime model_name = "models/deleteme.test"
+        print("Loading and testing a saved model: '" + model_name + "'")
+        var modelCPU = LeNet5()
+        modelCPU.loadFromFile[ftype](model_name)
+        var saved_res = runTest(modelCPU, data_repo.test_data)
+        print("\t", saved_res.correct, "/", saved_res.count, "correct")
+        print("\t", saved_res.elapsed_ns // 1_000_000, "ms")
 
-    runGPUTest(modelCPU, data_repo, run_id)
-    benchmark.keep(data_repo)
+        runGPUTest(modelCPU, data_repo, run_id)
+        benchmark.keep(data_repo)
 
 
 @fieldwise_init
@@ -144,22 +176,7 @@ struct InferenceSummary(Copyable, Movable):
 def runTrain(
     mut model: LeNet5,
     data: List[Image],
-    *,
-    parallel: Bool = True,
-    batch_size: Int = 300,
-) -> TrainingSummary:
-    var start_time = perf_counter_ns()
-    if parallel:
-        trainingParallel(model, data, batch_size)
-    else:
-        training(model, data, batch_size)
-    return TrainingSummary(perf_counter_ns() - start_time)
-
-
-def runTrain(
-    mut model: LeNet5,
-    data: List[Image],
-    mut logger: MultiFileLogger,
+    logger: Optional[MultiFileLogger] = None,
     *,
     parallel: Bool = True,
     batch_size: Int = 300,
@@ -175,22 +192,7 @@ def runTrain(
 def runTest(
     model: LeNet5,
     data: List[Image],
-    *,
-    parallel: Bool = True,
-) -> InferenceSummary:
-    var start_time = perf_counter_ns()
-    var correct: Int
-    if parallel:
-        correct = testingParallel(model, data)
-    else:
-        correct = testing(model, data)
-    return InferenceSummary(correct, len(data), perf_counter_ns() - start_time)
-
-
-def runTest(
-    model: LeNet5,
-    data: List[Image],
-    mut logger: MultiFileLogger,
+    logger: Optional[MultiFileLogger] = None,
     *,
     parallel: Bool = True,
 ) -> InferenceSummary:
@@ -201,19 +203,20 @@ def runTest(
     else:
         correct = testing(model, data)
     var elapsed_ns = perf_counter_ns() - start_time
-    try:
-        logger.logInferenceResult(
-            "CPU", elapsed_ns, correct, len(data), 1, 1, ftype
-        )
-    except e:
-        print(e, file=stderr)
+    if logger:
+        try:
+            logger.value().logInferenceResult(
+                "CPU", elapsed_ns, correct, len(data), 1, 1, ftype
+            )
+        except e:
+            print(e, file=stderr)
     return InferenceSummary(correct, len(data), elapsed_ns)
 
 
 def benchCPUInference(
     model: LeNet5,
     data: List[Image],
-    mut logger: MultiFileLogger,
+    logger: Optional[MultiFileLogger] = None,
     *,
     parallel: Bool = True,
 ) raises -> InferenceSummary:
@@ -228,15 +231,16 @@ def benchCPUInference(
         if i == 0:
             correct = res.correct
     var stats = _timing_stats(times)
-    try:
-        logger.logInferenceResult(
-            "CPU", stats.median_ns, correct, len(data), 1, 1, ftype
-        )
-    except e:
-        print(e, file=stderr)
-    var us_per_img = stats.median_ns // UInt(len(data)) // 1000
+    if logger:
+        try:
+            logger.value().logInferenceResult(
+                "CPU", stats.median_ns, correct, len(data), 1, 1, ftype
+            )
+        except e:
+            print(e, file=stderr)
+    var ns_per_img = stats.median_ns // UInt(len(data))
     print(
-        t"  median={stats.median_ns//1_000_000}ms ({us_per_img}µs/img),"
+        t"  median={stats.median_ns//1_000_000}ms ({ns_per_img}ns/img),"
         t" min={stats.min_ns//1_000_000}ms, max={stats.max_ns//1_000_000}ms"
     )
     return InferenceSummary(correct, len(data), stats.median_ns)
@@ -299,7 +303,7 @@ def runGPUTest(
     data_repo: MNISTDataRepository,
     run_id: String,
 ) raises:
-    comptime batch_size = GPU_STREAM_BATCH_SIZE  # more than ~120 fails on my RTX3070
+    comptime batch_size = GPU_STREAM_BATCH_SIZE
     with DeviceContext() as ctx:
         var gpu_session = DeviceSession[GPUBumpArenaAllocator](ctx)
         gpu_session.bufs.loadCPUWeights(model)
@@ -326,33 +330,22 @@ def runGPUTest(
         comptime n_proc = (COUNT_TEST // batch_size) * batch_size
         comptime eff_batch_ms = batch_size * NUM_GPU_STREAMS
 
+        # Allocate slots once — reused across all warmup and timed passes
+        var slots_s1 = alloc[StreamSlot[batch_size]](1)
+        (slots_s1 + 0).init_pointee_move(StreamSlot[batch_size]())
+        var slots_sN = alloc[StreamSlot[batch_size]](NUM_GPU_STREAMS)
+        for s in range(NUM_GPU_STREAMS):
+            (slots_sN + s).init_pointee_move(StreamSlot[batch_size]())
+
         # warmup both stream configs
         for _ in range(N_WARMUP):
-            var wc1 = batchedForwardMultiStream[batch_size, 1](
-                ctx,
-                batched_data,
-                gpu_session.model,
-                norm,
-                conv1,
-                pool1,
-                conv2,
-                pool2,
-                conv3,
-                matmul,
-                gather,
+            var wc1 = _batchRun[batch_size, 1](
+                slots_s1, batched_data, gpu_session.model,
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
             )
-            var wcN = batchedForwardMultiStream[batch_size, NUM_GPU_STREAMS](
-                ctx,
-                batched_data,
-                gpu_session.model,
-                norm,
-                conv1,
-                pool1,
-                conv2,
-                pool2,
-                conv3,
-                matmul,
-                gather,
+            var wcN = _batchRun[batch_size, NUM_GPU_STREAMS](
+                slots_sN, batched_data, gpu_session.model,
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
             )
             benchmark.keep(wc1)
             benchmark.keep(wcN)
@@ -362,30 +355,21 @@ def runGPUTest(
         var correct_s1 = 0
         for i in range(N_PASSES):
             var t = perf_counter_ns()
-            var c = batchedForwardMultiStream[batch_size, 1](
-                ctx,
-                batched_data,
-                gpu_session.model,
-                norm,
-                conv1,
-                pool1,
-                conv2,
-                pool2,
-                conv3,
-                matmul,
-                gather,
+            var c = _batchRun[batch_size, 1](
+                slots_s1, batched_data, gpu_session.model,
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
             )
             times_s1.append(perf_counter_ns() - t)
             if i == 0:
                 correct_s1 = c
         var stats_s1 = _timing_stats(times_s1)
         var fps_s1 = UInt(n_proc) * 1_000_000_000 // stats_s1.median_ns
-        var us_s1 = stats_s1.median_ns // UInt(n_proc) // 1000
+        var ns_s1 = stats_s1.median_ns // UInt(n_proc)
         var acc_s1 = correct_s1 * 100 // n_proc
         print(
             t"batchedForwardMultiStream[s=1]: eff_batch={batch_size},"
             t" {correct_s1}/{n_proc} ({acc_s1}%) correct,"
-            t" {stats_s1.median_ns//1_000_000}ms ({us_s1}µs/img), {fps_s1} fps"
+            t" {stats_s1.median_ns//1_000_000}ms ({ns_s1}ns/img), {fps_s1} fps"
             t" [min={stats_s1.min_ns//1_000_000}ms"
             t" max={stats_s1.max_ns//1_000_000}ms]"
         )
@@ -407,30 +391,21 @@ def runGPUTest(
         var correct_ms = 0
         for i in range(N_PASSES):
             var t = perf_counter_ns()
-            var c = batchedForwardMultiStream[batch_size, NUM_GPU_STREAMS](
-                ctx,
-                batched_data,
-                gpu_session.model,
-                norm,
-                conv1,
-                pool1,
-                conv2,
-                pool2,
-                conv3,
-                matmul,
-                gather,
+            var c = _batchRun[batch_size, NUM_GPU_STREAMS](
+                slots_sN, batched_data, gpu_session.model,
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
             )
             times_ms.append(perf_counter_ns() - t)
             if i == 0:
                 correct_ms = c
         var stats_ms = _timing_stats(times_ms)
         var fps_ms = UInt(n_proc) * 1_000_000_000 // stats_ms.median_ns
-        var us_ms = stats_ms.median_ns // UInt(n_proc) // 1000
+        var ns_ms = stats_ms.median_ns // UInt(n_proc)
         var acc_ms = correct_ms * 100 // n_proc
         print(
             t"batchedForwardMultiStream[s={NUM_GPU_STREAMS}]:"
             t" eff_batch={eff_batch_ms}, {correct_ms}/{n_proc} ({acc_ms}%)"
-            t" correct, {stats_ms.median_ns//1_000_000}ms ({us_ms}µs/img),"
+            t" correct, {stats_ms.median_ns//1_000_000}ms ({ns_ms}ns/img),"
             t" {fps_ms} fps [min={stats_ms.min_ns//1_000_000}ms"
             t" max={stats_ms.max_ns//1_000_000}ms]"
         )
@@ -446,4 +421,11 @@ def runGPUTest(
             )
         except e:
             print(e, file=stderr)
+
+        (slots_s1 + 0).destroy_pointee()
+        slots_s1.free()
+        for s in range(NUM_GPU_STREAMS):
+            (slots_sN + s).destroy_pointee()
+        slots_sN.free()
+
         benchmark.keep(gpu_session)

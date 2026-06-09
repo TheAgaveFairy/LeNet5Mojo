@@ -5,7 +5,7 @@ from constants import act_fn
 
 
 @fieldwise_init
-struct LogFormat(Copyable, Movable):
+struct LogFormat(Copyable, Movable, ImplicitlyCopyable):
     var value: Int  # enum esque
 
     comptime CSV = LogFormat(0)
@@ -107,7 +107,7 @@ struct TrainingResult(LogEntry):
     var epoch: Int
     var elapsed_ns: UInt
     var correct: Int
-    var test_size: Int  # kinda just gonna be the batch_size since CPU only for now # TODO:
+    var sample_size: Int
     var loss: Float32
     var learning_rate: Float32
     var ftype: DType
@@ -119,7 +119,7 @@ struct TrainingResult(LogEntry):
         epoch: Int,
         elapsed_ns: UInt,
         correct: Int,
-        test_size: Int,
+        sample_size: Int,
         loss: Float32,
         learning_rate: Float32,
         ftype: DType,
@@ -134,7 +134,7 @@ struct TrainingResult(LogEntry):
         self.epoch = epoch
         self.elapsed_ns = elapsed_ns
         self.correct = correct
-        self.test_size = test_size
+        self.sample_size = sample_size
         self.loss = loss
         self.learning_rate = learning_rate
         self.ftype = ftype
@@ -155,7 +155,7 @@ struct TrainingResult(LogEntry):
             + ","
             + String(self.correct)
             + ","
-            + String(self.test_size)
+            + String(self.sample_size)
             + ","
             + String(self.loss)
             + ","
@@ -180,7 +180,7 @@ struct TrainingResult(LogEntry):
 
 trait MyLogger:
     def logInferenceResult(
-        mut self,
+        self,
         device: String,
         elapsed_ns: UInt,
         correct: Int,
@@ -192,7 +192,7 @@ trait MyLogger:
         ...
 
     def logTrainingEpoch(
-        mut self,
+        self,
         device: String,
         epoch: Int,
         elapsed_ns: UInt,
@@ -208,32 +208,18 @@ trait MyLogger:
 comptime LeNet5Logger = MyLogger & Copyable & Movable
 
 
-@fieldwise_init
-struct ResultLogger(LeNet5Logger):
+struct ResultLogger(LeNet5Logger, ImplicitlyCopyable):
     var output_path: String
     var format_type: LogFormat
-    var headers_written: Bool  # TODO: make this better
 
     def __init__(
         out self, output_path: String, format_type: LogFormat = LogFormat.CSV
     ):
         self.output_path = output_path
         self.format_type = format_type.copy()
-        try:
-            if os.path.exists(output_path):
-                with open(output_path, "r") as f:
-                    if f.read(10) == "timestamp,":
-                        self.headers_written = True
-                    else:
-                        self.headers_written = False
-            else:
-                self.headers_written = False
-        except e:
-            print("ResultLogger init error:", e)
-            self.headers_written = False
 
     def logInferenceResult(
-        mut self,
+        self,
         device: String,
         elapsed_ns: UInt,
         correct: Int,
@@ -254,7 +240,7 @@ struct ResultLogger(LeNet5Logger):
         self._writeResult(result)
 
     def logTrainingEpoch(
-        mut self,
+        self,
         device: String,
         epoch: Int,
         elapsed_ns: UInt,
@@ -276,28 +262,23 @@ struct ResultLogger(LeNet5Logger):
         )
         self._writeResult(result)
 
-    def _writeResult[T: LogEntry](mut self, result: T) raises -> None:
-        var content: String = ""
-
-        if not self.headers_written:
+    def _writeResult[T: LogEntry](self, result: T) raises -> None:
+        var content = String("")
+        if not os.path.exists(self.output_path):
             if self.format_type == materialize[LogFormat.CSV]():
                 content += result.getHeaders() + "\n"
             else:
                 content += "INVALID HEADER\n"
-
-            self.headers_written = True
-
         if self.format_type == materialize[LogFormat.CSV]():
             content += result.toCSV() + "\n"
         else:
             content += "INVALID CONTENT\n"
-
         with open(self.output_path, "a") as file:
             file.write(content)
 
 
 @fieldwise_init
-struct MultiFileLogger(LeNet5Logger):
+struct MultiFileLogger(LeNet5Logger, ImplicitlyCopyable):
     var base_path: String
     var format_type: LogFormat
     var inference_logger: ResultLogger
@@ -326,7 +307,7 @@ struct MultiFileLogger(LeNet5Logger):
         )
 
     def logInferenceResult(
-        mut self,
+        self,
         device: String,
         elapsed_ns: UInt,
         correct: Int,
@@ -346,7 +327,7 @@ struct MultiFileLogger(LeNet5Logger):
         )
 
     def logTrainingEpoch(
-        mut self,
+        self,
         device: String,
         epoch: Int,
         elapsed_ns: UInt,

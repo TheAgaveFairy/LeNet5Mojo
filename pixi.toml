@@ -8,10 +8,11 @@ version = "0.2.0"
 [tasks]
 formatall = "mojo format src/*.mojo src/cpu/*.mojo src/accel/*.mojo tests/*.mojo"
 doit = {cmd = "mojo src/main.mojo", cwd = "."}
+bench = {cmd = "mojo -D BENCH_ONLY src/main.mojo", cwd = "."}
 sanitize = { cmd = "mojo build -g2 -O1 --sanitize=address -Xlinker -lm src/main.mojo && ./main"}
 cdebug = { cmd = "mojo build -g2 -O1 --debug-info-language=C -Xlinker -lm src/main.mojo"}
 buildmain = { cmd = "mojo build -Xlinker -lm main.mojo", cwd = "src" }
-nsysprofile = { cmd = "nsys profile --trace=nvtx,cuda --force-overwrite=true --output=basic mojo src/main.mojo && nsys stats --force-export=true basic.nsys-rep", cwd = "."}
+nsysprofile = { cmd = "nsys profile --trace=nvtx,cuda --force-overwrite=true --output=basic mojo -D BENCH_ONLY src/main.mojo && nsys stats --force-export=true basic.nsys-rep", cwd = "."}
 nsysprofile_gpu = { cmd = "nsys profile --trace=nvtx,cuda --force-overwrite=true --output=gpu_profile mojo -I src tests/profile_gpu.mojo && nsys stats --force-export=true gpu_profile.nsys-rep", cwd = "."}
 ncuprofile_gpu = { cmd = "ncu --set basic --launch-count 80 --target-processes all -o ncu_gpu mojo -I src tests/profile_gpu.mojo", cwd = "."}
 # Steady-state clock lock for reproducible benchmarking/profiling (needs sudo,

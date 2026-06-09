@@ -2,6 +2,7 @@ from layout import Layout, LayoutTensor
 from std.math import abs, sqrt, max
 from std.bit import next_power_of_two  # prev_power_of_two
 from std.sys import size_of, stderr
+import std.sys.defines as defines
 
 from std.gpu.host import (
     DeviceContext,
@@ -40,10 +41,10 @@ from constants import (
 from accel.model import LeNet5GPU
 from accel.feature import FeatureGPU, FeatureGPUBuffers
 from accel.arena import GPUBumpArenaAllocator
-from dataloader import MNISTBatch
+from dataloader import MNISTDataView
 
-comptime div_chans_conv2 = 8  # any lower uses too many resources
-comptime div_chans_conv3 = 8  # 8  # needs to be a factor of 120
+comptime div_chans_conv2 = defines.get_defined_int["DIV_CHANS_CONV2", 4]()  # lower risks using too many resources, any factor of 16
+comptime div_chans_conv3 = defines.get_defined_int["DIV_CHANS_CONV3", 8]()  # needs to be a factor of 120
 
 comptime conv3_feat_total = LAYER4 * LENGTH_KERNEL * LENGTH_KERNEL
 comptime conv3_reduction_threads = next_power_of_two(conv3_feat_total)
@@ -59,65 +60,38 @@ def normalizeInputsKernel[
     ],
     feats: UnsafePointer[FeatureGPU, MutAnyOrigin],
 ):
-    """Call with blocks = batch_size, threads_per_block = (IMAGE_SIZE, IMAGE_SIZE). Remember, IMAGE_SIZE is unpadded. We need to both pad *and* normalize into our feature buffer inputs.
+    """Call with grid_dim=batch_size, block_dim=next_power_of_two(IMAGE_SIZE*IMAGE_SIZE) (1D).
+    Pads and normalizes raw uint8 pixels into the feature input buffer.
     """
-    var img = block_idx.x
-    var row = thread_idx.y  # 0..IMAGE_SIZE
-    var col = thread_idx.x  # 0..IMAGE_SIZE
-    var flat = row * IMAGE_SIZE + col
-
-    # reduction
-    comptime reduction_size = next_power_of_two(
-        IMAGE_SIZE * IMAGE_SIZE
-    )  # 1024 from 768
-    var add_buffer = LayoutTensor[
-        DType.uint64,
-        Layout.row_major(reduction_size),
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-    ].stack_allocation()  # dtype needs to fit hypothetical max of (UInt8.MAX * IMAGE_SIZE * IMAGE_SIZE) which requires at least 18bits
-    var std_buffer = LayoutTensor[
-        DType.uint64,
-        Layout.row_major(reduction_size),
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-    ].stack_allocation()  # dtype needs to fit hypothetical max of (UInt8.MAX * IMAGE_SIZE * IMAGE_SIZE * 2) which requires at least 36bits
-    var pix = UInt64(rebind[UInt8](raw_pixels[img, row, col]))
-    add_buffer[flat] = pix
-    std_buffer[flat] = pix * pix
-
     comptime img_sz = IMAGE_SIZE * IMAGE_SIZE
-    comptime remainder = reduction_size - img_sz
-    if flat < remainder:
-        add_buffer[flat + img_sz] = 0
-        std_buffer[flat + img_sz] = 0
+    comptime reduction_size = next_power_of_two(img_sz)
 
+    var img = block_idx.x
+    var flat = thread_idx.x
+    var active = flat < img_sz
+    # inactive threads clamp to (0,0) — valid index, value masked to 0 below
+    var row = (flat // IMAGE_SIZE) if active else 0
+    var col = flat % IMAGE_SIZE
+    var pix = sftype(rebind[UInt8](raw_pixels[img, row, col])) if active else sftype(0)
+
+    var sum_total = block.sum[block_size=reduction_size, broadcast=False](pix)
+    var sq_total = block.sum[block_size=reduction_size, broadcast=False](pix * pix)
+
+    # 2-element shared buffer: [mean, std]. Only thread 0 writes, all active threads read.
+    var stats = LayoutTensor[
+        ftype, Layout.row_major(2), MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+    if flat == 0:
+        var mean_val = sum_total / sftype(img_sz)
+        var temp = sq_total / sftype(img_sz) - mean_val * mean_val
+        stats[0] = mean_val
+        stats[1] = sqrt(max(temp, sftype(0))) + sftype(1e-7)
     barrier()
 
-    # TODO: block.sum() for reduction, check memory accesses (performance)
-    var i = 1
-    while i < reduction_size:
-        if flat % (2 * i) == 0:  # and (flat + i) < reduction_size:
-            add_buffer[flat] += add_buffer[flat + i]
-            std_buffer[flat] += std_buffer[flat + i]
-        barrier()
-        i *= 2
-    var mean = sftype(rebind[UInt64](add_buffer[0])) / sftype(
-        IMAGE_SIZE * IMAGE_SIZE
-    )
-    var temp = sftype(rebind[UInt64](std_buffer[0])) / sftype(
-        IMAGE_SIZE * IMAGE_SIZE
-    ) - (mean * mean)
-    var std = sqrt(max(Float32(temp), Float32(0))) + sftype(
-        1e-7
-    )  # clamp to avoid NaN from negative temp (float32 cancellation)
-    barrier()
-
-    # normalize and load
-    var norm: sftype = (sftype(pix) - mean) / sftype(std)
-    feats[img].input[
-        0, row + PADDING, col + PADDING
-    ] = norm  # buffers are zeroed at arena / allocator init
+    if active:
+        # buffers are zeroed at arena / allocator init, so padding border is already 0
+        feats[img].input[0, row + PADDING, col + PADDING] = (pix - stats[0]) / stats[1]
 
 
 def gatherOutputsKernel[
@@ -140,7 +114,7 @@ def matMulFusedKernel[
     Enough threads per block to do one output channel at a time as a reduction,
     so make it a power of two.
     Grid Dim = batch_size
-    Block Dim = next_power_of_two(in_chans)
+    Block Dim = next_power_of_two(in_chans).
     """
     var img_idx = block_idx.x
     var thread = thread_idx.x
@@ -230,6 +204,38 @@ def maxPool1Kernel[
 
 def conv3FusedKernel[
     batch_size: Int
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None: # TODO: convert these kernels to take Spans
+    """Call with grid_dim = (batch_size), block_dim = LAYER5. Each thread handles one output channel."""
+    var img_idx = block_idx.x
+    var oc = thread_idx.x
+
+    comptime num_feats = LAYER4 * LENGTH_KERNEL * LENGTH_KERNEL
+
+    var local_feats = LayoutTensor[
+        ftype,
+        FeatureGPU.layer4_layout,
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+
+    for i in range(oc, num_feats, LAYER5):
+        local_feats.ptr[i] = feats[img_idx].layer4.ptr[i]
+
+    barrier()
+
+    var acc: sftype = 0.0
+    comptime for ic in range(LAYER4):
+        comptime for kw in range(LENGTH_KERNEL):
+            comptime for kh in range(LENGTH_KERNEL):
+                acc += rebind[sftype](local_feats[ic, kw, kh]) * rebind[sftype](lenet.weight4_5[ic, oc, kw, kh])
+
+    feats[img_idx].layer5[oc, 0, 0] = act_fn.simdForward(
+        acc + lenet.bias4_5[oc]
+    )
+
+
+def conv3FusedKernelOld[
+    batch_size: Int
 ](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
     """
     Grid Dim = (batch_size, chan_div = 8)
@@ -286,6 +292,7 @@ def conv2FusedKernel[
     Block Dim = (LAYER3 // div_chans, LENGTH_FEATURE3, LENGTH_FEATURE3).
     """
     comptime CHANS_TO_HANDLE = LAYER3 // div_chans_conv2
+    comptime assert LAYER3 % div_chans_conv2 == 0, "conv2 chan div ! %=0"
     comptime TPB = CHANS_TO_HANDLE * LENGTH_FEATURE3 * LENGTH_FEATURE3
 
     var img_idx = block_idx.x
@@ -324,13 +331,15 @@ def conv2FusedKernel[
 
     var idx = flat_idx
     while idx < local_image.size():
-        var tch = idx // (LENGTH_FEATURE2 * LENGTH_FEATURE2)
-        var rem = idx % (LENGTH_FEATURE2 * LENGTH_FEATURE2)
-        var tr = rem // LENGTH_FEATURE2
-        var tc = rem % LENGTH_FEATURE2
-        local_image[tch, tr, tc] = feats[img_idx].layer2[tch, tr, tc]
+        #var tch = idx // (LENGTH_FEATURE2 * LENGTH_FEATURE2)
+        #var rem = idx % (LENGTH_FEATURE2 * LENGTH_FEATURE2)
+        #var tr = rem // LENGTH_FEATURE2
+        #var tc = rem % LENGTH_FEATURE2
+        #local_image[tch, tr, tc] = feats[img_idx].layer2[tch, tr, tc]
+        local_image.ptr[idx] = feats[img_idx].layer2.ptr[idx]
         idx += TPB
 
+    _ = """
     var local_biases = LayoutTensor[
         ftype,
         Layout.row_major(CHANS_TO_HANDLE),
@@ -341,7 +350,9 @@ def conv2FusedKernel[
         local_biases[local_chan] = lenet.bias2_3[global_chan]
 
     barrier()
-
+    """
+    barrier()
+    
     var result: sftype = 0
     comptime for ic in range(LAYER2):
         comptime for i in range(LENGTH_KERNEL):
@@ -353,7 +364,7 @@ def conv2FusedKernel[
                 ) * rebind[sftype](local_kernels[ic, local_chan, i, j])
 
     feats[img_idx].layer3[global_chan, row, col] = act_fn.simdForward(
-        rebind[sftype](result + local_biases[local_chan])
+        rebind[sftype](result + lenet.bias2_3[global_chan])
     )
 
 
@@ -638,7 +649,7 @@ struct StreamSlot[batch_size: Int](Movable):
             raw_pixels_tensor,
             self.features_ptr,
             grid_dim=(Self.batch_size),
-            block_dim=(IMAGE_SIZE, IMAGE_SIZE),
+            block_dim=(next_power_of_two(IMAGE_SIZE * IMAGE_SIZE)),
         )
         self.ctx.enqueue_function(
             conv1,
@@ -676,8 +687,8 @@ struct StreamSlot[batch_size: Int](Movable):
             conv3,
             model,
             self.features_ptr,
-            grid_dim=(Self.batch_size, div_chans_conv3),
-            block_dim=(conv3_reduction_threads),
+            grid_dim=(Self.batch_size),
+            block_dim=(LAYER5),
         )
         self.ctx.enqueue_function(
             matmul,
@@ -709,11 +720,11 @@ struct StreamSlot[batch_size: Int](Movable):
         return correct
 
 
-def batchedForwardMultiStream[
-    batch_size: Int = GPU_STREAM_BATCH_SIZE, num_streams: Int = NUM_GPU_STREAMS
+def _batchRun[
+    batch_size: Int, num_streams: Int
 ](
-    ctx: DeviceContext,
-    data: MNISTBatch,
+    stream_slots: UnsafePointer[StreamSlot[batch_size], MutAnyOrigin],
+    data: MNISTDataView,
     model: LeNet5GPU,
     norm: DeviceFunction,
     conv1: DeviceFunction,
@@ -724,50 +735,72 @@ def batchedForwardMultiStream[
     matmul: DeviceFunction,
     gather: DeviceFunction,
 ) raises -> Int:
-    """Effective batch size is batch_size * num_streams."""
+    """Run batches over pre-allocated stream slots. Does not alloc or free slots."""
     var count = len(data)
     var total_correct = 0
     comptime batch_bytes = batch_size * IMAGE_SIZE * IMAGE_SIZE
     var total_batches = count // batch_size
 
-    try:
-        var stream_slots = alloc[StreamSlot[batch_size]](num_streams)
-        for s in range(num_streams):
-            (stream_slots + s).init_pointee_move(StreamSlot[batch_size]())
+    for batch_num in range(total_batches):
+        var slot_idx = batch_num % num_streams
+        var batch_start = batch_num * batch_size * IMAGE_SIZE * IMAGE_SIZE
+        var batch_span = data.raw_pixels[
+            batch_start : batch_start + batch_bytes
+        ]
 
-        for batch_num in range(total_batches):
-            var slot_idx = batch_num % num_streams
-            var batch_start = batch_num * batch_size * IMAGE_SIZE * IMAGE_SIZE
-            var batch_span = data.raw_pixels[
-                batch_start : batch_start + batch_bytes
-            ]
-
-            if batch_num >= num_streams:
-                var stale = batch_num - num_streams
-                var stale_start = stale * batch_size
-                total_correct += (stream_slots + slot_idx)[].getResults(
-                    data.raw_labels[stale_start : stale_start + batch_size]
-                )
-
-            (stream_slots + slot_idx)[].loadBatch(batch_span)
-            (stream_slots + slot_idx)[].doWork(
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather, model
-            )
-
-        var epilogue_start = max(0, total_batches - num_streams)
-        for batch_num in range(epilogue_start, total_batches):
-            var slot_idx = batch_num % num_streams
-            var label_start = batch_num * batch_size
+        if batch_num >= num_streams:
+            var stale = batch_num - num_streams
+            var stale_start = stale * batch_size
             total_correct += (stream_slots + slot_idx)[].getResults(
-                data.raw_labels[label_start : label_start + batch_size]
+                data.raw_labels[stale_start : stale_start + batch_size]
             )
 
+        (stream_slots + slot_idx)[].loadBatch(batch_span)
+        (stream_slots + slot_idx)[].doWork(
+            norm, conv1, pool1, conv2, pool2, conv3, matmul, gather, model
+        )
+
+    var epilogue_start = max(0, total_batches - num_streams)
+    for batch_num in range(epilogue_start, total_batches):
+        var slot_idx = batch_num % num_streams
+        var label_start = batch_num * batch_size
+        total_correct += (stream_slots + slot_idx)[].getResults(
+            data.raw_labels[label_start : label_start + batch_size]
+        )
+
+    return total_correct
+
+
+def batchedForwardMultiStream[
+    batch_size: Int = GPU_STREAM_BATCH_SIZE, num_streams: Int = NUM_GPU_STREAMS
+](
+    ctx: DeviceContext,
+    data: MNISTDataView,
+    model: LeNet5GPU,
+    norm: DeviceFunction,
+    conv1: DeviceFunction,
+    pool1: DeviceFunction,
+    conv2: DeviceFunction,
+    pool2: DeviceFunction,
+    conv3: DeviceFunction,
+    matmul: DeviceFunction,
+    gather: DeviceFunction,
+) raises -> Int:
+    """Effective batch size is batch_size * num_streams. Allocates and frees slots each call."""
+    var stream_slots = alloc[StreamSlot[batch_size]](num_streams)
+    for s in range(num_streams):
+        (stream_slots + s).init_pointee_move(StreamSlot[batch_size]())
+    try:
+        var result = _batchRun[batch_size, num_streams](
+            stream_slots, data, model, norm, conv1, pool1, conv2, pool2, conv3, matmul, gather
+        )
         for s in range(num_streams):
             (stream_slots + s).destroy_pointee()
         stream_slots.free()
-
+        return result
     except e:
+        for s in range(num_streams):
+            (stream_slots + s).destroy_pointee()
+        stream_slots.free()
         print("batchedForwardMultiStream ERROR", e)
         raise e^
-
-    return total_correct

@@ -40,10 +40,10 @@ comptime nelts = simd_width_of[ftype]()
 
 comptime GPU_STREAM_BATCH_SIZE = defines.get_defined_int[
     "GPU_STREAM_BATCH_SIZE", 50
-]()  # more than ~120 fails on my RTX3070
+]()  # divides 10000 & 60000 evenly (full coverage); ~2.5% under bs=75 peak; >120 cap since fixed
 comptime NUM_GPU_STREAMS = defines.get_defined_int[
-    "NUM_GPU_STREAMS", 3
-]()  # 2-4 probably generally best
+    "NUM_GPU_STREAMS", 5
+]()  # saturation knee ~5-6 after Tier A conv3 (low-occupancy kernels leave headroom); 8 wasted
 # comptime act_fn: ActivationFunction = GELU # options: ReLU, GELU, GELUFast, GELUTanh
 
 comptime act_fn = ConditionalType[

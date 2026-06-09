@@ -20,6 +20,14 @@ from std.os import abort
 comptime sitype = Scalar[DType.int32]  # for testing
 
 
+trait ArenaSizable:
+    """Structs that know their own byte footprint for arena allocation."""
+
+    @staticmethod
+    def sizeInBytes() -> Int:
+        ...
+
+
 trait CPUAllocator:
     # def __init__(out self, capacity_bytes: Int):
     #    ...

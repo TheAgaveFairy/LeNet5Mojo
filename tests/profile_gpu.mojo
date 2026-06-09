@@ -11,7 +11,7 @@ from constants import (
 )
 from cpu.model import LeNet5
 from cpu.ops import testing
-from dataloader import MNISTDataRepository, MNISTBatch
+from dataloader import MNISTDataRepository, MNISTDataView
 from accel import (
     batchedForwardMultiStream,
     DeviceSession,
@@ -84,14 +84,8 @@ def main() raises:
         )
         _ = warm_slot.getResults(Span(zero_labels))
 
-        var data: MNISTBatch
-        var total: Int
-        if use_test_data:
-            data = data_repo.getTestBatch(0, MNISTDataRepository.COUNT_TEST)
-            total = MNISTDataRepository.COUNT_TEST
-        else:
-            data = data_repo.getTrainBatch(0, MNISTDataRepository.COUNT_TRAIN)
-            total = MNISTDataRepository.COUNT_TRAIN
+        var total = MNISTDataRepository.COUNT_TEST if use_test_data else MNISTDataRepository.COUNT_TRAIN
+        var data = data_repo.getTestBatch(0, MNISTDataRepository.COUNT_TEST) if use_test_data else data_repo.getTrainBatch(0, MNISTDataRepository.COUNT_TRAIN)
 
         var correct = batchedForwardMultiStream[batch_size, num_streams](
             ctx,
@@ -115,8 +109,3 @@ def main() raises:
             total,
         )
         keep(gpu_session)
-    # FIXME: MNISTBatch holds Spans into data_repo's arena. Mojo doesn't track this origin
-    # dependency, so the compiler may destroy data_repo before inference completes.
-    # keep() forces data_repo to survive. Fix: MNISTBatch should carry the origin of its
-    # backing arena so the borrow checker can enforce the lifetime relationship.
-    keep(data_repo)

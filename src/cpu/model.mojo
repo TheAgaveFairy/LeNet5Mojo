@@ -19,7 +19,7 @@ from cpu.ops import (
     maxPoolBackward,
     argMax,
 )
-from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena
+from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena, ArenaSizable
 from activation_fn import ActivationFunction
 from constants import (
     ftype,
@@ -49,7 +49,7 @@ from constants import (
 )
 
 
-struct LeNet5(Movable):
+struct LeNet5(Movable, ArenaSizable):
     """
     The LeNet5 model. In the actual LeCun et al implementation, there is some
     notable sparsity in final layers that is not in this version, as well as
@@ -97,7 +97,7 @@ struct LeNet5(Movable):
     var bias5_6: LayoutTensor[ftype, Self.b56_layout, MutAnyOrigin]
 
     @staticmethod
-    def _calcArenaSize() -> Int:
+    def sizeInBytes() -> Int:
         var weights = comptime (
             Self.w01_layout.size()
             + Self.w23_layout.size()
@@ -336,7 +336,7 @@ struct LeNet5(Movable):
         )
 
     def predict(self, image: Image) -> Int:
-        var feat_arena = CPUArena(Feature._calcArenaSize())
+        var feat_arena = CPUArena(Feature.sizeInBytes())
         var feat = Feature(feat_arena)
         feat.loadInput(image)
         self.forward(feat)
@@ -464,7 +464,7 @@ struct LeNet5(Movable):
             Self._writeTensor(self.bias5_6, f)
 
 
-struct Feature(Movable):
+struct Feature(Movable, ArenaSizable):
     """
     These buffers hold intermediate results.
     """
@@ -503,7 +503,7 @@ struct Feature(Movable):
     var output: LayoutTensor[ftype, Feature.output_layout, MutAnyOrigin]
 
     @staticmethod
-    def _calcArenaSize() -> Int:
+    def sizeInBytes() -> Int:
         var n = comptime (
             Self.input_layout.size()
             + Self.layer1_layout.size()
@@ -573,3 +573,14 @@ struct Feature(Movable):
 
     # def __del__(deinit self):
     #    pass
+
+
+struct CPUSession:
+    """Ties arena and model lifetimes together — mirrors DeviceSession."""
+
+    var arena: CPUArena
+    var model: LeNet5
+
+    def __init__(out self):
+        self.arena = CPUArena(LeNet5.sizeInBytes())
+        self.model = LeNet5(self.arena)

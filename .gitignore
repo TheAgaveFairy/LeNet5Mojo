@@ -4,6 +4,11 @@
 
 batchedops.mojo
 
+# gpu profiling results
+*.nsys-rep
+*.sqlite
+
+
 # thank you for the refactor help, Claude Opus 4.7
 .agents/
 .claude/
@@ -11,8 +16,7 @@ batchedops.mojo
 ignoreme/
 models/
 scripts/
-results/*.csv
-results/oldbak/
+results/
 *.save
 *.bak
 main

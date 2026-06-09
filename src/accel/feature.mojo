@@ -1,4 +1,5 @@
 from layout import Layout, LayoutTensor
+from cpu.arena import ArenaSizable
 
 from std.gpu.host import DeviceBuffer, DeviceContext
 from std.sys.info import size_of
@@ -27,7 +28,7 @@ from image import Image
 from accel.arena import GPUBumpArenaAllocator
 
 
-struct FeatureGPUBuffers(Movable):
+struct FeatureGPUBuffers(Movable, ArenaSizable):
     """CPU-side — holds DeviceBuffer handles for host ops (map_to_host, loadInput, etc.).
     Owns the arena sub-buffer refs; FeatureGPU's LayoutTensors point into these.
     Arena must outlive both this struct and any FeatureGPU built from it.
