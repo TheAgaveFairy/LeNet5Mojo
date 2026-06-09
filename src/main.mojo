@@ -4,7 +4,6 @@ from std.sys.info import num_logical_cores
 from std.sys import stderr
 from std.time import perf_counter_ns
 from std.pathlib import Path
-from std.sys import argv
 import std.benchmark as benchmark
 import std.os as os
 from std.reflection.reflect import reflect
@@ -12,6 +11,7 @@ from std.gpu.host import DeviceContext
 import std.sys.defines as defines
 
 from image import Image
+from cli import printHelp, CliArgs
 from cpu.model import LeNet5, CPUSession
 from constants import (
     ftype,
@@ -58,14 +58,14 @@ comptime act_fn_name = reflect[act_fn].base_name()
 
 comptime N_WARMUP = defines.get_defined_int["N_WARMUP", 3]()
 comptime N_PASSES = defines.get_defined_int["N_PASSES", 10]()
-comptime BENCH_ONLY = defines.is_defined["BENCH_ONLY"]()
 
 
 def main() raises:
-    var args = argv()
-    if len(args) > 1 and args[1] == "--help":
-        print("-D ALPHA=[1..1000], -D ACT_FN, see constants.mojo")
+    var cli = CliArgs.parse()
+    if cli.help:
+        printHelp()
         return
+    var num_streams = cli.num_streams
 
     var run_id: String
     try:
@@ -75,12 +75,12 @@ def main() raises:
 
     var data_repo = MNISTDataRepository()
 
-    comptime if BENCH_ONLY:
+    if cli.bench_only:
         var model_path = String("models/deleteme.test")
         if not os.path.exists(model_path):
             print("cannot load model: file not found:", model_path, file=stderr)
             print(
-                "run without -D BENCH_ONLY first to train and save.",
+                "run without --bench-only / -D BENCH_ONLY first to train and save.",
                 file=stderr,
             )
             return
@@ -106,7 +106,7 @@ def main() raises:
             t" ftype={ftype}, testing_ms={testing_ms},"
             t" fps={cpu_fps}, accuracy_pct={accuracy_pct}"
         )
-        runGPUTest(modelCPU, data_repo, run_id)
+        runGPUTest(modelCPU, data_repo, run_id, num_streams)
         benchmark.keep(data_repo)
     else:
         comptime cpu_batch_size = 300
@@ -139,7 +139,7 @@ def main() raises:
         print("\t", saved_res.correct, "/", saved_res.count, "correct")
         print("\t", saved_res.elapsed_ns // 1_000_000, "ms")
 
-        runGPUTest(modelCPU, data_repo, run_id)
+        runGPUTest(modelCPU, data_repo, run_id, num_streams)
         benchmark.keep(data_repo)
 
 
@@ -302,6 +302,7 @@ def runGPUTest(
     model: LeNet5,
     data_repo: MNISTDataRepository,
     run_id: String,
+    num_streams: Int = NUM_GPU_STREAMS,
 ) raises:
     comptime batch_size = GPU_STREAM_BATCH_SIZE
     with DeviceContext() as ctx:
@@ -328,104 +329,59 @@ def runGPUTest(
         )
         # actual images processed: drop remainder that doesn't fill a full batch
         comptime n_proc = (COUNT_TEST // batch_size) * batch_size
-        comptime eff_batch_ms = batch_size * NUM_GPU_STREAMS
+        var eff_batch = batch_size * num_streams
 
-        # Allocate slots once — reused across all warmup and timed passes
-        var slots_s1 = alloc[StreamSlot[batch_size]](1)
-        (slots_s1 + 0).init_pointee_move(StreamSlot[batch_size]())
-        var slots_sN = alloc[StreamSlot[batch_size]](NUM_GPU_STREAMS)
-        for s in range(NUM_GPU_STREAMS):
-            (slots_sN + s).init_pointee_move(StreamSlot[batch_size]())
+        # Allocate slots once — reused across warmup and timed passes
+        var slots = alloc[StreamSlot[batch_size]](num_streams)
+        for s in range(num_streams):
+            (slots + s).init_pointee_move(StreamSlot[batch_size]())
 
-        # warmup both stream configs
+        # warmup
         for _ in range(N_WARMUP):
-            var wc1 = _batchRun[batch_size, 1](
-                slots_s1, batched_data, gpu_session.model,
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+            var wc = _batchRun[batch_size](
+                slots, batched_data, gpu_session.model,
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather, num_streams,
             )
-            var wcN = _batchRun[batch_size, NUM_GPU_STREAMS](
-                slots_sN, batched_data, gpu_session.model,
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
-            )
-            benchmark.keep(wc1)
-            benchmark.keep(wcN)
+            benchmark.keep(wc)
 
-        # single-stream: N_PASSES timed, take median
-        var times_s1 = List[UInt]()
-        var correct_s1 = 0
+        # N_PASSES timed, take median
+        var times = List[UInt]()
+        var correct = 0
         for i in range(N_PASSES):
             var t = perf_counter_ns()
-            var c = _batchRun[batch_size, 1](
-                slots_s1, batched_data, gpu_session.model,
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
+            var c = _batchRun[batch_size](
+                slots, batched_data, gpu_session.model,
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather, num_streams,
             )
-            times_s1.append(perf_counter_ns() - t)
+            times.append(perf_counter_ns() - t)
             if i == 0:
-                correct_s1 = c
-        var stats_s1 = _timing_stats(times_s1)
-        var fps_s1 = UInt(n_proc) * 1_000_000_000 // stats_s1.median_ns
-        var ns_s1 = stats_s1.median_ns // UInt(n_proc)
-        var acc_s1 = correct_s1 * 100 // n_proc
+                correct = c
+        var stats = _timing_stats(times)
+        var fps = UInt(n_proc) * 1_000_000_000 // stats.median_ns
+        var ns = stats.median_ns // UInt(n_proc)
+        var acc = correct * 100 // n_proc
         print(
-            t"batchedForwardMultiStream[s=1]: eff_batch={batch_size},"
-            t" {correct_s1}/{n_proc} ({acc_s1}%) correct,"
-            t" {stats_s1.median_ns//1_000_000}ms ({ns_s1}ns/img), {fps_s1} fps"
-            t" [min={stats_s1.min_ns//1_000_000}ms"
-            t" max={stats_s1.max_ns//1_000_000}ms]"
+            t"batchedForwardMultiStream[s={num_streams}]:"
+            t" eff_batch={eff_batch}, {correct}/{n_proc} ({acc}%)"
+            t" correct, {stats.median_ns//1_000_000}ms ({ns}ns/img),"
+            t" {fps} fps [min={stats.min_ns//1_000_000}ms"
+            t" max={stats.max_ns//1_000_000}ms]"
         )
         try:
             gpu_logger.logInferenceResult(
                 "GPU",
-                stats_s1.median_ns,
-                correct_s1,
+                stats.median_ns,
+                correct,
                 n_proc,
                 batch_size,
-                1,
+                num_streams,
                 ftype,
             )
         except e:
             print(e, file=stderr)
 
-        # multi-stream: N_PASSES timed, take median
-        var times_ms = List[UInt]()
-        var correct_ms = 0
-        for i in range(N_PASSES):
-            var t = perf_counter_ns()
-            var c = _batchRun[batch_size, NUM_GPU_STREAMS](
-                slots_sN, batched_data, gpu_session.model,
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather,
-            )
-            times_ms.append(perf_counter_ns() - t)
-            if i == 0:
-                correct_ms = c
-        var stats_ms = _timing_stats(times_ms)
-        var fps_ms = UInt(n_proc) * 1_000_000_000 // stats_ms.median_ns
-        var ns_ms = stats_ms.median_ns // UInt(n_proc)
-        var acc_ms = correct_ms * 100 // n_proc
-        print(
-            t"batchedForwardMultiStream[s={NUM_GPU_STREAMS}]:"
-            t" eff_batch={eff_batch_ms}, {correct_ms}/{n_proc} ({acc_ms}%)"
-            t" correct, {stats_ms.median_ns//1_000_000}ms ({ns_ms}ns/img),"
-            t" {fps_ms} fps [min={stats_ms.min_ns//1_000_000}ms"
-            t" max={stats_ms.max_ns//1_000_000}ms]"
-        )
-        try:
-            gpu_logger.logInferenceResult(
-                "GPU",
-                stats_ms.median_ns,
-                correct_ms,
-                n_proc,
-                batch_size,
-                NUM_GPU_STREAMS,
-                ftype,
-            )
-        except e:
-            print(e, file=stderr)
-
-        (slots_s1 + 0).destroy_pointee()
-        slots_s1.free()
-        for s in range(NUM_GPU_STREAMS):
-            (slots_sN + s).destroy_pointee()
-        slots_sN.free()
+        for s in range(num_streams):
+            (slots + s).destroy_pointee()
+        slots.free()
 
         benchmark.keep(gpu_session)

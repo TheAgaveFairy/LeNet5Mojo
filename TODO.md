@@ -99,6 +99,13 @@ Check items off as they are completed.
     it runtime would let one binary sweep stream counts without recompiling per value (the grid
     search rebuilds every cell today). Go knob-by-knob: tag each "needs comptime (why)" vs
     "could be runtime (why)", then migrate the runtime-safe ones. Big payoff for benchmarking.
+  - DONE: NUM_GPU_STREAMS → runtime `--num-streams N` (1..10); BENCH_ONLY → runtime
+    `--bench-only`. Both bundled in `cli.mojo` (`CliArgs.parse`, `printHelp`), reused by
+    main.mojo + tests/profile_gpu.mojo. grid_search now sweeps streams via runtime arg (bs
+    outer/comptime → one compile per bs). `-D NUM_GPU_STREAMS` / `-D BENCH_ONLY` kept as
+    defaults for back-compat.
+  - CLEANUP (later): drop the `-D BENCH_ONLY` comptime path entirely once nothing depends on
+    it — runtime `--bench-only` covers it; the define is just clutter for a minor feature.
 
 - [ ] **conv1 kernel: `INPUT > 1` not handled** (`accel/ops.mojo:501`)
   - Kernel hardcodes single-channel input. If ever extended beyond MNIST (grayscale), this breaks.

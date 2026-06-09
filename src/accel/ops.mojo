@@ -721,7 +721,7 @@ struct StreamSlot[batch_size: Int](Movable):
 
 
 def _batchRun[
-    batch_size: Int, num_streams: Int
+    batch_size: Int
 ](
     stream_slots: UnsafePointer[StreamSlot[batch_size], MutAnyOrigin],
     data: MNISTDataView,
@@ -734,6 +734,7 @@ def _batchRun[
     conv3: DeviceFunction,
     matmul: DeviceFunction,
     gather: DeviceFunction,
+    num_streams: Int = NUM_GPU_STREAMS,
 ) raises -> Int:
     """Run batches over pre-allocated stream slots. Does not alloc or free slots."""
     var count = len(data)
@@ -772,7 +773,7 @@ def _batchRun[
 
 
 def batchedForwardMultiStream[
-    batch_size: Int = GPU_STREAM_BATCH_SIZE, num_streams: Int = NUM_GPU_STREAMS
+    batch_size: Int = GPU_STREAM_BATCH_SIZE
 ](
     ctx: DeviceContext,
     data: MNISTDataView,
@@ -785,14 +786,15 @@ def batchedForwardMultiStream[
     conv3: DeviceFunction,
     matmul: DeviceFunction,
     gather: DeviceFunction,
+    num_streams: Int = NUM_GPU_STREAMS,
 ) raises -> Int:
     """Effective batch size is batch_size * num_streams. Allocates and frees slots each call."""
     var stream_slots = alloc[StreamSlot[batch_size]](num_streams)
     for s in range(num_streams):
         (stream_slots + s).init_pointee_move(StreamSlot[batch_size]())
     try:
-        var result = _batchRun[batch_size, num_streams](
-            stream_slots, data, model, norm, conv1, pool1, conv2, pool2, conv3, matmul, gather
+        var result = _batchRun[batch_size](
+            stream_slots, data, model, norm, conv1, pool1, conv2, pool2, conv3, matmul, gather, num_streams
         )
         for s in range(num_streams):
             (stream_slots + s).destroy_pointee()

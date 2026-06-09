@@ -6,9 +6,9 @@ from constants import (
     ftype,
     act_fn,
     GPU_STREAM_BATCH_SIZE,
-    NUM_GPU_STREAMS,
     IMAGE_SIZE,
 )
+from cli import CliArgs
 from cpu.model import LeNet5
 from cpu.ops import testing
 from dataloader import MNISTDataRepository, MNISTDataView
@@ -32,12 +32,12 @@ from accel.ops import (
 comptime model_path = "models/deleteme.test"
 comptime saved_model_dtype = ftype
 comptime batch_size = GPU_STREAM_BATCH_SIZE
-comptime num_streams = NUM_GPU_STREAMS
 
 
 def main() raises:
     var args = argv()
     var use_test_data = len(args) > 1 and args[1] == "--test"
+    var num_streams = CliArgs.parse().num_streams
 
     var data_repo = MNISTDataRepository()
     var model = LeNet5()
@@ -87,7 +87,7 @@ def main() raises:
         var total = MNISTDataRepository.COUNT_TEST if use_test_data else MNISTDataRepository.COUNT_TRAIN
         var data = data_repo.getTestBatch(0, MNISTDataRepository.COUNT_TEST) if use_test_data else data_repo.getTrainBatch(0, MNISTDataRepository.COUNT_TRAIN)
 
-        var correct = batchedForwardMultiStream[batch_size, num_streams](
+        var correct = batchedForwardMultiStream[batch_size](
             ctx,
             data,
             gpu_session.model,
@@ -99,6 +99,7 @@ def main() raises:
             conv3,
             matmul,
             gather,
+            num_streams,
         )
         print(
             "GPU",
