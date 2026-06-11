@@ -86,7 +86,8 @@ def normalizeInputsKernel[
         var mean_val = sum_total / sftype(img_sz)
         var temp = sq_total / sftype(img_sz) - mean_val * mean_val
         stats[0] = mean_val
-        stats[1] = sqrt(max(temp, sftype(0))) + sftype(1e-7)
+        var temp_fp32 = Float32(temp)
+        stats[1] = sftype(sqrt(max(temp_fp32, Float32(0))) + Float32(1e-7)) # NVIDIA GPU doesn't support fp64 sqrt (yet)
     barrier()
 
     if active:

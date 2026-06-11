@@ -75,7 +75,7 @@ def main() raises:
 
     var data_repo = MNISTDataRepository()
 
-    if cli.bench_only:
+    if cli.bench_only: # cli.bench_only
         var model_path = String("models/deleteme.test")
         if not os.path.exists(model_path):
             print("cannot load model: file not found:", model_path, file=stderr)
@@ -110,6 +110,7 @@ def main() raises:
         benchmark.keep(data_repo)
     else:
         comptime cpu_batch_size = 300
+        comptime train_name = "models/deleteme.test"
         seed(42069)
 
         var session = CPUSession()
@@ -126,12 +127,12 @@ def main() raises:
         )
 
         try:
-            session.model.saveToFile(Path("models/deleteme.test"))
+            session.model.saveToFile(Path(train_name))
         except e:
             print(e, file=stderr)
 
         # load the model saved above and test it independently
-        comptime model_name = "models/deleteme.test"
+        comptime model_name = train_name#"models/deleteme.test"
         print("Loading and testing a saved model: '" + model_name + "'")
         var modelCPU = LeNet5()
         modelCPU.loadFromFile[ftype](model_name)
@@ -140,7 +141,7 @@ def main() raises:
         print("\t", saved_res.elapsed_ns // 1_000_000, "ms")
 
         runGPUTest(modelCPU, data_repo, run_id, num_streams)
-        benchmark.keep(data_repo)
+        #benchmark.keep(data_repo)
 
 
 @fieldwise_init

@@ -91,6 +91,20 @@ Check items off as they are completed.
     fixed-size (no special last-batch path) and frees batch size to be a pure perf knob.
   - Mirrors the CPU-side remainder handling already done in `testingParallel` (cpu/ops.mojo).
 
+- [ ] **Auto-heuristic for `num_streams` from compile-time batch size** (`main.mojo`, `cli.mojo`)
+  - Today the user must hand-tune `--num-streams` per `GPU_STREAM_BATCH_SIZE` to hit peak (grid
+    search). Most standard libraries (PyTorch/ORT eager) use a single stream and just take a
+    `batch_size` — so Mojo looks harder to drive. Want a sensible runtime default so good numbers
+    come out-of-the-box, while keeping the grid search for per-card peak tuning.
+  - Approach: when `--num-streams` is unset, pick `streams = clamp(round(TARGET_EFF / bs), 1, 6)`
+    with `TARGET_EFF ≈ 500` (the eff_batch sweet spot on the RTX 3070; knee at 5–6 streams per
+    `results/stream_sweep_*.txt`). Caveat: the saturation point is hardware-dependent (bigger GPUs
+    need larger eff_batch to fill) — so `TARGET_EFF` is itself a knob; document "default heuristic
+    tuned on RTX 3070, run `scripts/grid_search_gpu.sh` for your hardware."
+  - `num_streams` is already a runtime arg, so this is host-side logic only (no kernel changes).
+  - Cross-ref: the CNNTesting benchmark reports two Mojo series for honesty — `mojo` (tuned 5-stream)
+    and `mojo-s1` (single-stream, fair vs the single-stream libraries).
+
 - [ ] **Audit compile-time `-D` vars: which should be runtime instead?** (`constants.mojo`)
   - Several knobs are `comptime` via `defines.get_defined_int[...]` (NUM_GPU_STREAMS,
     GPU_STREAM_BATCH_SIZE, DIV_CHANS_CONV2/3, ftype, etc). Some genuinely need comptime (drive
@@ -163,6 +177,38 @@ Check items off as they are completed.
     (`torch.backends.cuda.matmul.allow_tf32=False`) or compare same-precision. State dtype in every number.
   - Honesty-of-shortcomings is fine: if a dtype isn't easily supported, "hand it to the libraries" and
     say so — that's legitimate framing for the writeup.
+
+- [ ] **Pre-staging (data-resident / compute-only) GPU benchmark option** (`accel/ops.mojo`, `main.mojo`)
+  - Today `_batchRun` does H2D every batch via `StreamSlot.loadBatch` (`device_inputs.enqueue_copy_from`)
+    inside the timed region — this measures the **streaming** scenario (data arrives from host), which
+    is the apples-to-apples default the Python harness uses.
+  - Want a second mode: upload all `COUNT_TEST` pixels to the device **once** before the timed loop, then
+    have the timed loop run kernels straight off the resident device buffer (no per-batch H2D). Measures
+    **compute-only** throughput — the "dataset already in VRAM" scenario (offline/batch inference, training).
+  - Why it matters for the writeup: the streaming number includes Mojo's transfer advantage (raw uint8,
+    ~4× less PCIe than the libraries' pre-normalized fp32). A compute-only run **removes** that edge and
+    exposes the pure kernel/compiler comparison (Mojo vs XLA/cuDNN/TensorRT) — the ranking may shift.
+    Mirrors the CNNTesting plan to add `pytorch-resident` / `jax-resident` variants; report BOTH scenarios,
+    clearly labeled, streaming as the headline.
+  - Sketch: a flag (e.g. `--resident` / `-D RESIDENT`) that swaps `loadBatch` for a one-time bulk
+    `enqueue_copy_from` of the whole pixel arena into a persistent device buffer, then indexes batches
+    off it. Normalization currently happens on-GPU per batch — decide whether to pre-normalize the
+    resident buffer once too (closer to how the libs pre-normalize on host) or keep it in the timed loop.
+
+- [ ] **Accept already-normalized (pre-normalized fp32) uploaded images** (`accel/ops.mojo` StreamSlot)
+  - Today the GPU path uploads raw **uint8** and runs `normalizeInputsKernel` on-device (the ~4×-less-PCIe
+    + fused-normalize advantage). Want a second input mode that accepts **pre-normalized fp32** images
+    directly — i.e. the same input the Python libraries get — and skips the on-GPU normalize.
+  - Why: lets us run the apples-to-apples comparison that *removes* Mojo's uint8/upload edge, isolating
+    pure kernel quality (Mojo conv/pool/fc vs cuDNN/XLA/TensorRT) from the smart data path. Pairs with
+    the pre-staging/resident item and the CNNTesting `*-resident` variants.
+  - Approach: comptime-parameterize `StreamSlot[batch_size]` on the input format (e.g. an `InputKind`
+    enum or a `normalize: Bool` / `InputDType` param) so the slot's `loadBatch` either (a) copies uint8 +
+    enqueues `normalizeInputsKernel`, or (b) copies fp32 straight into `device_inputs` and skips the norm
+    kernel. Keeps both paths in one kernel pipeline, selected at compile time — no runtime branch in the
+    hot loop.
+  - Honesty payoff: report Mojo BOTH ways (uint8+on-GPU-norm = the real/optimized path; pre-normalized
+    fp32 = same-input-as-libs) so the writeup can separately credit "good data path" vs "good kernels."
 
 ---
 
