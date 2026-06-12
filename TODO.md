@@ -155,11 +155,22 @@ Check items off as they are completed.
   - `matMulFusedKernel` can write straight into the batched `outputs` tensor — `gatherOutputsKernel`
     disappears (1 of 8 launches gone; launch overhead matters at these kernel sizes). Stretch: do
     argmax on-device and D2H 1 byte/img instead of `OUTPUT` floats; `getResults` becomes a byte compare.
-  - IN PROGRESS 2026-06-12: base fusion DONE — `gatherOutputsKernel` deleted, `matMulFusedKernel`
-    takes the batched `outputs` tensor and writes logits directly (7 launches/batch, was 8).
-    RESULT (unlocked, bs=100, vs same-day post-pool-rewrite numbers): s=5 1.289M → **1.319M fps**
-    (+2.3%), s=1 906k → **927k** (+2.3%). Accuracy 9648/10000, exact CPU match.
-    GPU argmax stretch still open (pairs with output-judging parity item).
+  - DONE 2026-06-12 (both parts):
+    - Base fusion: `gatherOutputsKernel` deleted, `matMulFusedKernel` takes the batched `outputs`
+      tensor and writes logits directly (7 launches/batch, was 8). RESULT (unlocked, bs=100, vs
+      same-day post-pool-rewrite): s=5 1.289M → **1.319M fps** (+2.3%), s=1 906k → **927k** (+2.3%).
+    - GPU argmax: thread 0 tracks running max while writing logits, writes `guesses[img]`; hot path
+      D2H is now 1 byte/img (was OUTPUT floats), `getResults` is a byte compare. Matches the
+      PyTorch/JAX device-argmax pattern (output-judging parity item). RESULT: s=5 flat (~1.319M),
+      s=1 927k → **934k** (+0.7%, noise-level) — D2H was already tiny; value is parity + cleaner
+      `getResults`. Logits still land in `outputs` on device for debugging; `batchedArgMax` kept
+      as host-side fallback. Accuracy 9648/10000, exact CPU match throughout.
+
+- [ ] **`getResults`: SIMD the guess-vs-label byte compare** (`accel/ops.mojo`)
+  - The scalar `for j in range(batch_size)` loop compares two UInt8 buffers. Candidates: load
+    `SIMD[DType.uint8, nelts]` chunks from both (`UnsafePointer.load[width=...]`), `(g == l).cast[DType.uint8]().reduce_add()`
+    to count matches; or `comptime for` unroll since `batch_size` is comptime. ~50–100 bytes/batch so
+    perf impact tiny — mostly a SIMD exercise. `batchedArgMax` kept around as the host-side fallback.
 
 - [ ] **Remove now-unused `FeatureGPU.output` buffer — or fold into the SoA migration** (`accel/feature.mojo`)
   - After the matmul→outputs fusion no kernel reads/writes `feats[img].output`; the field, its

@@ -104,13 +104,18 @@ def matMulFusedKernel[
     outputs: LayoutTensor[
         ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin
     ],
+    guesses: LayoutTensor[
+        DType.uint8, Layout.row_major(batch_size), MutAnyOrigin
+    ],
 ) -> None:
     """
     Enough threads per block to do one output channel at a time as a reduction,
     so make it a power of two.
     Grid Dim = batch_size
     Block Dim = next_power_of_two(in_chans).
-    Writes logits straight into the batched outputs tensor (gather kernel fused away).
+    Writes logits into the batched outputs tensor (gather fused away) and the
+    argmax into guesses — thread 0 sees every logit sequentially, so the running
+    max is free and only 1 byte/img needs the trip back to host.
     """
     var img_idx = block_idx.x
     var thread = thread_idx.x
@@ -118,14 +123,25 @@ def matMulFusedKernel[
 
     # TODO: dram to local call possible
     var feat = feats[img_idx].layer5[thread, 0, 0] if thread < LAYER5 else 0
+    var best = sftype.MIN
+    var best_idx: UInt8 = 0
 
     comptime for oc in range(OUTPUT):
         var weight = lenet.weight5_6[thread, oc] if thread < LAYER5 else 0
         var prod = feat * weight
         var answer = block.sum[block_size=reduction_size, broadcast=False](prod)
         if thread == 0:
-            outputs[img_idx, oc] = answer + rebind[sftype](lenet.bias5_6[oc])
+            var logit = rebind[sftype](
+                answer + rebind[sftype](lenet.bias5_6[oc])
+            )
+            outputs[img_idx, oc] = logit
             # raw logits by design: no act_fn after the final FC layer
+            if logit > best:
+                best = logit
+                best_idx = UInt8(oc)
+
+    if thread == 0:
+        guesses[img_idx] = best_idx
 
 
 def maxPool2Kernel[
@@ -502,11 +518,15 @@ struct StreamSlot[batch_size: Int](Movable):
     var device_features: DeviceBuffer[DType.uint8]
     var features_ptr: UnsafePointer[FeatureGPU, MutAnyOrigin]
     var hosted_inputs: HostBuffer[DType.uint8]
-    var hosted_outputs: HostBuffer[ftype]
     var device_inputs: DeviceBuffer[DType.uint8]
-    var outputs_buffer: DeviceBuffer[ftype]  # staging buffer for d2h
+    var outputs_buffer: DeviceBuffer[ftype]  # device logits (debug/inspection — not D2H'd in the hot path)
     var outputs: LayoutTensor[
         ftype, Layout.row_major(Self.batch_size, OUTPUT), MutAnyOrigin
+    ]
+    var guesses_buffer: DeviceBuffer[DType.uint8]  # argmax per image, staged for d2h
+    var hosted_guesses: HostBuffer[DType.uint8]
+    var guesses: LayoutTensor[
+        DType.uint8, Layout.row_major(Self.batch_size), MutAnyOrigin
     ]
 
     def __init__(out self) raises:
@@ -545,15 +565,21 @@ struct StreamSlot[batch_size: Int](Movable):
         self.hosted_inputs = self.ctx.enqueue_create_host_buffer[DType.uint8](
             img_sz * Self.batch_size
         )
-        self.hosted_outputs = self.ctx.enqueue_create_host_buffer[ftype](
-            Self.batch_size * OUTPUT
-        )
         self.outputs_buffer = self.ctx.enqueue_create_buffer[ftype](
             Self.batch_size * OUTPUT
         )
         self.outputs = LayoutTensor[
             ftype, Layout.row_major(Self.batch_size, OUTPUT), MutAnyOrigin
         ](self.outputs_buffer)
+        self.guesses_buffer = self.ctx.enqueue_create_buffer[DType.uint8](
+            Self.batch_size
+        )
+        self.hosted_guesses = self.ctx.enqueue_create_host_buffer[DType.uint8](
+            Self.batch_size
+        )
+        self.guesses = LayoutTensor[
+            DType.uint8, Layout.row_major(Self.batch_size), MutAnyOrigin
+        ](self.guesses_buffer)
         self.ctx.synchronize()
 
     def __del__(deinit self):
@@ -669,10 +695,12 @@ struct StreamSlot[batch_size: Int](Movable):
             model,
             self.features_ptr,
             self.outputs,
+            self.guesses,
             grid_dim=(Self.batch_size),
             block_dim=(next_power_of_two(LAYER5)),
         )
-        self.hosted_outputs.enqueue_copy_from(self.outputs_buffer)
+        # 1 byte/img — logits stay on device
+        self.hosted_guesses.enqueue_copy_from(self.guesses_buffer)
 
     def getResults(self, labels: Span[UInt8, _]) raises -> Int:
         """Returns number correct for a batch. Syncs the slot's stream first. Does not check for a full batch - handle at call."""
@@ -683,12 +711,9 @@ struct StreamSlot[batch_size: Int](Movable):
             )
         self.ctx.synchronize()
         var correct = 0
-        var hosted_outputs = LayoutTensor[
-            ftype, Layout.row_major(Self.batch_size, OUTPUT), MutAnyOrigin
-        ](self.hosted_outputs.unsafe_ptr())
-        var results = batchedArgMax(hosted_outputs)
+        # argmax already done on device — just compare guess bytes to labels
         for j in range(Self.batch_size):
-            if results[j] == UInt8(labels[j]):
+            if self.hosted_guesses[j] == labels[j]:
                 correct += 1
         return correct
 
