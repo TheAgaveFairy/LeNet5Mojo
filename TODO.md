@@ -155,6 +155,19 @@ Check items off as they are completed.
   - `matMulFusedKernel` can write straight into the batched `outputs` tensor — `gatherOutputsKernel`
     disappears (1 of 8 launches gone; launch overhead matters at these kernel sizes). Stretch: do
     argmax on-device and D2H 1 byte/img instead of `OUTPUT` floats; `getResults` becomes a byte compare.
+  - IN PROGRESS 2026-06-12: base fusion DONE — `gatherOutputsKernel` deleted, `matMulFusedKernel`
+    takes the batched `outputs` tensor and writes logits directly (7 launches/batch, was 8).
+    RESULT (unlocked, bs=100, vs same-day post-pool-rewrite numbers): s=5 1.289M → **1.319M fps**
+    (+2.3%), s=1 906k → **927k** (+2.3%). Accuracy 9648/10000, exact CPU match.
+    GPU argmax stretch still open (pairs with output-judging parity item).
+
+- [ ] **Remove now-unused `FeatureGPU.output` buffer — or fold into the SoA migration** (`accel/feature.mojo`)
+  - After the matmul→outputs fusion no kernel reads/writes `feats[img].output`; the field, its
+    layout, the `FeatureGPUBuffers.output` alloc, and its share of `sizeInBytes()` are dead weight
+    (small: OUTPUT floats/img, but misleading to readers). Two options: (a) quick delete now, or
+    (b) leave it for the batched-SoA layout migration (see the Architecture item above) which
+    replaces per-image feature structs wholesale — the batched `outputs` tensor in StreamSlot is
+    effectively the first SoA-ified layer. Don't do (a) in a way that makes (b) harder.
 
 - [x] **Pool kernels: drop shared memory** (`accel/ops.mojo` `maxPool1Kernel`, `maxPool2Kernel`) — DONE 2026-06-12
   - 2×2 non-overlapping pooling has ZERO data reuse — staging layer1/layer3 in shared then reading it

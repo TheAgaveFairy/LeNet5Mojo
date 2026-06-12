@@ -42,7 +42,6 @@ from accel.ops import (
     maxPool2Kernel,
     conv3FusedKernel,
     matMulFusedKernel,
-    gatherOutputsKernel,
 )
 
 from dataloader import MNISTDataRepository
@@ -320,7 +319,6 @@ def runGPUTest(
         var pool2 = ctx.compile_function[maxPool2Kernel[batch_size]]()
         var conv3 = ctx.compile_function[conv3FusedKernel[batch_size]]()
         var matmul = ctx.compile_function[matMulFusedKernel[batch_size]]()
-        var gather = ctx.compile_function[gatherOutputsKernel[batch_size]]()
 
         var batched_data = data_repo.getTestBatch(0, COUNT_TEST)
         var gpu_logger = ResultLogger(
@@ -341,7 +339,7 @@ def runGPUTest(
         for _ in range(N_WARMUP):
             var wc = _batchRun[batch_size](
                 slots, batched_data, gpu_session.model,
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather, num_streams,
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, num_streams,
             )
             benchmark.keep(wc)
 
@@ -352,7 +350,7 @@ def runGPUTest(
             var t = perf_counter_ns()
             var c = _batchRun[batch_size](
                 slots, batched_data, gpu_session.model,
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, gather, num_streams,
+                norm, conv1, pool1, conv2, pool2, conv3, matmul, num_streams,
             )
             times.append(perf_counter_ns() - t)
             if i == 0:

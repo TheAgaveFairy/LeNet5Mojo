@@ -96,27 +96,21 @@ def normalizeInputsKernel[
         feats[img].input[0, row + PADDING, col + PADDING] = (pix - stats[0]) / stats[1]
 
 
-def gatherOutputsKernel[
+def matMulFusedKernel[
     batch_size: Int
 ](
+    lenet: LeNet5GPU,
     feats: UnsafePointer[FeatureGPU, MutAnyOrigin],
     outputs: LayoutTensor[
         ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin
     ],
-):
-    var img = block_idx.x
-    var i = thread_idx.x
-    outputs[img, i] = feats[img].output[i]
-
-
-def matMulFusedKernel[
-    batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
+) -> None:
     """
     Enough threads per block to do one output channel at a time as a reduction,
     so make it a power of two.
     Grid Dim = batch_size
     Block Dim = next_power_of_two(in_chans).
+    Writes logits straight into the batched outputs tensor (gather kernel fused away).
     """
     var img_idx = block_idx.x
     var thread = thread_idx.x
@@ -130,8 +124,8 @@ def matMulFusedKernel[
         var prod = feat * weight
         var answer = block.sum[block_size=reduction_size, broadcast=False](prod)
         if thread == 0:
-            feats[img_idx].output[oc] = answer + lenet.bias5_6[oc]
-            # TODO: confirm we don't want to do act_fn.simdForward() call
+            outputs[img_idx, oc] = answer + rebind[sftype](lenet.bias5_6[oc])
+            # raw logits by design: no act_fn after the final FC layer
 
 
 def maxPool2Kernel[
@@ -615,7 +609,6 @@ struct StreamSlot[batch_size: Int](Movable):
         pool2: DeviceFunction,
         conv3: DeviceFunction,
         matmul: DeviceFunction,
-        gather: DeviceFunction,
         model: LeNet5GPU,
     ) raises:
         comptime batch_pixels_layout = Layout.row_major(
@@ -675,15 +668,9 @@ struct StreamSlot[batch_size: Int](Movable):
             matmul,
             model,
             self.features_ptr,
-            grid_dim=(Self.batch_size),
-            block_dim=(next_power_of_two(LAYER5)),
-        )
-        self.ctx.enqueue_function(
-            gather,
-            self.features_ptr,
             self.outputs,
             grid_dim=(Self.batch_size),
-            block_dim=(OUTPUT),
+            block_dim=(next_power_of_two(LAYER5)),
         )
         self.hosted_outputs.enqueue_copy_from(self.outputs_buffer)
 
@@ -719,7 +706,6 @@ def _batchRun[
     pool2: DeviceFunction,
     conv3: DeviceFunction,
     matmul: DeviceFunction,
-    gather: DeviceFunction,
     num_streams: Int = NUM_GPU_STREAMS,
 ) raises -> Int:
     """Run batches over pre-allocated stream slots. Does not alloc or free slots."""
@@ -744,7 +730,7 @@ def _batchRun[
 
         (stream_slots + slot_idx)[].loadBatch(batch_span)
         (stream_slots + slot_idx)[].doWork(
-            norm, conv1, pool1, conv2, pool2, conv3, matmul, gather, model
+            norm, conv1, pool1, conv2, pool2, conv3, matmul, model
         )
 
     var epilogue_start = max(0, total_batches - num_streams)
@@ -771,7 +757,6 @@ def batchedForwardMultiStream[
     pool2: DeviceFunction,
     conv3: DeviceFunction,
     matmul: DeviceFunction,
-    gather: DeviceFunction,
     num_streams: Int = NUM_GPU_STREAMS,
 ) raises -> Int:
     """Effective batch size is batch_size * num_streams. Allocates and frees slots each call."""
@@ -780,7 +765,7 @@ def batchedForwardMultiStream[
         (stream_slots + s).init_pointee_move(StreamSlot[batch_size]())
     try:
         var result = _batchRun[batch_size](
-            stream_slots, data, model, norm, conv1, pool1, conv2, pool2, conv3, matmul, gather, num_streams
+            stream_slots, data, model, norm, conv1, pool1, conv2, pool2, conv3, matmul, num_streams
         )
         for s in range(num_streams):
             (stream_slots + s).destroy_pointee()

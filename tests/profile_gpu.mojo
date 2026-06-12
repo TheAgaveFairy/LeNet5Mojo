@@ -25,7 +25,6 @@ from accel.ops import (
     maxPool2Kernel,
     conv3FusedKernel,
     matMulFusedKernel,
-    gatherOutputsKernel,
     StreamSlot,
 )
 
@@ -60,7 +59,6 @@ def main() raises:
         var pool2 = ctx.compile_function[maxPool2Kernel[batch_size]]()
         var conv3 = ctx.compile_function[conv3FusedKernel[batch_size]]()
         var matmul = ctx.compile_function[matMulFusedKernel[batch_size]]()
-        var gather = ctx.compile_function[gatherOutputsKernel[batch_size]]()
 
         # Warmup: one throwaway all-zero forward pass through a single StreamSlot.
         # Absorbs JIT + lazy CUDA context init + first-launch cache warmup so the
@@ -79,7 +77,6 @@ def main() raises:
             pool2,
             conv3,
             matmul,
-            gather,
             gpu_session.model,
         )
         _ = warm_slot.getResults(Span(zero_labels))
@@ -98,7 +95,6 @@ def main() raises:
             pool2,
             conv3,
             matmul,
-            gather,
             num_streams,
         )
         print(
