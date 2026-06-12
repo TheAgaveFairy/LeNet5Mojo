@@ -367,7 +367,14 @@ def conv1FusedKernel[
     """
     Grid Dim = (batch_size)
     Block Dim = (LENGTH_FEATURE1, LENGTH_FEATURE1) = 28 x 28
-    I'll explain this kernel later.
+    One block per image, one thread per output pixel. Cooperatively stages
+    everything the block reuses into shared memory: all INPUT*LAYER1 5x5
+    weight kernels (150 floats), the padded 32x32 input (strided loads, 784
+    threads cover 1024 pixels), and the LAYER1 biases. After one barrier,
+    each thread computes all LAYER1=6 output channels for its (row, col) —
+    6 x 25 fully unrolled MACs against shared — and writes activated results
+    to layer1. Shared staging pays off here (unlike the pools) because every
+    input pixel is reused by up to 25 neighboring threads x 6 channels.
     """
     var img_idx = block_idx.x
     var row = thread_idx.y
@@ -638,7 +645,8 @@ struct StreamSlot[batch_size: Int](Movable):
 
     def loadBatch(self, batch: Span[UInt8, _]) raises:
         """
-        Takes in a Span that should represent (batch_size * 768) bytes.
+        Takes in a Span that should represent (batch_size * 784) bytes
+        (784 = 28*28 raw uint8 pixels per image).
 
         If the span size isn't a multiple of the image size, that's a serious problem. Raise!
 
