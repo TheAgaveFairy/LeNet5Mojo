@@ -372,11 +372,15 @@ Check items off as they are completed.
     (`norm, conv1, pool1, ...`). One struct built next to the `compile_function` calls in
     `runGPUTest`, passed as one arg. Pure signature hygiene; also makes adding/removing a
     kernel (e.g. deleting `gather` after the matmul fusion) a one-site change.
-  - HISTORY: prior attempt (skeleton: `ignoreme/test_compiled_kernels.mojo`) compiled but kernel
-    invocation failed — it parameterized the struct on 8 *inferred per-kernel types*, so each field
-    was opaque to `enqueue_function`'s overload resolution. Since `doWork` now accepts bare
-    `DeviceFunction` args, retry with 8 plain `DeviceFunction` fields and NO type params — if a bare
-    arg works, a bare field should too.
+  - DONE 2026-06-12. Working recipe (proven in `ignoreme/mvp_compiled_kernels.mojo` first):
+    field type = `type_of(DeviceContext().compile_function[kernel[Self.batch_size]]())` — the
+    CHECKED return type, compiler-spelled, so launch sites keep compile-time arg validation.
+    Dead ends for the record: opaque inferred per-field type params (old skeleton — compiled,
+    launches failed); bare `DeviceFunction` fields ("is not concrete" — bare works only as
+    inferred *args*); `DeviceFunction[kernel, None]` (`compile_function_unchecked` doesn't exist
+    in this nightly, and the checked return embeds the arg list so it can't convert).
+    `doWork`/`_batchRun`/`batchedForwardMultiStream` now take one `kernels` arg; call sites in
+    main.mojo + profile_gpu.mojo are one-liners. Accuracy + fps unchanged.
 
 - [ ] **CLI: warn on unknown args; port the MojoLLM parser pattern** (`cli.mojo`)
   - A typo (`--num-stream 5`, `--benchonly`) is silently ignored and the default silently used —

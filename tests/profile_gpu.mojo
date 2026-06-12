@@ -17,16 +17,7 @@ from accel import (
     DeviceSession,
     GPUBumpArenaAllocator,
 )
-from accel.ops import (
-    normalizeInputsKernel,
-    conv1FusedKernel,
-    maxPool1Kernel,
-    conv2FusedKernel,
-    maxPool2Kernel,
-    conv3FusedKernel,
-    matMulFusedKernel,
-    StreamSlot,
-)
+from accel.ops import CompiledKernels, StreamSlot
 
 comptime model_path = "models/deleteme.test"
 comptime saved_model_dtype = ftype
@@ -52,13 +43,7 @@ def main() raises:
         gpu_session.bufs.loadCPUWeights(model)
         keep(gpu_session)
 
-        var norm = ctx.compile_function[normalizeInputsKernel[batch_size]]()
-        var conv1 = ctx.compile_function[conv1FusedKernel[batch_size]]()
-        var pool1 = ctx.compile_function[maxPool1Kernel[batch_size]]()
-        var conv2 = ctx.compile_function[conv2FusedKernel[batch_size]]()
-        var pool2 = ctx.compile_function[maxPool2Kernel[batch_size]]()
-        var conv3 = ctx.compile_function[conv3FusedKernel[batch_size]]()
-        var matmul = ctx.compile_function[matMulFusedKernel[batch_size]]()
+        var kernels = CompiledKernels[batch_size](ctx)
 
         # Warmup: one throwaway all-zero forward pass through a single StreamSlot.
         # Absorbs JIT + lazy CUDA context init + first-launch cache warmup so the
@@ -69,33 +54,14 @@ def main() raises:
         ](fill=0)
         var zero_labels = InlineArray[UInt8, batch_size](fill=0)
         warm_slot.loadBatch(Span(zero_pixels))
-        warm_slot.doWork(
-            norm,
-            conv1,
-            pool1,
-            conv2,
-            pool2,
-            conv3,
-            matmul,
-            gpu_session.model,
-        )
+        warm_slot.doWork(kernels, gpu_session.model)
         _ = warm_slot.getResults(Span(zero_labels))
 
         var total = MNISTDataRepository.COUNT_TEST if use_test_data else MNISTDataRepository.COUNT_TRAIN
         var data = data_repo.getTestBatch(0, MNISTDataRepository.COUNT_TEST) if use_test_data else data_repo.getTrainBatch(0, MNISTDataRepository.COUNT_TRAIN)
 
         var correct = batchedForwardMultiStream[batch_size](
-            ctx,
-            data,
-            gpu_session.model,
-            norm,
-            conv1,
-            pool1,
-            conv2,
-            pool2,
-            conv3,
-            matmul,
-            num_streams,
+            ctx, data, gpu_session.model, kernels, num_streams
         )
         print(
             "GPU",

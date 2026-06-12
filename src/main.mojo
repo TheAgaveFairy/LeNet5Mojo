@@ -35,13 +35,7 @@ from accel import (
 from accel.ops import (
     _batchRun,
     StreamSlot,
-    normalizeInputsKernel,
-    conv1FusedKernel,
-    maxPool1Kernel,
-    conv2FusedKernel,
-    maxPool2Kernel,
-    conv3FusedKernel,
-    matMulFusedKernel,
+    CompiledKernels,
 )
 
 from dataloader import MNISTDataRepository
@@ -312,13 +306,7 @@ def runGPUTest(
             "\nDevice found:", ctx.name(), ". Compiling kernels and testing..."
         )
 
-        var norm = ctx.compile_function[normalizeInputsKernel[batch_size]]()
-        var conv1 = ctx.compile_function[conv1FusedKernel[batch_size]]()
-        var pool1 = ctx.compile_function[maxPool1Kernel[batch_size]]()
-        var conv2 = ctx.compile_function[conv2FusedKernel[batch_size]]()
-        var pool2 = ctx.compile_function[maxPool2Kernel[batch_size]]()
-        var conv3 = ctx.compile_function[conv3FusedKernel[batch_size]]()
-        var matmul = ctx.compile_function[matMulFusedKernel[batch_size]]()
+        var kernels = CompiledKernels[batch_size](ctx)
 
         var batched_data = data_repo.getTestBatch(0, COUNT_TEST)
         var gpu_logger = ResultLogger(
@@ -338,8 +326,7 @@ def runGPUTest(
         # warmup
         for _ in range(N_WARMUP):
             var wc = _batchRun[batch_size](
-                slots, batched_data, gpu_session.model,
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, num_streams,
+                slots, batched_data, gpu_session.model, kernels, num_streams
             )
             benchmark.keep(wc)
 
@@ -349,8 +336,7 @@ def runGPUTest(
         for i in range(N_PASSES):
             var t = perf_counter_ns()
             var c = _batchRun[batch_size](
-                slots, batched_data, gpu_session.model,
-                norm, conv1, pool1, conv2, pool2, conv3, matmul, num_streams,
+                slots, batched_data, gpu_session.model, kernels, num_streams
             )
             times.append(perf_counter_ns() - t)
             if i == 0:

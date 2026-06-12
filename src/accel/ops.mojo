@@ -490,6 +490,7 @@ def compareBuffers[
     )
 
 
+@deprecated("Fallback; argMax should be done on GPU.")
 def batchedArgMax[
     batch_size: Int
 ](
@@ -507,6 +508,54 @@ def batchedArgMax[
                 max_val = v
                 max_idx = UInt8(i)
         guesses[b] = max_idx
+
+
+struct CompiledKernels[batch_size: Int](Movable):
+    """The full forward-pass kernel set for one batch size, compiled once.
+
+    Field types via `type_of(...)` — the checked `compile_function` return type
+    embeds the kernel's arg list, so launches through these fields keep
+    compile-time validation. Bare `DeviceFunction` fields don't parse ("is not
+    concrete") and this nightly has no unchecked variant; see
+    `ignoreme/mvp_compiled_kernels.mojo` for the experiment trail.
+    """
+
+    var norm: type_of(
+        DeviceContext().compile_function[
+            normalizeInputsKernel[Self.batch_size]
+        ]()
+    )
+    var conv1: type_of(
+        DeviceContext().compile_function[conv1FusedKernel[Self.batch_size]]()
+    )
+    var pool1: type_of(
+        DeviceContext().compile_function[maxPool1Kernel[Self.batch_size]]()
+    )
+    var conv2: type_of(
+        DeviceContext().compile_function[conv2FusedKernel[Self.batch_size]]()
+    )
+    var pool2: type_of(
+        DeviceContext().compile_function[maxPool2Kernel[Self.batch_size]]()
+    )
+    var conv3: type_of(
+        DeviceContext().compile_function[conv3FusedKernel[Self.batch_size]]()
+    )
+    var matmul: type_of(
+        DeviceContext().compile_function[matMulFusedKernel[Self.batch_size]]()
+    )
+
+    def __init__(out self, ctx: DeviceContext) raises:
+        self.norm = ctx.compile_function[
+            normalizeInputsKernel[Self.batch_size]
+        ]()
+        self.conv1 = ctx.compile_function[conv1FusedKernel[Self.batch_size]]()
+        self.pool1 = ctx.compile_function[maxPool1Kernel[Self.batch_size]]()
+        self.conv2 = ctx.compile_function[conv2FusedKernel[Self.batch_size]]()
+        self.pool2 = ctx.compile_function[maxPool2Kernel[Self.batch_size]]()
+        self.conv3 = ctx.compile_function[conv3FusedKernel[Self.batch_size]]()
+        self.matmul = ctx.compile_function[
+            matMulFusedKernel[Self.batch_size]
+        ]()
 
 
 struct StreamSlot[batch_size: Int](Movable):
@@ -628,13 +677,7 @@ struct StreamSlot[batch_size: Int](Movable):
 
     def doWork(
         self,
-        norm: DeviceFunction,
-        conv1: DeviceFunction,
-        pool1: DeviceFunction,
-        conv2: DeviceFunction,
-        pool2: DeviceFunction,
-        conv3: DeviceFunction,
-        matmul: DeviceFunction,
+        kernels: CompiledKernels[Self.batch_size],
         model: LeNet5GPU,
     ) raises:
         comptime batch_pixels_layout = Layout.row_major(
@@ -645,28 +688,28 @@ struct StreamSlot[batch_size: Int](Movable):
         ](self.device_inputs)
 
         self.ctx.enqueue_function(
-            norm,
+            kernels.norm,
             raw_pixels_tensor,
             self.features_ptr,
             grid_dim=(Self.batch_size),
             block_dim=(next_power_of_two(IMAGE_SIZE * IMAGE_SIZE)),
         )
         self.ctx.enqueue_function(
-            conv1,
+            kernels.conv1,
             model,
             self.features_ptr,
             grid_dim=(Self.batch_size),
             block_dim=(LENGTH_FEATURE1, LENGTH_FEATURE1),
         )
         self.ctx.enqueue_function(
-            pool1,
+            kernels.pool1,
             model,
             self.features_ptr,
             grid_dim=(Self.batch_size, LAYER1),
             block_dim=(LENGTH_FEATURE2, LENGTH_FEATURE2),
         )
         self.ctx.enqueue_function(
-            conv2,
+            kernels.conv2,
             model,
             self.features_ptr,
             grid_dim=(Self.batch_size, div_chans_conv2),
@@ -677,21 +720,21 @@ struct StreamSlot[batch_size: Int](Movable):
             ),
         )
         self.ctx.enqueue_function(
-            pool2,
+            kernels.pool2,
             model,
             self.features_ptr,
             grid_dim=(Self.batch_size),
             block_dim=(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4),
         )
         self.ctx.enqueue_function(
-            conv3,
+            kernels.conv3,
             model,
             self.features_ptr,
             grid_dim=(Self.batch_size),
             block_dim=(LAYER5),
         )
         self.ctx.enqueue_function(
-            matmul,
+            kernels.matmul,
             model,
             self.features_ptr,
             self.outputs,
@@ -724,13 +767,7 @@ def _batchRun[
     stream_slots: UnsafePointer[StreamSlot[batch_size], MutAnyOrigin],
     data: MNISTDataView,
     model: LeNet5GPU,
-    norm: DeviceFunction,
-    conv1: DeviceFunction,
-    pool1: DeviceFunction,
-    conv2: DeviceFunction,
-    pool2: DeviceFunction,
-    conv3: DeviceFunction,
-    matmul: DeviceFunction,
+    kernels: CompiledKernels[batch_size],
     num_streams: Int = NUM_GPU_STREAMS,
 ) raises -> Int:
     """Run batches over pre-allocated stream slots. Does not alloc or free slots."""
@@ -754,9 +791,7 @@ def _batchRun[
             )
 
         (stream_slots + slot_idx)[].loadBatch(batch_span)
-        (stream_slots + slot_idx)[].doWork(
-            norm, conv1, pool1, conv2, pool2, conv3, matmul, model
-        )
+        (stream_slots + slot_idx)[].doWork(kernels, model)
 
     var epilogue_start = max(0, total_batches - num_streams)
     for batch_num in range(epilogue_start, total_batches):
@@ -775,13 +810,7 @@ def batchedForwardMultiStream[
     ctx: DeviceContext,
     data: MNISTDataView,
     model: LeNet5GPU,
-    norm: DeviceFunction,
-    conv1: DeviceFunction,
-    pool1: DeviceFunction,
-    conv2: DeviceFunction,
-    pool2: DeviceFunction,
-    conv3: DeviceFunction,
-    matmul: DeviceFunction,
+    kernels: CompiledKernels[batch_size],
     num_streams: Int = NUM_GPU_STREAMS,
 ) raises -> Int:
     """Effective batch size is batch_size * num_streams. Allocates and frees slots each call."""
@@ -790,7 +819,7 @@ def batchedForwardMultiStream[
         (stream_slots + s).init_pointee_move(StreamSlot[batch_size]())
     try:
         var result = _batchRun[batch_size](
-            stream_slots, data, model, norm, conv1, pool1, conv2, pool2, conv3, matmul, num_streams
+            stream_slots, data, model, kernels, num_streams
         )
         for s in range(num_streams):
             (stream_slots + s).destroy_pointee()
