@@ -42,6 +42,12 @@ Check items off as they are completed.
   - If CPU profiling shows packing cost, migrate CPU ops to consume `raw_pixels`/`raw_labels` spans
     directly. `Image` becomes a lightweight view into the arena rather than an owned struct.
 
+- [ ] **(Long-term) Batched feature layout — SoA across images, not AoS `FeatureGPU` per image** (`accel/feature.mojo`, `accel/ops.mojo`)
+  - Today every kernel is `grid=(batch_size, ...)` with one image's small feature tensors per block
+    (`feats[img].layerN`). A batched `[N, C, H, W]` tensor per layer would let conv2/conv3 become real
+    GEMMs over the whole eff_batch (better coalescing, fewer/larger launches). This is the natural
+    generalization of conv3 Tier B — note it here so Tier B is designed with batched layouts in mind.
+
 ---
 
 ## GPU Pipeline
@@ -133,6 +139,37 @@ Check items off as they are completed.
     timeout, 1024 = never). Fixed by making the host handles a local in `__init__` (only needed to seed
     the device copy), so StreamSlot's move is a pointer shuffle. Build now batch-independent (~60s).
 
+- [x] **Fix `loadBatch` short-batch OOB read** (`accel/ops.mojo` `StreamSlot.loadBatch`) — DONE 2026-06-12
+  - `hosted_inputs.enqueue_copy_from(batch.unsafe_ptr())` copies the *buffer's* full length from the
+    span pointer — a short span reads past its end. The preceding `enqueue_fill(0)` is then fully
+    overwritten anyway. Latent today (`_batchRun` only sends full batches) but armed the moment the
+    pad-the-tail item lands. Fixed: host `memcpy` of `len(batch)` bytes into the pinned buffer,
+    `memset_zero` only the remainder. Unblocks pad-the-tail.
+
+- [ ] **Fuse normalize into conv1** (`accel/ops.mojo`)
+  - conv1 already stages the input in shared memory; it could load raw uint8 pixels, do the block.sum
+    mean/std reduction, and normalize in shared before convolving. Kills one launch per batch AND a
+    full global round-trip of the 32×32 fp32 input. Pairs with the normalization-parity item below.
+
+- [ ] **Fuse matmul → outputs (+ GPU argmax); delete gather kernel** (`accel/ops.mojo`)
+  - `matMulFusedKernel` can write straight into the batched `outputs` tensor — `gatherOutputsKernel`
+    disappears (1 of 8 launches gone; launch overhead matters at these kernel sizes). Stretch: do
+    argmax on-device and D2H 1 byte/img instead of `OUTPUT` floats; `getResults` becomes a byte compare.
+
+- [x] **Pool kernels: drop shared memory** (`accel/ops.mojo` `maxPool1Kernel`, `maxPool2Kernel`) — DONE 2026-06-12
+  - 2×2 non-overlapping pooling has ZERO data reuse — staging layer1/layer3 in shared then reading it
+    back is pure overhead (extra latency + a barrier). maxPool1 also launched 28×28 threads and idled
+    75% of them after the load. Now one thread per *output* (14×14 / 16×5×5), 4 global reads, no
+    shared, no barrier. RESULT (same-day A/B, clocks UNLOCKED both sides, bs=100): old kernels
+    1.169M fps s=5 / 794k s=1 → new **1.289M fps s=5 (+10%) / 906k s=1 (+14%)**. Accuracy 9648/10000,
+    exact CPU match. NOTE: vs the *recorded* ~890k baseline the jump looks like +45%, but that
+    recording was warm/unlocked at different conditions — only the same-day A/B delta is real.
+    Re-baseline with locked clocks (`pixi run gpulock`) before quoting numbers in the writeup.
+
+- [ ] **conv3 Tier A: pad block_dim 120 → 128** (`accel/ops.mojo` `conv3FusedKernel`)
+  - 120 threads = 3.75 warps; the partial warp wastes a scheduler slot. Cheap experiment: launch 128,
+    guard `oc < LAYER5` (or give the 8 spare threads shared-load duty).
+
 ---
 
 ## Benchmarking / Profiling
@@ -209,6 +246,20 @@ Check items off as they are completed.
     hot loop.
   - Honesty payoff: report Mojo BOTH ways (uint8+on-GPU-norm = the real/optimized path; pre-normalized
     fp32 = same-input-as-libs) so the writeup can separately credit "good data path" vs "good kernels."
+
+- [ ] **Normalization parity vs libraries** (`accel/ops.mojo` `normalizeInputsKernel`)
+  - Mojo does **per-image** mean/std standardization (two block.sum reductions per image, on GPU).
+    Standard torchvision preprocessing is **fixed dataset constants** (0.1307/0.3081) — much cheaper,
+    usually host-side, and numerically different (different accuracy too, not just speed).
+  - For apples-to-apples: either add a fixed-constant normalize mode here, or make every framework
+    harness do per-image standardize. Whichever way, state it explicitly in the writeup — right now
+    Mojo is doing MORE preprocessing work than the libs while also being timed for it.
+
+- [ ] **Output-judging parity: device argmax + device compare** (`accel/ops.mojo` `getResults`)
+  - Library harnesses do `logits.argmax(dim=1)` and `(preds == labels).sum()` on device, D2H one
+    scalar per batch. Mojo D2Hs `OUTPUT` floats/img then does host argmax + host label compare inside
+    the timed region — strictly more transfer + host work. Move argmax/compare on-device (pairs with
+    the matmul-fusion item) and transfer just the correct-count, or document the asymmetry.
 
 ---
 
@@ -291,6 +342,35 @@ Check items off as they are completed.
 
 - [x] **`FeatureGPUBuffers` still exists in `accel/model.mojo` after split to `accel/feature.mojo`**
   - Resolved: `accel/feature.mojo` is canonical; `accel/model.mojo` copy removed.
+
+- [ ] **Bundle the 8 `DeviceFunction`s into a `CompiledKernels` struct** (`accel/ops.mojo`, `main.mojo`)
+  - `doWork`, `_batchRun`, `batchedForwardMultiStream` all thread 8 positional params
+    (`norm, conv1, pool1, ...`). One struct built next to the `compile_function` calls in
+    `runGPUTest`, passed as one arg. Pure signature hygiene; also makes adding/removing a
+    kernel (e.g. deleting `gather` after the matmul fusion) a one-site change.
+  - HISTORY: prior attempt (skeleton: `ignoreme/test_compiled_kernels.mojo`) compiled but kernel
+    invocation failed — it parameterized the struct on 8 *inferred per-kernel types*, so each field
+    was opaque to `enqueue_function`'s overload resolution. Since `doWork` now accepts bare
+    `DeviceFunction` args, retry with 8 plain `DeviceFunction` fields and NO type params — if a bare
+    arg works, a bare field should too.
+
+- [ ] **CLI: warn on unknown args; port the MojoLLM parser pattern** (`cli.mojo`)
+  - A typo (`--num-stream 5`, `--benchonly`) is silently ignored and the default silently used —
+    worst failure mode for a benchmarking knob. Anything starting with `--` that isn't recognized
+    should at least print a warning (or raise).
+  - Reuse `~/Documents/GitHub/mojollm/src/cliparser.mojo` (TokenizerParser): comptime flag constants
+    with derived short forms, while-loop that *consumes* flag+value (`i += 2` — also fixes the
+    current quirk where the value string gets re-scanned as a flag), `had_error` instead of raising.
+    Port the pattern, swap in this project's flags.
+
+- [x] **`MNISTDataRepository.__init__` swallows read errors** (`dataloader.mojo`) — DONE 2026-06-12
+  - Constructor is now `raises`; the try/except-print is gone, read failures propagate.
+
+- [x] **`getResults`: bounds-check `len(labels)` vs `batch_size`** (`accel/ops.mojo`) — DONE 2026-06-12
+  - Raises with both lengths in the message if the labels span is short.
+
+- [x] **`printerGPU`: drop the inner `DeviceContext`** (`accel/ops.mojo`) — DONE 2026-06-12
+  - `map_to_host` already syncs; spurious ctx + synchronize removed.
 
 ---
 

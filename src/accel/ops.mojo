@@ -1,6 +1,7 @@
 from layout import Layout, LayoutTensor
 from std.math import abs, sqrt, max
 from std.bit import next_power_of_two  # prev_power_of_two
+from std.memory import memcpy, memset_zero
 from std.sys import size_of, stderr
 import std.sys.defines as defines
 
@@ -138,36 +139,24 @@ def maxPool2Kernel[
 ](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
     """
     Runs as block_dim = (LAYER4, LF4, LF4) = 16 * 5 * 5 = 400, grid_dim = (batch_size).
+    One thread per output. 2x2 non-overlapping pool has no data reuse, so inputs
+    are read straight from global — shared staging was pure overhead.
     """
     var img_idx = block_idx.x
     var row = thread_idx.z  # range(LENGTH_FEATURE4)
     var col = thread_idx.y  # range(LENGTH_FEATURE4)
     var chan = thread_idx.x  # range(LAYER4)
 
-    var local_image = LayoutTensor[
-        ftype,
-        FeatureGPU.layer3_layout,
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-    ].stack_allocation()
-
     var tr = row * 2
     var tc = col * 2
-    local_image[chan, tr, tc] = feats[img_idx].layer3[chan, tr, tc]
-    local_image[chan, tr + 1, tc] = feats[img_idx].layer3[chan, tr + 1, tc]
-    local_image[chan, tr, tc + 1] = feats[img_idx].layer3[chan, tr, tc + 1]
-    local_image[chan, tr + 1, tc + 1] = feats[img_idx].layer3[
-        chan, tr + 1, tc + 1
-    ]
-    barrier()
-
-    # TODO: copy_dram_to_sram_async() call
-
     var temp: sftype = rebind[sftype](
-        max(local_image[chan, tr, tc], local_image[chan, tr + 1, tc])
+        max(
+            feats[img_idx].layer3[chan, tr, tc],
+            feats[img_idx].layer3[chan, tr + 1, tc],
+        )
     )
-    temp = max(temp, rebind[sftype](local_image[chan, tr + 1, tc + 1]))
-    temp = max(temp, rebind[sftype](local_image[chan, tr, tc + 1]))
+    temp = max(temp, rebind[sftype](feats[img_idx].layer3[chan, tr + 1, tc + 1]))
+    temp = max(temp, rebind[sftype](feats[img_idx].layer3[chan, tr, tc + 1]))
 
     feats[img_idx].layer4[chan, row, col] = temp
 
@@ -176,31 +165,26 @@ def maxPool1Kernel[
     batch_size: Int
 ](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
     """
-    Runs as block_dim = (LF1, LF1), grid_dim = (batch_size, num_channels).
+    Runs as block_dim = (LF2, LF2), grid_dim = (batch_size, num_channels).
+    One thread per output (was one per *input* with 75% idling after a shared
+    staging load — no reuse in 2x2 non-overlapping pooling, so global reads win).
     """
     var img_idx = block_idx.x  # range(batch_size)
-    var chan = block_idx.y  # range(LAYER1)
-    var row = thread_idx.y  # range(LENGTH_FEATURE1)
-    var col = thread_idx.x  # range(LENGTH_FEATURE1)
+    var chan = block_idx.y  # range(LAYER2)
+    var row = thread_idx.y  # range(LENGTH_FEATURE2)
+    var col = thread_idx.x  # range(LENGTH_FEATURE2)
 
-    var local_image = LayoutTensor[
-        ftype,
-        Layout.row_major(LENGTH_FEATURE1, LENGTH_FEATURE1),
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-    ].stack_allocation()
-
-    # TODO: copy_dram_to_sram_async() call
-    local_image[row, col] = feats[img_idx].layer1[chan, row, col]
-    barrier()
-
-    if row % 2 == 0 and col % 2 == 0:
-        var temp: sftype = rebind[sftype](
-            max(local_image[row, col], local_image[row + 1, col])
+    var tr = row * 2
+    var tc = col * 2
+    var temp: sftype = rebind[sftype](
+        max(
+            feats[img_idx].layer1[chan, tr, tc],
+            feats[img_idx].layer1[chan, tr + 1, tc],
         )
-        temp = max(temp, rebind[sftype](local_image[row + 1, col + 1]))
-        temp = max(temp, rebind[sftype](local_image[row, col + 1]))
-        feats[img_idx].layer2[chan, row // 2, col // 2] = temp
+    )
+    temp = max(temp, rebind[sftype](feats[img_idx].layer1[chan, tr + 1, tc + 1]))
+    temp = max(temp, rebind[sftype](feats[img_idx].layer1[chan, tr, tc + 1]))
+    feats[img_idx].layer2[chan, row, col] = temp
 
 
 def conv3FusedKernel[
@@ -364,9 +348,7 @@ def conv2FusedKernel[
                     local_image[ic, in_row, in_col]
                 ) * rebind[sftype](local_kernels[ic, local_chan, i, j])
 
-    feats[img_idx].layer3[global_chan, row, col] = act_fn.simdForward(
-        rebind[sftype](result + lenet.bias2_3[global_chan])
-    )
+    feats[img_idx].layer3[global_chan, row, col] = act_fn.simdForward(result + lenet.bias2_3[global_chan])
 
 
 def conv1FusedKernel[
@@ -429,9 +411,7 @@ def conv1FusedKernel[
                     result += rebind[sftype](
                         local_image[ic, in_row, in_col]
                     ) * rebind[sftype](local_kernels[ic, oc, i, j])
-        feats[img_idx].layer1[oc, row, col] = act_fn.simdForward(
-            rebind[sftype](result + local_biases[oc])
-        )
+        feats[img_idx].layer1[oc, row, col] = act_fn.simdForward(result + local_biases[oc])
 
 
 def printerGPU[
@@ -440,12 +420,10 @@ def printerGPU[
     """Debugging helper."""
     print("GPU", label, ":")
     try:
-        with DeviceContext() as ctx:
-            with storage.map_to_host() as data:
-                var tensor = LayoutTensor[ftype, layout, MutAnyOrigin](data)
-                print(tensor)
-            print()
-            ctx.synchronize()
+        with storage.map_to_host() as data:
+            var tensor = LayoutTensor[ftype, layout, MutAnyOrigin](data)
+            print(tensor)
+        print()
     except e:
         print(e)
 
@@ -615,15 +593,17 @@ struct StreamSlot[batch_size: Int](Movable):
                 " of image size!"
             )
 
-        if (
-            len(batch) / img_sz != Self.batch_size
-        ):  # expected to have a perfect batch
+        # copy only what the span holds — enqueue_copy_from(ptr) reads the buffer's
+        # FULL length from the source pointer, an OOB read for a short batch
+        var dst = self.hosted_inputs.unsafe_ptr()
+        memcpy(dest=dst, src=batch.unsafe_ptr(), count=len(batch))
+        comptime full_bytes = img_sz * Self.batch_size
+        if len(batch) < full_bytes:  # expected to have a perfect batch
             print(
                 "Rest of GPU StreamSlot batch padded with zeros.", file=stderr
             )  # TODO: proper logging
-            self.hosted_inputs.enqueue_fill(0)
+            memset_zero(dst + len(batch), full_bytes - len(batch))
 
-        self.hosted_inputs.enqueue_copy_from(batch.unsafe_ptr())
         self.device_inputs.enqueue_copy_from(self.hosted_inputs)
 
     def doWork(
@@ -664,7 +644,7 @@ struct StreamSlot[batch_size: Int](Movable):
             model,
             self.features_ptr,
             grid_dim=(Self.batch_size, LAYER1),
-            block_dim=(LENGTH_FEATURE1, LENGTH_FEATURE1),
+            block_dim=(LENGTH_FEATURE2, LENGTH_FEATURE2),
         )
         self.ctx.enqueue_function(
             conv2,
@@ -709,13 +689,18 @@ struct StreamSlot[batch_size: Int](Movable):
 
     def getResults(self, labels: Span[UInt8, _]) raises -> Int:
         """Returns number correct for a batch. Syncs the slot's stream first. Does not check for a full batch - handle at call."""
+        if len(labels) < Self.batch_size:
+            raise Error(
+                t"getResults: labels span ({len(labels)}) shorter than"
+                t" batch_size ({Self.batch_size})"
+            )
         self.ctx.synchronize()
         var correct = 0
         var hosted_outputs = LayoutTensor[
             ftype, Layout.row_major(Self.batch_size, OUTPUT), MutAnyOrigin
         ](self.hosted_outputs.unsafe_ptr())
         var results = batchedArgMax(hosted_outputs)
-        for j in range(Self.batch_size): # TODO: technically this could segfault
+        for j in range(Self.batch_size):
             if results[j] == UInt8(labels[j]):
                 correct += 1
         return correct

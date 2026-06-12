@@ -79,7 +79,7 @@ struct MNISTDataRepository:
     var test_image_file: Path
     var test_label_file: Path
 
-    def __init__(out self, data_dir: String = "data"):
+    def __init__(out self, data_dir: String = "data") raises:
         # setup paths
         self.data_dir = Path(data_dir)
         self.train_image_file = Path(data_dir + "/train-images-idx3-ubyte")
@@ -95,11 +95,10 @@ struct MNISTDataRepository:
         self._test_labels_arena = Arena(size_of[UInt8]() * Self.COUNT_TEST)
         self.test_data = List[Image](capacity=Self.COUNT_TEST)
         self.train_data = List[Image](capacity=Self.COUNT_TRAIN)
-        try:
-            self._readTrainData()
-            self._readTestData()
-        except e:
-            print(e, file=stderr)
+        # let read failures propagate — continuing with empty/partial datasets
+        # just shows up later as a baffling "0/10000 correct"
+        self._readTrainData()
+        self._readTestData()
 
     def _readTrainData(mut self) raises:
         """
