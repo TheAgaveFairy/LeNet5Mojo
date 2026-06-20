@@ -115,6 +115,8 @@ struct FeatureGPUBuffers(Movable, ArenaSizable):
         )
         self.output.enqueue_fill(0.0)
 
+    # left for debugging
+    @deprecated("This synchronizes on every call. There are much better patterns.")
     def loadInput(mut self, image: Image) -> None:
         try:
             with self.input.map_to_host() as load_me:

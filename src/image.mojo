@@ -14,7 +14,7 @@ struct Image(ImplicitlyCopyable):
     """
 
     comptime PixelLayout = Layout.row_major(IMAGE_SIZE, IMAGE_SIZE)
-    comptime PixelStorage = InlineArray[
+    comptime PixelStorage = InlineArray[ # TODO: remove this
         UInt8, Self.PixelLayout.size()
     ]  # raw bytes
     comptime PixelTensor = LayoutTensor[
@@ -29,16 +29,25 @@ struct Image(ImplicitlyCopyable):
     var pixels: Self.PixelTensor
     var label: UInt8  # digits [0, 9] MNIST, could store as "Int"
 
+    # TODO: test and use
+    def __init__(out self, hosted_pixels: Span[UInt8, _], label: UInt8) raises:
+        if len(hosted_pixels) != layout_size:
+            raise Error(t"Span[Byte] for Image has unexpected len: {len(raw)}.")
+        if label > 9:
+            raise Error(t"Error with image label: {label}.")
+        self.label = label
+        self.pixels = Self.PixelTensor(hosted_pixels)
+
     def __init__(
         out self, raw: List[Byte], label: UInt8, mut arena: Arena
     ) raises:
         comptime layout_size = Self.PixelLayout.size()
         if len(raw) != layout_size:
-            raise Error(t"List[Byte] for Image unexpected len: {len(raw)}.")
+            raise Error(t"List[Byte] for Image has unexpected len: {len(raw)}.")
         if label > 9:
-            raise Error(t"Error with image label: {label}.")  # could raise
+            raise Error(t"Error with image label: {label}.")
         self.label = label
-        self.pixels = Self.PixelTensor(arena.alloc[UInt8](layout_size))
+        self.pixels = Self.PixelTensor(arena.alloc[UInt8](layout_size)) 
         memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
 
     def __init__(
@@ -53,14 +62,6 @@ struct Image(ImplicitlyCopyable):
         memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
 
         # no longer normalizing at init because we don't know the end device and that's a separate task
-
-    # def __init__(out self, *, deinit take: Image):
-    #     self.pixels = take.pixels
-    #     self.label = take.label
-    #
-    # def __init__(out self, *, copy: Self):
-    #     self.pixels = copy.pixels.copy()
-    #     self.label = copy.label
 
     def normalized[padded: Bool = True](self: Self, tensor: Self.DataTensor):
         var sum: UInt64 = 0
@@ -90,7 +91,6 @@ struct Image(ImplicitlyCopyable):
                 var curr = Float64(Int(self.pixels.ptr[idx]))
                 tensor[r + off, c + off] = ((curr - mean) / std).cast[ftype]()
 
-    # TODO: delete _normalize once all callers are confirmed migrated to self.normalized(tensor).
     @deprecated("Use non-static self.normalized(output_tensor).")
     @staticmethod
     def _normalize[

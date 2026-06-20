@@ -409,3 +409,52 @@ Check items off as they are completed.
 
 - [ ] **`convoluteForward` slice IndexList vs Int — docs bug** (`cpu/ops.mojo:405`)
   - Docs say `IndexList` is expected but passing `Int` is needed. File Mojo issue.
+
+---
+
+## From Blog Draft (`ideas.typ`)
+
+Surfaced while editing the writeup. Code items first; "(writeup)" items are research/verification
+needed so the prose is accurate, not necessarily code changes.
+
+- [ ] **Parameterize `Image` on origin** (`image.mojo`) — `PixelTensor`/`DataTensor` use `MutAnyOrigin`
+  today; carry a real `origin` so the borrow checker enforces the repo outliving the image instead of
+  relying on "the MNIST repo stays alive long enough." Related to the Session pattern. (ideas.typ §Images, §Model)
+
+- [ ] **Load MNIST into `[1, 28, 28]` (explicit channel dim)** (`image.mojo`, `dataloader.mojo`)
+  - Finish the channel-dimension load so the single-channel input is shaped `[C, H, W]`. (ideas.typ §MNIST Data)
+
+- [ ] **`test_data` / `train_data` as `Span`s natively** (`dataloader.mojo`) — instead of `List[Image]`.
+  Narrower cousin of "Kill `List[Image]` from CPU hot path." (ideas.typ §Data Loading)
+
+- [ ] **Use `with open(...)` context manager for MNIST files** (`dataloader.mojo`) — replace the manual
+  `open`/`seek`/`close` in `_readTrainData`/`_readData`. (ideas.typ §Data Loading)
+
+- [ ] **Collapse `_readData` into one private `@staticmethod`** (`dataloader.mojo`) — takes
+  `(arena, count, filename)`; dedupe the train/test readers. (ideas.typ §Data Loading)
+
+- [ ] **Finalize reflection usage in the Logger** (`resultlogger.mojo`) — the rest of the logger TODOs
+  are done; settle how reflection is used so it can be shown cleanly in the writeup. (ideas.typ §Logger)
+
+- [ ] **Add a simple divide-by-constant MNIST normalization option** (`accel/ops.mojo`
+  `normalizeInputsKernel`, `image.mojo`) — alongside the per-image mean/std path; closer to what the
+  other libs do and a cleaner apples-to-apples. (ideas.typ §Fixing Old Mistakes aside)
+
+- [ ] **CLI: parameterize `get[T]` over String-convertible types** (`cliparser.mojo`) — replace the
+  per-type `get` overloads; or evaluate adopting `moclap`. (ideas.typ §CLI Parsing)
+
+- [ ] **Benchmark the GPU arena allocator** (`accel/arena.mojo`) — CPU arena gave ~20%; the GPU-side
+  arena gain is asserted but unmeasured ("benchmarks haven't been done"). (ideas.typ §GPU Pinned Memory)
+
+- [ ] **(writeup) Re-verify old-version benchmark numbers** (C, first CUDA, first Mojo) before citing
+  them in the "Old Versions" comparison — current numbers are "ones I don't trust." (ideas.typ §Old Versions)
+
+- [ ] **(writeup) Document GPU thread/warp → hardware mapping** — answer concretely: if a block doesn't
+  use a full 32-lane warp, what happens to the idle lanes; can leftover warps form another block?
+  Needed for the Custom Kernels section to be correct. (ideas.typ §Custom Kernels)
+
+- [ ] **(writeup) Pin down when `comptime(N)` / materialize is required** around `vectorize` — so the
+  SIMD aside explains it rather than hand-waving. (ideas.typ §SIMD Aside)
+
+- [ ] **(writeup) Find the nsys marker for CUDA-graph stream capture** — only relevant if/when graphs are
+  added (currently in the "passed on" list). (ideas.typ §Custom Kernels)

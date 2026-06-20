@@ -12,11 +12,15 @@ A high-performance LeNet-5 Convolutional Neural Network built entirely from scra
 
 ## Performance Highlights
 
-- **BENCHMARKS PENDING** within an order of magnitude of major ML libraries
-- **Matched accuracy** within ±0.5% of reference implementations
-- **Custom GPU kernels** written in plain Mojo — no CUDA C
+Streaming MNIST inference on an RTX 3070, full 10,000-image test set:
 
-*A full benchmark suite against JAX, MAX, PyTorch, and ONNX Runtime is in progress.*
+- **~1.17M images/sec** peak GPU throughput — faster than PyTorch (eager, tuned, and `torch.compile`) and ONNX Runtime CUDA, and within ~1.5% of JAX/XLA
+- **~7× faster than MAX Engine** on this model — hand-written Mojo kernels beat Modular's own graph compiler at small-CNN inference
+- Even **single-stream** (no concurrency overlap), the custom kernels hit **~912k img/s** — still ahead of PyTorch eager
+- **Matched accuracy** — 96.48% (9648/10000), identical to the PyTorch / JAX / ONNX reference models
+- **Custom GPU kernels** written in pure Mojo (no CUDA C, cuDNN, or BLAS), supporting NVidia, AMD, and Apple
+
+*Only ONNX-RT + TensorRT and the compute-only ("data resident in VRAM") variants lead; see [Performance Comparison](#performance-comparison) for the full table and methodology.*
 
 ## Architecture
 
@@ -68,9 +72,8 @@ This project uses Mojo's first-party ecosystem throughout — not just the core 
 - **`layout`** — compile-time tensor shape descriptions (`Layout`, `LayoutTensor`, `row_major`) for zero-overhead dimension tracking across all layers, on both CPU and GPU
 - **`std.gpu`** — `DeviceContext`, `DeviceBuffer`, kernel launch via `enqueue_function`, `barrier`, thread indexing (`global_idx`, `block_idx`, `thread_idx`)
 - **`std.algorithm`** — `vectorize` for SIMD-width loops, `parallelize` for multi-threaded training and testing
-- **`std.benchmark`** — lifetime management utilities
 
-No PyTorch, TensorFlow, JAX, or BLAS. All operations are hand-rolled in Mojo.
+All operations are hand-rolled in Mojo. No PyTorch, TensorFlow, JAX, or BLAS.
 
 ### Compile-Time Activation Functions
 
@@ -91,14 +94,14 @@ Each activation implements `forward`, `backward`, `simdForward`, and `simdBackwa
 
 Both CPU and GPU use custom bump arena allocators to avoid per-tensor allocation overhead:
 
-- **`CPUBumpArenaAllocator`** — one pre-allocated heap slab; model weights and all intermediate `Feature` buffers sub-allocate from it. `wipe()` zeroes and resets; no individual frees during training.
+- **`CPUBumpArenaAllocator`** — one pre-allocated heap arena; model weights and all intermediate `Feature` buffers sub-allocate from it. `wipe()` zeroes and resets; no individual frees during training.
 - **`GPUBumpArenaAllocator`** — same pattern on GPU: one `DeviceBuffer[uint8]` backing slab, typed sub-buffers via `create_sub_buffer` with alignment padding. The full batch of `FeatureGPUBuffers` for an inference run comes from a single arena.
 - **`CPUSystemAllocator` / `GPUSystemAllocator`** — drop-in alternatives that call the system allocator per-request; same interface, useful for profiling or one-off allocations.
-- **`DeviceSession`** — ties arena, weight buffers, and `LeNet5GPU` view lifetimes together; no manual lifetime juggling at the call site.
+- **`[CPU/Device]Session`** — ties arena, weight buffers, and `LeNet5[GPU]` view lifetimes together; no manual lifetime juggling at the call site.
 
 ### GPU Kernels
 
-All GPU computation is written in plain Mojo `def` functions — no CUDA C syntax:
+All GPU computation is written in plain Mojo `def` functions:
 
 | Kernel | What it does |
 |--------|-------------|
@@ -106,9 +109,8 @@ All GPU computation is written in plain Mojo `def` functions — no CUDA C synta
 | `conv1FusedKernel` | Conv (1→6 ch) with bias + activation; weights cached in shared memory |
 | `conv2FusedKernel` | Conv (6→16 ch); channel divisions to fit thread block resource limits |
 | `conv3FusedKernel` | Conv (16→120 ch); reduction across 16×5×5 inputs per output channel |
-| `maxPool1Kernel` / `maxPool2Kernel` | 2×2 max pooling with shared-memory staging |
+| `maxPool1Kernel` / `maxPool2Kernel` | 2×2 max pooling |
 | `matMulFusedKernel` | FC layer (120→10) as a parallel tree reduction in shared memory |
-| `gatherOutputsKernel` | Scatter per-image logits into a flat output buffer for host argmax |
 
 Kernels use `LayoutTensor` for type-safe indexing and `comptime for` for inner-loop unrolling at compile time.
 
@@ -162,32 +164,51 @@ pixi run formatall
 
 ## Performance Comparison
 
-> **Note:** A comprehensive benchmark suite against JAX, MAX, PyTorch, and ONNX Runtime is in progress. The table below will be expanded significantly.
+Benchmarked against PyTorch, JAX, ONNX Runtime (incl. TensorRT), MAX Engine, and NumPy on the full **10,000-image MNIST test set**. Throughput is the median over the set — **higher is better**.
 
-| Implementation | Platform | Time (ms) | Notes |
-|---------------|----------|-----------|-------|
-| LeNet5Mojo | GPU | 2069 | Custom Mojo kernels |
-| LeNet5Mojo | CPU | 12381 | Multi-threaded + SIMD |
-| PyTorch | GPU | 2150 | ~4% slower than LeNet5Mojo |
-| PyTorch | CPU | 2485 | Reference |
-| C/CUDA | CPU | 4241 | Stack-allocated model |
+### GPU — streaming inference (peak throughput)
 
-*AMD Ryzen 7600X / NVidia RTX 3070 8GB. `-O3`, batch size 50, 60,000 images, average of 10 runs.*
+| Framework | Backend | Throughput (img/s) | Latency (ms) | Accuracy |
+|-----------|---------|-------------------:|-------------:|:--------:|
+| ONNX-RT + TensorRT | GPU | 1,428,778 | 7.0 | 96.49% |
+| JAX | XLA | 1,187,601 | 8.4 | 96.48% |
+| **LeNet5Mojo** | **GPU, 5 streams** | **1,169,481** | **8.0** | **96.48%** |
+| PyTorch (`torch.compile`) | GPU | 1,032,441 | 9.7 | 96.48% |
+| **LeNet5Mojo** | **GPU, single stream** | **911,578** | **10.0** | **96.48%** |
+| ONNX Runtime | GPU | 888,744 | 11.3 | 96.48% |
+| PyTorch (eager) | GPU | 851,311 | 11.7 | 96.48% |
+| MAX Engine | GPU | 161,045 | 57.2 | 96.5%* |
+
+*All implementations reach the same 96.48% accuracy; \* MAX Engine's large-batch runs drop the remainder images.*
+
+**Methodology / fairness notes:**
+- **Streaming scenario** (the apples-to-apples default): images are copied host→device *inside* the timed loop. LeNet5Mojo uploads raw `uint8` and normalizes on-GPU — ~4× less PCIe traffic than the libraries' pre-normalized `fp32`.
+- *5 streams* = ping-pong overlap of the H2D copy with compute; *single stream* matches the single-stream libraries for a stricter comparison (and still beats PyTorch eager).
+- **Compute-only** ("dataset already resident in VRAM") numbers — where JAX-resident (1.50M img/s) and PyTorch-resident (1.09M) pull ahead — are tracked separately. A resident mode for LeNet5Mojo is in progress; until then it isn't in the headline table.
+
+### CPU
+
+The CPU path (`parallelize` + SIMD, hand-rolled) reaches **~27k img/s** — honest about it: this trails vendor-tuned CPU backends like ONNX Runtime / MLAS (~474k img/s) and PyTorch (~166k). CPU was not the optimization focus; the GPU kernels are where the work went.
+
+*AMD Ryzen 7600X / NVidia RTX 3070 8GB. `fp32`, full 10k test set, median of repeated runs.*
 
 ## Current Limitations
 
 - GPU **training** not implemented — inference only
-- GPU batch size bounded by VRAM; default 50, tested to ~100 on RTX 3070 8GB
-- Tail batch silently dropped when dataset size isn't divisible by batch size
-- GPU inference result logger not yet wired up
+- Batch size must divide the dataset evenly; remainder images are currently dropped (default `bs=50` divides both 10k and 60k). Arbitrary batch sizes need tail-padding (planned).
+- Stream count (`--num-streams`) is hand-tuned per batch size to hit peak — no auto-default yet
+- CPU inference throughput trails vendor-optimized CPU backends (ONNX Runtime / MLAS)
+- Only `fp32` / `fp64` paths exercised; `fp16` / `bf16` untested
+- `conv1` kernel hardcodes single-channel input (fine for MNIST, breaks if extended)
 
 ## Planned Improvements
 
-- Ping-pong H2D streaming — overlap copy and compute across batches
-- Wire up GPU inference result logging to CSV
-- Comprehensive benchmark suite (JAX, MAX, PyTorch, ONNX Runtime)
-- `CPUSession` struct to bind arena + model lifetimes together
-- `MNISTBatch.slice()` for explicit batch-level slicing
+- **Compute-only / resident benchmark mode** — preload the full test set to VRAM for a pure kernel-vs-kernel comparison against XLA / cuDNN / TensorRT (removes Mojo's raw-`uint8` transfer edge)
+- **Tail-padding** so any batch size covers the full test set (pad the last partial batch, mask padded slots when tallying)
+- **Auto-heuristic for stream count** derived from the batch size, so good numbers come out-of-the-box without a grid search
+- **conv3 Tier B** — tiled GEMM that fills the GPU in a single launch, reducing reliance on high stream counts for occupancy
+- **`fp16` / `bf16` dtype paths** + dtype-parity notes vs PyTorch/JAX (which default to TF32 matmuls on Ampere)
+- Pre-normalized `fp32` input mode to mirror how the libraries upload images
 
 ## Contributing
 

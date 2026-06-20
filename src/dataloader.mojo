@@ -18,8 +18,13 @@ struct MNISTDataView[
     var raw_pixels: Span[UInt8, Self.origin]
     var raw_labels: Span[UInt8, Self.origin]
 
-    # Nice-to-have: pack a List[Image] into caller-supplied contiguous arenas.
-    # CANNOT take Some[CPUAllocator] — memory must be contiguous. Could also accept UnsafePointer.
+    # TODO: verify origins and implement
+    def __init__[o: ImmutOrigin](raw_pixels: Span[UInt8, o], raw_labels: Span[UInt8, o]):
+        self.raw_pixels = raw_pixels
+        self.raw_labels = raw_labels
+
+    # Nice-to-have: pack a List[Image] into caller-supplied contiguous "arenas" supplied as Spans.
+    # CANNOT take Some[CPUAllocator] — memory must be contiguous.
     def __init__[
         buf_origin: MutOrigin
     ](

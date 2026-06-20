@@ -44,6 +44,7 @@ from accel.feature import FeatureGPU, FeatureGPUBuffers
 from accel.arena import GPUBumpArenaAllocator
 from dataloader import MNISTDataView
 
+# IME these don't change performance a ton
 comptime div_chans_conv2 = defines.get_defined_int["DIV_CHANS_CONV2", 4]()  # lower risks using too many resources, any factor of 16
 comptime div_chans_conv3 = defines.get_defined_int["DIV_CHANS_CONV3", 8]()  # needs to be a factor of 120
 
@@ -180,9 +181,25 @@ def maxPool1Kernel[
     staging load — no reuse in 2x2 non-overlapping pooling, so global reads win).
     """
     var img_idx = block_idx.x  # range(batch_size)
+<<<<<<< Updated upstream
     var chan = block_idx.y  # range(LAYER2)
     var row = thread_idx.y  # range(LENGTH_FEATURE2)
     var col = thread_idx.x  # range(LENGTH_FEATURE2)
+=======
+    var chan = block_idx.y  # range(LAYER1)
+    var row = thread_idx.y  # range(LENGTH_FEATURE1)
+    var col = thread_idx.x  # range(LENGTH_FEATURE1)
+
+    var local_image = LayoutTensor[
+        ftype,
+        Layout.row_major(LENGTH_FEATURE1, LENGTH_FEATURE1),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+
+    local_image[row, col] = feats[img_idx].layer1[chan, row, col]
+    barrier()
+>>>>>>> Stashed changes
 
     var tr = row * 2
     var tc = col * 2
@@ -768,7 +785,7 @@ struct StreamSlot[batch_size: Int](Movable):
                 correct += 1
         return correct
 
-
+# TODO: convert stream_slots to a Span, pass CompiledKernels
 def _batchRun[
     batch_size: Int
 ](
@@ -786,7 +803,7 @@ def _batchRun[
 
     for batch_num in range(total_batches):
         var slot_idx = batch_num % num_streams
-        var batch_start = batch_num * batch_size * IMAGE_SIZE * IMAGE_SIZE
+        var batch_start = batch_num * batch_bytes #batch_size * IMAGE_SIZE * IMAGE_SIZE
         var batch_span = data.raw_pixels[
             batch_start : batch_start + batch_bytes
         ]
@@ -794,18 +811,25 @@ def _batchRun[
         if batch_num >= num_streams:
             var stale = batch_num - num_streams
             var stale_start = stale * batch_size
-            total_correct += (stream_slots + slot_idx)[].getResults(
+            total_correct += stream_slots[slot_idx].getResults( # D2H
                 data.raw_labels[stale_start : stale_start + batch_size]
             )
 
+<<<<<<< Updated upstream
         (stream_slots + slot_idx)[].loadBatch(batch_span)
         (stream_slots + slot_idx)[].doWork(kernels, model)
+=======
+        stream_slots[slot_idx].loadBatch(batch_span) # H2D
+        stream_slots[slot_idx].doWork( # kernels
+            norm, conv1, pool1, conv2, pool2, conv3, matmul, gather, model
+        )
+>>>>>>> Stashed changes
 
     var epilogue_start = max(0, total_batches - num_streams)
     for batch_num in range(epilogue_start, total_batches):
         var slot_idx = batch_num % num_streams
         var label_start = batch_num * batch_size
-        total_correct += (stream_slots + slot_idx)[].getResults(
+        total_correct += stream_slots[slot_idx].getResults(
             data.raw_labels[label_start : label_start + batch_size]
         )
 

@@ -47,9 +47,6 @@ struct DeviceSession[Allocator: GPUAllocator]():
         self.model = LeNet5GPU(self.bufs)
         self.alloc = arena^
 
-    # def __del__(deinit self):
-    #     pass
-
 
 struct LeNet5GPUBuffers(ArenaSizable):
     """Stays on CPU — holds DeviceBuffers for host-side access (map_to_host, enqueue_copy_from, etc.).
