@@ -181,25 +181,9 @@ def maxPool1Kernel[
     staging load — no reuse in 2x2 non-overlapping pooling, so global reads win).
     """
     var img_idx = block_idx.x  # range(batch_size)
-<<<<<<< Updated upstream
     var chan = block_idx.y  # range(LAYER2)
     var row = thread_idx.y  # range(LENGTH_FEATURE2)
     var col = thread_idx.x  # range(LENGTH_FEATURE2)
-=======
-    var chan = block_idx.y  # range(LAYER1)
-    var row = thread_idx.y  # range(LENGTH_FEATURE1)
-    var col = thread_idx.x  # range(LENGTH_FEATURE1)
-
-    var local_image = LayoutTensor[
-        ftype,
-        Layout.row_major(LENGTH_FEATURE1, LENGTH_FEATURE1),
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-    ].stack_allocation()
-
-    local_image[row, col] = feats[img_idx].layer1[chan, row, col]
-    barrier()
->>>>>>> Stashed changes
 
     var tr = row * 2
     var tc = col * 2
@@ -815,15 +799,10 @@ def _batchRun[
                 data.raw_labels[stale_start : stale_start + batch_size]
             )
 
-<<<<<<< Updated upstream
-        (stream_slots + slot_idx)[].loadBatch(batch_span)
-        (stream_slots + slot_idx)[].doWork(kernels, model)
-=======
         stream_slots[slot_idx].loadBatch(batch_span) # H2D
         stream_slots[slot_idx].doWork( # kernels
-            norm, conv1, pool1, conv2, pool2, conv3, matmul, gather, model
+            kernels, model
         )
->>>>>>> Stashed changes
 
     var epilogue_start = max(0, total_batches - num_streams)
     for batch_num in range(epilogue_start, total_batches):

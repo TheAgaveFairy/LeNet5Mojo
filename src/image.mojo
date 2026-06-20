@@ -30,9 +30,10 @@ struct Image(ImplicitlyCopyable):
     var label: UInt8  # digits [0, 9] MNIST, could store as "Int"
 
     # TODO: test and use
-    def __init__(out self, hosted_pixels: Span[UInt8, _], label: UInt8) raises:
+    def __init__[o: Origin](out self, hosted_pixels: Span[UInt8, o], label: UInt8) raises:
+        comptime layout_size = Self.PixelLayout.size()
         if len(hosted_pixels) != layout_size:
-            raise Error(t"Span[Byte] for Image has unexpected len: {len(raw)}.")
+            raise Error(t"Span[Byte] for Image has unexpected len: {len(hosted_pixels)}.")
         if label > 9:
             raise Error(t"Error with image label: {label}.")
         self.label = label

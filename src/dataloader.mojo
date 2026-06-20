@@ -19,7 +19,7 @@ struct MNISTDataView[
     var raw_labels: Span[UInt8, Self.origin]
 
     # TODO: verify origins and implement
-    def __init__[o: ImmutOrigin](raw_pixels: Span[UInt8, o], raw_labels: Span[UInt8, o]):
+    def __init__[o: ImmutOrigin](out self, raw_pixels: Span[UInt8, o], raw_labels: Span[UInt8, o]):
         self.raw_pixels = raw_pixels
         self.raw_labels = raw_labels
 
