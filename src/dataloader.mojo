@@ -102,70 +102,55 @@ struct MNISTDataRepository:
         self.train_data = List[Image](capacity=Self.COUNT_TRAIN)
         # let read failures propagate — continuing with empty/partial datasets
         # just shows up later as a baffling "0/10000 correct"
-        self._readTrainData()
-        self._readTestData()
+        Self._readSplit(
+            self.train_image_file,
+            self.train_label_file,
+            Self.COUNT_TRAIN,
+            self._train_pixels_arena,
+            self._train_labels_arena,
+            self.train_data,
+            "train",
+        )
+        Self._readSplit(
+            self.test_image_file,
+            self.test_label_file,
+            Self.COUNT_TEST,
+            self._test_pixels_arena,
+            self._test_labels_arena,
+            self.test_data,
+            "test",
+        )
 
-    def _readTrainData(mut self) raises:
-        """
-        The span for the data we send in we'll fill with normalized images.
-        """
+    @staticmethod
+    def _readSplit(
+        image_file: Path,
+        label_file: Path,
+        count: Int,
+        mut pixels_arena: Arena,
+        mut labels_arena: Arena,
+        mut data: List[Image],
+        split: StaticString,
+    ) raises:
+        """Read `count` images + labels from the IDX files into the supplied
+        pixel/label arenas and image list. Shared by the train and test loads —
+        callers pass the matching destination fields (disjoint, so taking them
+        as separate `mut` args avoids a whole-`self` borrow)."""
+        comptime size = Image.PixelLayout.size()  # 784 bytes/image
         try:
-            var data_file = open(self.train_image_file, "r")
-            var label_file = open(self.train_label_file, "r")
+            with open(image_file, "r") as data_file:
+                with open(label_file, "r") as label_handle:
+                    _ = data_file.seek(16, os.SEEK_SET)  # skip IDX image header
+                    _ = label_handle.seek(8, os.SEEK_SET)  # skip IDX label header
+                    for c in range(count):
+                        var data_list = data_file.read_bytes(size)  # List[Byte]
+                        var temp = label_handle.read_bytes(1)
+                        var data_label: UInt8 = temp[0]
 
-            _ = data_file.seek(
-                16, os.SEEK_SET
-            )  # data has a magic header # 2049
-            _ = label_file.seek(8, os.SEEK_SET)  # labels too # 2051
-
-            comptime size = Image.PixelLayout.size()
-            for c in range(Self.COUNT_TRAIN):
-                var data_list = data_file.read_bytes(
-                    size  # IMAGE_SIZE * IMAGE_SIZE
-                )  # -> List[Byte]
-
-                var temp = label_file.read_bytes(1)
-                var data_label: UInt8 = temp[0]
-
-                var img = Image(data_list, data_label, self._train_pixels_arena)
-                self._train_labels_arena.buffer[c] = data_label
-                self.train_data.append(img^)
-
-            data_file.close()
-            label_file.close()
+                        var img = Image(data_list, data_label, pixels_arena)
+                        labels_arena.buffer[c] = data_label
+                        data.append(img^)
         except e:
-            raise Error(t"Error with input MNIST train binary files: {e}.")
-
-    def _readTestData(mut self) raises:
-        """
-        The span for the data we send in we'll fill with normalized images.
-        """
-        try:
-            var data_file = open(self.test_image_file, "r")
-            var label_file = open(self.test_label_file, "r")
-
-            _ = data_file.seek(
-                16, os.SEEK_SET
-            )  # data has a magic header # 2049
-            _ = label_file.seek(8, os.SEEK_SET)  # labels too # 2051
-
-            comptime size = Image.PixelLayout.size()
-            for c in range(Self.COUNT_TEST):
-                var data_list = data_file.read_bytes(
-                    size  # IMAGE_SIZE * IMAGE_SIZE
-                )  # -> List[Byte]
-
-                var temp = label_file.read_bytes(1)
-                var data_label: UInt8 = temp[0]
-
-                var img = Image(data_list, data_label, self._test_pixels_arena)
-                self.test_data.append(img^)
-                self._test_labels_arena.buffer[c] = data_label
-
-            data_file.close()
-            label_file.close()
-        except e:
-            raise Error(t"Error with input MNIST test binary files: {e}.")
+            raise Error(t"Error with input MNIST {split} binary files: {e}.")
 
     # TODO: consider combining into one method for test and train and use arg to pick
     def getTrainBatch(self, start: Int, end: Int) -> MNISTDataView[origin=origin_of(self)]:

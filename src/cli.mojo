@@ -42,6 +42,12 @@ struct CliArgs(Copyable, Movable):
                     print("--num-streams must be 1..10, got", v, file=stderr)
                     raise Error("num_streams out of range")
                 num_streams = v
+            elif args[i].startswith("--"):
+                # A silently-ignored flag is the worst failure mode for a
+                # benchmark knob: a typo (--num-stream, --benchonly) means the
+                # default is used and the numbers still look real. Fail loud.
+                print("unknown flag:", args[i], "(see --help)", file=stderr)
+                raise Error(t"unknown flag: {args[i]}")
         return CliArgs(num_streams, bench_only, help)
 
 

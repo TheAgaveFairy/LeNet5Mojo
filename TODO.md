@@ -382,14 +382,13 @@ Check items off as they are completed.
     `doWork`/`_batchRun`/`batchedForwardMultiStream` now take one `kernels` arg; call sites in
     main.mojo + profile_gpu.mojo are one-liners. Accuracy + fps unchanged.
 
-- [ ] **CLI: warn on unknown args; port the MojoLLM parser pattern** (`cli.mojo`)
-  - A typo (`--num-stream 5`, `--benchonly`) is silently ignored and the default silently used —
-    worst failure mode for a benchmarking knob. Anything starting with `--` that isn't recognized
-    should at least print a warning (or raise).
-  - Reuse `~/Documents/GitHub/mojollm/src/cliparser.mojo` (TokenizerParser): comptime flag constants
-    with derived short forms, while-loop that *consumes* flag+value (`i += 2` — also fixes the
-    current quirk where the value string gets re-scanned as a flag), `had_error` instead of raising.
-    Port the pattern, swap in this project's flags.
+- [x] **CLI: warn on unknown args** (`cli.mojo`) — DONE 2026-06-20
+  - A typo (`--num-stream 5`, `--benchonly`) was silently ignored and the default silently used —
+    worst failure mode for a benchmarking knob. `CliArgs.parse` now raises on any unrecognized
+    `--`-prefixed flag (fail loud). `cli.mojo` is the live parser (main.mojo imports it);
+    `cliparser.mojo` is dormant (no importers).
+  - NOT porting the MojoLLM `cliparser.mojo` (TokenizerParser) pattern now — see the reflection
+    rewrite below. The fail-loud behavior is parser-agnostic and portable to whatever wins.
 
 - [x] **`MNISTDataRepository.__init__` swallows read errors** (`dataloader.mojo`) — DONE 2026-06-12
   - Constructor is now `raises`; the try/except-print is gone, read failures propagate.
@@ -427,11 +426,15 @@ needed so the prose is accurate, not necessarily code changes.
 - [ ] **`test_data` / `train_data` as `Span`s natively** (`dataloader.mojo`) — instead of `List[Image]`.
   Narrower cousin of "Kill `List[Image]` from CPU hot path." (ideas.typ §Data Loading)
 
-- [ ] **Use `with open(...)` context manager for MNIST files** (`dataloader.mojo`) — replace the manual
-  `open`/`seek`/`close` in `_readTrainData`/`_readData`. (ideas.typ §Data Loading)
+- [x] **Use `with open(...)` context manager for MNIST files** (`dataloader.mojo`) — DONE 2026-06-20
+  - Both handles now opened via nested `with open(...)`; manual `.close()` calls gone (auto-closed on
+    scope exit, including the error path). Done together with the reader collapse below.
 
-- [ ] **Collapse `_readData` into one private `@staticmethod`** (`dataloader.mojo`) — takes
-  `(arena, count, filename)`; dedupe the train/test readers. (ideas.typ §Data Loading)
+- [x] **Collapse `_readData` into one private `@staticmethod`** (`dataloader.mojo`) — DONE 2026-06-20
+  - `_readTrainData`/`_readTestData` (near-identical) replaced by one `_readSplit(image_file,
+    label_file, count, mut pixels_arena, mut labels_arena, mut data, split)` staticmethod. Callers in
+    `__init__` pass the matching destination fields — disjoint, so separate `mut` args avoid a
+    whole-`self` borrow. Build green, accuracy unchanged.
 
 - [ ] **Finalize reflection usage in the Logger** (`resultlogger.mojo`) — the rest of the logger TODOs
   are done; settle how reflection is used so it can be shown cleanly in the writeup. (ideas.typ §Logger)
@@ -440,8 +443,15 @@ needed so the prose is accurate, not necessarily code changes.
   `normalizeInputsKernel`, `image.mojo`) — alongside the per-image mean/std path; closer to what the
   other libs do and a cleaner apples-to-apples. (ideas.typ §Fixing Old Mistakes aside)
 
-- [ ] **CLI: parameterize `get[T]` over String-convertible types** (`cliparser.mojo`) — replace the
-  per-type `get` overloads; or evaluate adopting `moclap`. (ideas.typ §CLI Parsing)
+- [ ] **CLI: reflection-driven parser (clap-derive / moclap style)** (`cliparser.mojo`) — replace the
+  per-type `get[T]` overloads; or evaluate adopting `moclap`. (ideas.typ §CLI Parsing)
+  - BLOCKED ON `__extension__` (coming to Mojo, not yet landed). The clean design needs a
+    `ConvertibleFromString` trait that built-in types (`Int`, `Float64`, `DType`, `Bool`) conform to;
+    today you can't add that conformance to types you don't own, forcing the per-type `get[T]`
+    overload workaround. With extensions you retroactively conform them, then a reflection pass fills
+    a `CliArgs`-shaped struct field-by-field from flags (clap-derive). Don't build the awkward
+    pre-extension version — it'd be thrown away. Until then `cli.mojo`'s explicit parse stays; the
+    fail-loud unknown-flag fix already covers the worst failure mode.
 
 - [ ] **Benchmark the GPU arena allocator** (`accel/arena.mojo`) — CPU arena gave ~20%; the GPU-side
   arena gain is asserted but unmeasured ("benchmarks haven't been done"). (ideas.typ §GPU Pinned Memory)
