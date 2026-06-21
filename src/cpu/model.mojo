@@ -9,6 +9,7 @@ from std.pathlib import Path
 from std.algorithm.functional import vectorize
 
 from image import Image
+from origin_util import untrack
 from resultlogger import MultiFileLogger, LeNet5Logger
 from cpu.ops import (
     convoluteForward,
@@ -66,35 +67,35 @@ struct LeNet5(Movable, ArenaSizable):
     comptime w01_layout = Layout.row_major(
         INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL
     )
-    var weight0_1: LayoutTensor[ftype, Self.w01_layout, MutAnyOrigin]
+    var weight0_1: LayoutTensor[ftype, Self.w01_layout, MutUntrackedOrigin]
 
     comptime w23_layout = Layout.row_major(
         LAYER2, LAYER3, LENGTH_KERNEL, LENGTH_KERNEL
     )
-    var weight2_3: LayoutTensor[ftype, Self.w23_layout, MutAnyOrigin]
+    var weight2_3: LayoutTensor[ftype, Self.w23_layout, MutUntrackedOrigin]
 
     comptime w45_layout = Layout.row_major(
         LAYER4, LAYER5, LENGTH_KERNEL, LENGTH_KERNEL
     )
-    var weight4_5: LayoutTensor[ftype, Self.w45_layout, MutAnyOrigin]
+    var weight4_5: LayoutTensor[ftype, Self.w45_layout, MutUntrackedOrigin]
 
     comptime w56_layout = Layout.row_major(
         LAYER5 * LENGTH_FEATURE5 * LENGTH_FEATURE5, OUTPUT
     )
-    var weight5_6: LayoutTensor[ftype, Self.w56_layout, MutAnyOrigin]
+    var weight5_6: LayoutTensor[ftype, Self.w56_layout, MutUntrackedOrigin]
 
     # BIASES
     comptime b01_layout = Layout.row_major(LAYER1)
-    var bias0_1: LayoutTensor[ftype, Self.b01_layout, MutAnyOrigin]
+    var bias0_1: LayoutTensor[ftype, Self.b01_layout, MutUntrackedOrigin]
 
     comptime b23_layout = Layout.row_major(LAYER3)
-    var bias2_3: LayoutTensor[ftype, Self.b23_layout, MutAnyOrigin]
+    var bias2_3: LayoutTensor[ftype, Self.b23_layout, MutUntrackedOrigin]
 
     comptime b45_layout = Layout.row_major(LAYER5)
-    var bias4_5: LayoutTensor[ftype, Self.b45_layout, MutAnyOrigin]
+    var bias4_5: LayoutTensor[ftype, Self.b45_layout, MutUntrackedOrigin]
 
     comptime b56_layout = Layout.row_major(OUTPUT)
-    var bias5_6: LayoutTensor[ftype, Self.b56_layout, MutAnyOrigin]
+    var bias5_6: LayoutTensor[ftype, Self.b56_layout, MutUntrackedOrigin]
 
     @staticmethod
     def sizeInBytes() -> Int:
@@ -115,31 +116,31 @@ struct LeNet5(Movable, ArenaSizable):
     def __init__(out self):
         self.allocator_owns_memory = False
         # weights
-        self.weight0_1 = LayoutTensor[ftype, Self.w01_layout, MutAnyOrigin](
+        self.weight0_1 = untrack(LayoutTensor[ftype, Self.w01_layout](
             alloc[sftype](comptime (Self.w01_layout.size()))
-        ).fill(0.0)
-        self.weight2_3 = LayoutTensor[ftype, Self.w23_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.weight2_3 = untrack(LayoutTensor[ftype, Self.w23_layout](
             alloc[sftype](comptime (Self.w23_layout.size()))
-        ).fill(0.0)
-        self.weight4_5 = LayoutTensor[ftype, Self.w45_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.weight4_5 = untrack(LayoutTensor[ftype, Self.w45_layout](
             alloc[sftype](comptime (Self.w45_layout.size()))
-        ).fill(0.0)
-        self.weight5_6 = LayoutTensor[ftype, Self.w56_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.weight5_6 = untrack(LayoutTensor[ftype, Self.w56_layout](
             alloc[sftype](comptime (Self.w56_layout.size()))
-        ).fill(0.0)
+        )).fill(0.0)
         # biases
-        self.bias0_1 = LayoutTensor[ftype, Self.b01_layout, MutAnyOrigin](
+        self.bias0_1 = untrack(LayoutTensor[ftype, Self.b01_layout](
             alloc[sftype](comptime (Self.b01_layout.size()))
-        ).fill(0.0)
-        self.bias2_3 = LayoutTensor[ftype, Self.b23_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.bias2_3 = untrack(LayoutTensor[ftype, Self.b23_layout](
             alloc[sftype](comptime (Self.b23_layout.size()))
-        ).fill(0.0)
-        self.bias4_5 = LayoutTensor[ftype, Self.b45_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.bias4_5 = untrack(LayoutTensor[ftype, Self.b45_layout](
             alloc[sftype](comptime (Self.b45_layout.size()))
-        ).fill(0.0)
-        self.bias5_6 = LayoutTensor[ftype, Self.b56_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.bias5_6 = untrack(LayoutTensor[ftype, Self.b56_layout](
             alloc[sftype](comptime (Self.b56_layout.size()))
-        ).fill(0.0)
+        )).fill(0.0)
 
     def __init__(out self, mut arena: Some[CPUAllocator]):  # raises
         """
@@ -149,31 +150,31 @@ struct LeNet5(Movable, ArenaSizable):
         """
         self.allocator_owns_memory = True
         # weights
-        self.weight0_1 = LayoutTensor[ftype, Self.w01_layout, MutAnyOrigin](
+        self.weight0_1 = untrack(LayoutTensor[ftype, Self.w01_layout](
             arena.alloc[sftype](comptime (Self.w01_layout.size()))
-        ).fill(0.0)
-        self.weight2_3 = LayoutTensor[ftype, Self.w23_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.weight2_3 = untrack(LayoutTensor[ftype, Self.w23_layout](
             arena.alloc[sftype](comptime (Self.w23_layout.size()))
-        ).fill(0.0)
-        self.weight4_5 = LayoutTensor[ftype, Self.w45_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.weight4_5 = untrack(LayoutTensor[ftype, Self.w45_layout](
             arena.alloc[sftype](comptime (Self.w45_layout.size()))
-        ).fill(0.0)
-        self.weight5_6 = LayoutTensor[ftype, Self.w56_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.weight5_6 = untrack(LayoutTensor[ftype, Self.w56_layout](
             arena.alloc[sftype](comptime (Self.w56_layout.size()))
-        ).fill(0.0)
+        )).fill(0.0)
         # biases
-        self.bias0_1 = LayoutTensor[ftype, Self.b01_layout, MutAnyOrigin](
+        self.bias0_1 = untrack(LayoutTensor[ftype, Self.b01_layout](
             arena.alloc[sftype](comptime (Self.b01_layout.size()))
-        ).fill(0.0)
-        self.bias2_3 = LayoutTensor[ftype, Self.b23_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.bias2_3 = untrack(LayoutTensor[ftype, Self.b23_layout](
             arena.alloc[sftype](comptime (Self.b23_layout.size()))
-        ).fill(0.0)
-        self.bias4_5 = LayoutTensor[ftype, Self.b45_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.bias4_5 = untrack(LayoutTensor[ftype, Self.b45_layout](
             arena.alloc[sftype](comptime (Self.b45_layout.size()))
-        ).fill(0.0)
-        self.bias5_6 = LayoutTensor[ftype, Self.b56_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.bias5_6 = untrack(LayoutTensor[ftype, Self.b56_layout](
             arena.alloc[sftype](comptime (Self.b56_layout.size()))
-        ).fill(0.0)
+        )).fill(0.0)
 
     def zero(mut self):
         _ = self.weight0_1.fill(0.0)
@@ -252,8 +253,8 @@ struct LeNet5(Movable, ArenaSizable):
 
     @staticmethod
     def _randHelper[
-        layout: Layout
-    ](mut tensor: LayoutTensor[ftype, layout, MutAnyOrigin], scale: sftype):
+        layout: Layout, o: MutOrigin
+    ](mut tensor: LayoutTensor[ftype, layout, o], scale: sftype):
         comptime N = tensor.layout.size()
         var data = Span(ptr=tensor.ptr, length=comptime (N))
         rand(data, min=-1.0, max=1.0)  # uniform distribution
@@ -472,35 +473,35 @@ struct Feature(Movable, ArenaSizable):
     comptime input_layout = Layout.row_major(
         INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0
     )
-    var input: LayoutTensor[ftype, Feature.input_layout, MutAnyOrigin]
+    var input: LayoutTensor[ftype, Feature.input_layout, MutUntrackedOrigin]
 
     comptime layer1_layout = Layout.row_major(
         LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE1
     )
-    var layer1: LayoutTensor[ftype, Feature.layer1_layout, MutAnyOrigin]
+    var layer1: LayoutTensor[ftype, Feature.layer1_layout, MutUntrackedOrigin]
 
     comptime layer2_layout = Layout.row_major(
         LAYER2, LENGTH_FEATURE2, LENGTH_FEATURE2
     )
-    var layer2: LayoutTensor[ftype, Feature.layer2_layout, MutAnyOrigin]
+    var layer2: LayoutTensor[ftype, Feature.layer2_layout, MutUntrackedOrigin]
 
     comptime layer3_layout = Layout.row_major(
         LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE3
     )
-    var layer3: LayoutTensor[ftype, Feature.layer3_layout, MutAnyOrigin]
+    var layer3: LayoutTensor[ftype, Feature.layer3_layout, MutUntrackedOrigin]
 
     comptime layer4_layout = Layout.row_major(
         LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4
     )
-    var layer4: LayoutTensor[ftype, Feature.layer4_layout, MutAnyOrigin]
+    var layer4: LayoutTensor[ftype, Feature.layer4_layout, MutUntrackedOrigin]
 
     comptime layer5_layout = Layout.row_major(
         LAYER5, LENGTH_FEATURE5, LENGTH_FEATURE5
     )
-    var layer5: LayoutTensor[ftype, Feature.layer5_layout, MutAnyOrigin]
+    var layer5: LayoutTensor[ftype, Feature.layer5_layout, MutUntrackedOrigin]
 
     comptime output_layout = Layout.row_major(OUTPUT)
-    var output: LayoutTensor[ftype, Feature.output_layout, MutAnyOrigin]
+    var output: LayoutTensor[ftype, Feature.output_layout, MutUntrackedOrigin]
 
     @staticmethod
     def sizeInBytes() -> Int:
@@ -519,53 +520,53 @@ struct Feature(Movable, ArenaSizable):
         """
         Needs to start as all zeros.
         """
-        self.input = LayoutTensor[ftype, Self.input_layout, MutAnyOrigin](
+        self.input = untrack(LayoutTensor[ftype, Self.input_layout](
             alloc[sftype](comptime (Self.input_layout.size()))
-        ).fill(0.0)
-        self.layer1 = LayoutTensor[ftype, Self.layer1_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.layer1 = untrack(LayoutTensor[ftype, Self.layer1_layout](
             alloc[sftype](comptime (Self.layer1_layout.size()))
-        ).fill(0.0)
-        self.layer2 = LayoutTensor[ftype, Self.layer2_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.layer2 = untrack(LayoutTensor[ftype, Self.layer2_layout](
             alloc[sftype](comptime (Self.layer2_layout.size()))
-        ).fill(0.0)
-        self.layer3 = LayoutTensor[ftype, Self.layer3_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.layer3 = untrack(LayoutTensor[ftype, Self.layer3_layout](
             alloc[sftype](comptime (Self.layer3_layout.size()))
-        ).fill(0.0)
-        self.layer4 = LayoutTensor[ftype, Self.layer4_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.layer4 = untrack(LayoutTensor[ftype, Self.layer4_layout](
             alloc[sftype](comptime (Self.layer4_layout.size()))
-        ).fill(0.0)
-        self.layer5 = LayoutTensor[ftype, Self.layer5_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.layer5 = untrack(LayoutTensor[ftype, Self.layer5_layout](
             alloc[sftype](comptime (Self.layer5_layout.size()))
-        ).fill(0.0)
-        self.output = LayoutTensor[ftype, Self.output_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.output = untrack(LayoutTensor[ftype, Self.output_layout](
             alloc[sftype](comptime (Self.output_layout.size()))
-        ).fill(0.0)
+        )).fill(0.0)
 
     def __init__(out self, mut arena: Some[CPUAllocator]):
         """
         Needs to start as all zeros.
         """
-        self.input = LayoutTensor[ftype, Self.input_layout, MutAnyOrigin](
+        self.input = untrack(LayoutTensor[ftype, Self.input_layout](
             arena.alloc[sftype](comptime (Self.input_layout.size()))
-        ).fill(0.0)
-        self.layer1 = LayoutTensor[ftype, Self.layer1_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.layer1 = untrack(LayoutTensor[ftype, Self.layer1_layout](
             arena.alloc[sftype](comptime (Self.layer1_layout.size()))
-        ).fill(0.0)
-        self.layer2 = LayoutTensor[ftype, Self.layer2_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.layer2 = untrack(LayoutTensor[ftype, Self.layer2_layout](
             arena.alloc[sftype](comptime (Self.layer2_layout.size()))
-        ).fill(0.0)
-        self.layer3 = LayoutTensor[ftype, Self.layer3_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.layer3 = untrack(LayoutTensor[ftype, Self.layer3_layout](
             arena.alloc[sftype](comptime (Self.layer3_layout.size()))
-        ).fill(0.0)
-        self.layer4 = LayoutTensor[ftype, Self.layer4_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.layer4 = untrack(LayoutTensor[ftype, Self.layer4_layout](
             arena.alloc[sftype](comptime (Self.layer4_layout.size()))
-        ).fill(0.0)
-        self.layer5 = LayoutTensor[ftype, Self.layer5_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.layer5 = untrack(LayoutTensor[ftype, Self.layer5_layout](
             arena.alloc[sftype](comptime (Self.layer5_layout.size()))
-        ).fill(0.0)
-        self.output = LayoutTensor[ftype, Self.output_layout, MutAnyOrigin](
+        )).fill(0.0)
+        self.output = untrack(LayoutTensor[ftype, Self.output_layout](
             arena.alloc[sftype](comptime (Self.output_layout.size()))
-        ).fill(0.0)
+        )).fill(0.0)
 
     def loadInput(self, image: Image):
         var normed_tensor = Image.DataTensor(self.input.ptr)

@@ -6,6 +6,7 @@ from std.algorithm.functional import vectorize
 
 from constants import IMAGE_SIZE, PADDED_SIZE, PADDING, ftype, sftype, nelts
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as Arena
+from origin_util import untrack
 
 
 struct Image(ImplicitlyCopyable):
@@ -18,7 +19,7 @@ struct Image(ImplicitlyCopyable):
         UInt8, Self.PixelLayout.size()
     ]  # raw bytes
     comptime PixelTensor = LayoutTensor[
-        DType.uint8, Self.PixelLayout, MutAnyOrigin
+        DType.uint8, Self.PixelLayout, MutUntrackedOrigin
     ]  # raw pixels
 
     comptime DataLayout = Layout.row_major(PADDED_SIZE, PADDED_SIZE)
@@ -37,7 +38,9 @@ struct Image(ImplicitlyCopyable):
         if label > 9:
             raise Error(t"Error with image label: {label}.")
         self.label = label
-        self.pixels = Self.PixelTensor(hosted_pixels)
+        self.pixels = untrack(
+            LayoutTensor[DType.uint8, Self.PixelLayout](hosted_pixels)
+        )
 
     def __init__(
         out self, raw: List[Byte], label: UInt8, mut arena: Arena
@@ -48,7 +51,11 @@ struct Image(ImplicitlyCopyable):
         if label > 9:
             raise Error(t"Error with image label: {label}.")
         self.label = label
-        self.pixels = Self.PixelTensor(arena.alloc[UInt8](layout_size)) 
+        self.pixels = untrack(
+            LayoutTensor[DType.uint8, Self.PixelLayout](
+                arena.alloc[UInt8](layout_size)
+            )
+        ) 
         memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
 
     def __init__(
@@ -59,7 +66,11 @@ struct Image(ImplicitlyCopyable):
         if label > 9:
             print("Error with image label:", label, file=stderr)  # could raise
         self.label = label
-        self.pixels = Self.PixelTensor(arena.alloc[UInt8](layout_size))
+        self.pixels = untrack(
+            LayoutTensor[DType.uint8, Self.PixelLayout](
+                arena.alloc[UInt8](layout_size)
+            )
+        )
         memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
 
         # no longer normalizing at init because we don't know the end device and that's a separate task

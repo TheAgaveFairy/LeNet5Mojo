@@ -1,5 +1,6 @@
 from layout import Layout, LayoutTensor
 from cpu.arena import ArenaSizable
+from origin_util import untrack
 
 from std.gpu.host import DeviceBuffer, DeviceContext
 from std.sys.info import size_of
@@ -157,13 +158,13 @@ struct FeatureGPU(Copyable, DevicePassable, Movable):
     )
     comptime output_layout = Layout.row_major(OUTPUT)
 
-    var input: LayoutTensor[ftype, FeatureGPU.input_layout, MutAnyOrigin]
-    var layer1: LayoutTensor[ftype, FeatureGPU.layer1_layout, MutAnyOrigin]
-    var layer2: LayoutTensor[ftype, FeatureGPU.layer2_layout, MutAnyOrigin]
-    var layer3: LayoutTensor[ftype, FeatureGPU.layer3_layout, MutAnyOrigin]
-    var layer4: LayoutTensor[ftype, FeatureGPU.layer4_layout, MutAnyOrigin]
-    var layer5: LayoutTensor[ftype, FeatureGPU.layer5_layout, MutAnyOrigin]
-    var output: LayoutTensor[ftype, FeatureGPU.output_layout, MutAnyOrigin]
+    var input: LayoutTensor[ftype, FeatureGPU.input_layout, MutUntrackedOrigin]
+    var layer1: LayoutTensor[ftype, FeatureGPU.layer1_layout, MutUntrackedOrigin]
+    var layer2: LayoutTensor[ftype, FeatureGPU.layer2_layout, MutUntrackedOrigin]
+    var layer3: LayoutTensor[ftype, FeatureGPU.layer3_layout, MutUntrackedOrigin]
+    var layer4: LayoutTensor[ftype, FeatureGPU.layer4_layout, MutUntrackedOrigin]
+    var layer5: LayoutTensor[ftype, FeatureGPU.layer5_layout, MutUntrackedOrigin]
+    var output: LayoutTensor[ftype, FeatureGPU.output_layout, MutUntrackedOrigin]
 
     @staticmethod
     def get_type_name() -> String:
@@ -182,24 +183,10 @@ struct FeatureGPU(Copyable, DevicePassable, Movable):
         var b_layer4 = bufs.layer4
         var b_layer5 = bufs.layer5
         var b_output = bufs.output
-        self.input = LayoutTensor[ftype, Self.input_layout, MutAnyOrigin](
-            b_input
-        )
-        self.layer1 = LayoutTensor[ftype, Self.layer1_layout, MutAnyOrigin](
-            b_layer1
-        )
-        self.layer2 = LayoutTensor[ftype, Self.layer2_layout, MutAnyOrigin](
-            b_layer2
-        )
-        self.layer3 = LayoutTensor[ftype, Self.layer3_layout, MutAnyOrigin](
-            b_layer3
-        )
-        self.layer4 = LayoutTensor[ftype, Self.layer4_layout, MutAnyOrigin](
-            b_layer4
-        )
-        self.layer5 = LayoutTensor[ftype, Self.layer5_layout, MutAnyOrigin](
-            b_layer5
-        )
-        self.output = LayoutTensor[ftype, Self.output_layout, MutAnyOrigin](
-            b_output
-        )
+        self.input = untrack(LayoutTensor[ftype, Self.input_layout](b_input))
+        self.layer1 = untrack(LayoutTensor[ftype, Self.layer1_layout](b_layer1))
+        self.layer2 = untrack(LayoutTensor[ftype, Self.layer2_layout](b_layer2))
+        self.layer3 = untrack(LayoutTensor[ftype, Self.layer3_layout](b_layer3))
+        self.layer4 = untrack(LayoutTensor[ftype, Self.layer4_layout](b_layer4))
+        self.layer5 = untrack(LayoutTensor[ftype, Self.layer5_layout](b_layer5))
+        self.output = untrack(LayoutTensor[ftype, Self.output_layout](b_output))

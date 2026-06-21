@@ -9,6 +9,7 @@ from std.reflection import (
 
 # from attention import Weights, ModelParams
 from constants import ftype, sftype
+from origin_util import untrack
 
 # for allocation arena
 from std.memory import memset_zero
@@ -48,12 +49,14 @@ struct CPUBumpArenaAllocator(CPUAllocator):
     """
     Simple bump allocator. Minor design help from Claude 4.5.
     """
-    var buffer: UnsafePointer[UInt8, MutAnyOrigin]
+    var buffer: UnsafePointer[UInt8, MutUntrackedOrigin]
     var capacity: Int
     var offset: Int
 
     def __init__(out self, capacity_bytes: Int):
-        self.buffer = alloc[UInt8](capacity_bytes)
+        self.buffer = rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](
+            alloc[UInt8](capacity_bytes)
+        )
         self.capacity = capacity_bytes
         self.offset = 0
 
@@ -102,10 +105,10 @@ struct CPUSystemAllocator(CPUAllocator):
     callsites are identical regardless of allocator choice.
     """
 
-    var _allocations: List[UnsafePointer[UInt8, MutAnyOrigin]]
+    var _allocations: List[UnsafePointer[UInt8, MutUntrackedOrigin]]
 
     def __init__(out self):
-        self._allocations = List[UnsafePointer[UInt8, MutAnyOrigin]]()
+        self._allocations = List[UnsafePointer[UInt8, MutUntrackedOrigin]]()
 
     def __del__(deinit self):
         self.free_all()
@@ -114,7 +117,9 @@ struct CPUSystemAllocator(CPUAllocator):
         T: AnyType
     ](mut self, count: Int = 1) -> UnsafePointer[T, MutAnyOrigin]:
         var ptr = alloc[T](count)
-        self._allocations.append(ptr.bitcast[UInt8]())
+        self._allocations.append(
+            rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](ptr.bitcast[UInt8]())
+        )
         return ptr
 
     def free_all(mut self):
@@ -254,12 +259,14 @@ def test_nested_arena():
 
 struct TestWeights:
     comptime layout = Layout.row_major(7)
-    var a: LayoutTensor[ftype, Self.layout, MutAnyOrigin]
+    var a: LayoutTensor[ftype, Self.layout, MutUntrackedOrigin]
 
     def __init__(out self, mut arena: CPUBumpArenaAllocator):
-        self.a = type_of(self.a)(
-            arena.alloc[sftype](comptime (self.layout.size()))
-        ).fill(3.0)
+        self.a = untrack(
+            LayoutTensor[ftype, Self.layout](
+                arena.alloc[sftype](comptime (self.layout.size()))
+            ).fill(3.0)
+        )
 
     @staticmethod
     def sizeInBytes() -> Int:
@@ -280,16 +287,18 @@ struct TestContainer:
     var arena: CPUBumpArenaAllocator
 
     comptime layout = Layout.row_major(5)
-    var a: LayoutTensor[ftype, Self.layout, MutAnyOrigin]
+    var a: LayoutTensor[ftype, Self.layout, MutUntrackedOrigin]
     var sub_weights: TestWeights
 
     def __init__(out self):
         self.arena = type_of(self.arena)(
             self.sizeInBytes() + TestWeights.sizeInBytes()
         )
-        self.a = type_of(self.a)(
-            self.arena.alloc[sftype](comptime (self.layout.size()))
-        ).fill(1.0)
+        self.a = untrack(
+            LayoutTensor[ftype, Self.layout](
+                self.arena.alloc[sftype](comptime (self.layout.size()))
+            ).fill(1.0)
+        )
         self.sub_weights = TestWeights.initRandom(self.arena)
 
     @staticmethod

@@ -42,6 +42,7 @@ from constants import (
 from accel.model import LeNet5GPU
 from accel.feature import FeatureGPU, FeatureGPUBuffers
 from accel.arena import GPUBumpArenaAllocator
+from origin_util import untrack, untrack_imm
 from dataloader import MNISTDataView
 
 # IME these don't change performance a ton
@@ -58,9 +59,9 @@ def normalizeInputsKernel[
     raw_pixels: LayoutTensor[
         DType.uint8,
         Layout.row_major(batch_size, IMAGE_SIZE, IMAGE_SIZE),
-        ImmutAnyOrigin,
+        ImmutUntrackedOrigin,
     ],
-    feats: UnsafePointer[FeatureGPU, MutAnyOrigin],
+    feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin],
 ):
     """Call with grid_dim=batch_size, block_dim=next_power_of_two(IMAGE_SIZE*IMAGE_SIZE) (1D).
     Pads and normalizes raw uint8 pixels into the feature input buffer.
@@ -101,12 +102,12 @@ def matMulFusedKernel[
     batch_size: Int
 ](
     lenet: LeNet5GPU,
-    feats: UnsafePointer[FeatureGPU, MutAnyOrigin],
+    feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin],
     outputs: LayoutTensor[
-        ftype, Layout.row_major(batch_size, OUTPUT), MutAnyOrigin
+        ftype, Layout.row_major(batch_size, OUTPUT), MutUntrackedOrigin
     ],
     guesses: LayoutTensor[
-        DType.uint8, Layout.row_major(batch_size), MutAnyOrigin
+        DType.uint8, Layout.row_major(batch_size), MutUntrackedOrigin
     ],
 ) -> None:
     """
@@ -147,7 +148,7 @@ def matMulFusedKernel[
 
 def maxPool2Kernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]) -> None:
     """
     Runs as block_dim = (LAYER4, LF4, LF4) = 16 * 5 * 5 = 400, grid_dim = (batch_size).
     One thread per output. 2x2 non-overlapping pool has no data reuse, so inputs
@@ -174,7 +175,7 @@ def maxPool2Kernel[
 
 def maxPool1Kernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]) -> None:
     """
     Runs as block_dim = (LF2, LF2), grid_dim = (batch_size, num_channels).
     One thread per output (was one per *input* with 75% idling after a shared
@@ -200,7 +201,7 @@ def maxPool1Kernel[
 
 def conv3FusedKernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None: # TODO: convert these kernels to take Spans
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]) -> None: # TODO: convert these kernels to take Spans
     """Call with grid_dim = (batch_size), block_dim = LAYER5. Each thread handles one output channel."""
     var img_idx = block_idx.x
     var oc = thread_idx.x
@@ -232,7 +233,7 @@ def conv3FusedKernel[
 
 def conv3FusedKernelOld[
     batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]) -> None:
     """
     Grid Dim = (batch_size, chan_div = 8)
     Block Dim = (conv3_reduction_threads = 512), 1D.
@@ -282,7 +283,7 @@ def conv3FusedKernelOld[
 
 def conv2FusedKernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]) -> None:
     """
     Grid Dim = (batch_size, channel_divisions).
     Block Dim = (LAYER3 // div_chans, LENGTH_FEATURE3, LENGTH_FEATURE3).
@@ -364,7 +365,7 @@ def conv2FusedKernel[
 
 def conv1FusedKernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutAnyOrigin]) -> None:
+](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]) -> None:
     """
     Grid Dim = (batch_size)
     Block Dim = (LENGTH_FEATURE1, LENGTH_FEATURE1) = 28 x 28
@@ -569,21 +570,21 @@ struct CompiledKernels[batch_size: Int](Movable):
 struct StreamSlot[batch_size: Int](Movable):
     var ctx: DeviceContext
     var device_arena: GPUBumpArenaAllocator
-    var device_buffers: UnsafePointer[FeatureGPUBuffers, MutAnyOrigin]
+    var device_buffers: UnsafePointer[FeatureGPUBuffers, MutUntrackedOrigin]
 
     # older version that used InlineArrays to store FeatureGPUs lead to the compiler synthesizeing moves that unrolled N times which *exploded* compile times
     var device_features: DeviceBuffer[DType.uint8]
-    var features_ptr: UnsafePointer[FeatureGPU, MutAnyOrigin]
+    var features_ptr: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
     var hosted_inputs: HostBuffer[DType.uint8]
     var device_inputs: DeviceBuffer[DType.uint8]
     var outputs_buffer: DeviceBuffer[ftype]  # device logits (debug/inspection — not D2H'd in the hot path)
     var outputs: LayoutTensor[
-        ftype, Layout.row_major(Self.batch_size, OUTPUT), MutAnyOrigin
+        ftype, Layout.row_major(Self.batch_size, OUTPUT), MutUntrackedOrigin
     ]
     var guesses_buffer: DeviceBuffer[DType.uint8]  # argmax per image, staged for d2h
     var hosted_guesses: HostBuffer[DType.uint8]
     var guesses: LayoutTensor[
-        DType.uint8, Layout.row_major(Self.batch_size), MutAnyOrigin
+        DType.uint8, Layout.row_major(Self.batch_size), MutUntrackedOrigin
     ]
 
     def __init__(out self) raises:
@@ -592,7 +593,9 @@ struct StreamSlot[batch_size: Int](Movable):
         self.device_arena = GPUBumpArenaAllocator(
             self.ctx, Self.batch_size * FeatureGPUBuffers.sizeInBytes()
         )
-        self.device_buffers = alloc[FeatureGPUBuffers](Self.batch_size)
+        self.device_buffers = rebind[
+            UnsafePointer[FeatureGPUBuffers, MutUntrackedOrigin]
+        ](alloc[FeatureGPUBuffers](Self.batch_size))
         # Local, NOT a field: only needed to seed device_features below. Keeping it
         # off the struct avoids unrolling N FeatureGPU moves on every StreamSlot move.
         # TODO: could probably bypass this intermediate
@@ -613,9 +616,9 @@ struct StreamSlot[batch_size: Int](Movable):
         self.device_features.enqueue_copy_from(
             features.unsafe_ptr().bitcast[UInt8]()
         )
-        self.features_ptr = self.device_features.unsafe_ptr().bitcast[
-            FeatureGPU
-        ]()
+        self.features_ptr = rebind[
+            UnsafePointer[FeatureGPU, MutUntrackedOrigin]
+        ](self.device_features.unsafe_ptr().bitcast[FeatureGPU]())
         self.device_inputs = self.ctx.enqueue_create_buffer[DType.uint8](
             img_sz * Self.batch_size
         )
@@ -625,18 +628,22 @@ struct StreamSlot[batch_size: Int](Movable):
         self.outputs_buffer = self.ctx.enqueue_create_buffer[ftype](
             Self.batch_size * OUTPUT
         )
-        self.outputs = LayoutTensor[
-            ftype, Layout.row_major(Self.batch_size, OUTPUT), MutAnyOrigin
-        ](self.outputs_buffer)
+        self.outputs = untrack(
+            LayoutTensor[
+                ftype, Layout.row_major(Self.batch_size, OUTPUT)
+            ](self.outputs_buffer)
+        )
         self.guesses_buffer = self.ctx.enqueue_create_buffer[DType.uint8](
             Self.batch_size
         )
         self.hosted_guesses = self.ctx.enqueue_create_host_buffer[DType.uint8](
             Self.batch_size
         )
-        self.guesses = LayoutTensor[
-            DType.uint8, Layout.row_major(Self.batch_size), MutAnyOrigin
-        ](self.guesses_buffer)
+        self.guesses = untrack(
+            LayoutTensor[
+                DType.uint8, Layout.row_major(Self.batch_size)
+            ](self.guesses_buffer)
+        )
         self.ctx.synchronize()
 
     def __del__(deinit self):
@@ -692,9 +699,9 @@ struct StreamSlot[batch_size: Int](Movable):
         comptime batch_pixels_layout = Layout.row_major(
             Self.batch_size, IMAGE_SIZE, IMAGE_SIZE
         )
-        var raw_pixels_tensor = LayoutTensor[
-            DType.uint8, batch_pixels_layout, ImmutAnyOrigin
-        ](self.device_inputs)
+        var raw_pixels_tensor = untrack_imm(
+            LayoutTensor[DType.uint8, batch_pixels_layout](self.device_inputs)
+        )
 
         self.ctx.enqueue_function(
             kernels.norm,

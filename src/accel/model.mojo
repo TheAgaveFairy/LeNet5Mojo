@@ -8,6 +8,7 @@ from std.sys import size_of
 from cpu.model import LeNet5
 from cpu.arena import ArenaSizable
 from accel.arena import GPUAllocator, GPUBumpArenaAllocator, GPUSystemAllocator
+from origin_util import untrack
 from constants import (
     ftype,
     sftype,
@@ -159,35 +160,35 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable, ArenaSizable):
     comptime w0_1_layout = Layout.row_major(
         INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL
     )
-    var weight0_1: LayoutTensor[ftype, Self.w0_1_layout, MutAnyOrigin]
+    var weight0_1: LayoutTensor[ftype, Self.w0_1_layout, MutUntrackedOrigin]
 
     comptime w2_3_layout = Layout.row_major(
         LAYER2, LAYER3, LENGTH_KERNEL, LENGTH_KERNEL
     )
-    var weight2_3: LayoutTensor[ftype, Self.w2_3_layout, MutAnyOrigin]
+    var weight2_3: LayoutTensor[ftype, Self.w2_3_layout, MutUntrackedOrigin]
 
     comptime w4_5_layout = Layout.row_major(
         LAYER4, LAYER5, LENGTH_KERNEL, LENGTH_KERNEL
     )
-    var weight4_5: LayoutTensor[ftype, Self.w4_5_layout, MutAnyOrigin]
+    var weight4_5: LayoutTensor[ftype, Self.w4_5_layout, MutUntrackedOrigin]
 
     comptime w5_6_layout = Layout.row_major(
         LAYER5 * LENGTH_FEATURE5 * LENGTH_FEATURE5, OUTPUT
     )
-    var weight5_6: LayoutTensor[ftype, Self.w5_6_layout, MutAnyOrigin]
+    var weight5_6: LayoutTensor[ftype, Self.w5_6_layout, MutUntrackedOrigin]
 
     # BIASES
     comptime b0_1_layout = Layout.row_major(LAYER1)
-    var bias0_1: LayoutTensor[ftype, Self.b0_1_layout, MutAnyOrigin]
+    var bias0_1: LayoutTensor[ftype, Self.b0_1_layout, MutUntrackedOrigin]
 
     comptime b2_3_layout = Layout.row_major(LAYER3)
-    var bias2_3: LayoutTensor[ftype, Self.b2_3_layout, MutAnyOrigin]
+    var bias2_3: LayoutTensor[ftype, Self.b2_3_layout, MutUntrackedOrigin]
 
     comptime b4_5_layout = Layout.row_major(LAYER5)
-    var bias4_5: LayoutTensor[ftype, Self.b4_5_layout, MutAnyOrigin]
+    var bias4_5: LayoutTensor[ftype, Self.b4_5_layout, MutUntrackedOrigin]
 
     comptime b5_6_layout = Layout.row_major(OUTPUT)
-    var bias5_6: LayoutTensor[ftype, Self.b5_6_layout, MutAnyOrigin]
+    var bias5_6: LayoutTensor[ftype, Self.b5_6_layout, MutUntrackedOrigin]
 
     def __init__(out self, bufs: LeNet5GPUBuffers) raises:
         """Ensure you are initialized to all zeros..
@@ -198,18 +199,18 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable, ArenaSizable):
         var w2 = bufs.w23_storage
         var w4 = bufs.w45_storage
         var w5 = bufs.w56_storage
-        self.weight0_1 = LayoutTensor[ftype, Self.w0_1_layout, MutAnyOrigin](w0)
-        self.weight2_3 = LayoutTensor[ftype, Self.w2_3_layout, MutAnyOrigin](w2)
-        self.weight4_5 = LayoutTensor[ftype, Self.w4_5_layout, MutAnyOrigin](w4)
-        self.weight5_6 = LayoutTensor[ftype, Self.w5_6_layout, MutAnyOrigin](w5)
+        self.weight0_1 = untrack(LayoutTensor[ftype, Self.w0_1_layout](w0))
+        self.weight2_3 = untrack(LayoutTensor[ftype, Self.w2_3_layout](w2))
+        self.weight4_5 = untrack(LayoutTensor[ftype, Self.w4_5_layout](w4))
+        self.weight5_6 = untrack(LayoutTensor[ftype, Self.w5_6_layout](w5))
         var b0 = bufs.b01_storage
         var b2 = bufs.b23_storage
         var b4 = bufs.b45_storage
         var b5 = bufs.b56_storage
-        self.bias0_1 = LayoutTensor[ftype, Self.b0_1_layout, MutAnyOrigin](b0)
-        self.bias2_3 = LayoutTensor[ftype, Self.b2_3_layout, MutAnyOrigin](b2)
-        self.bias4_5 = LayoutTensor[ftype, Self.b4_5_layout, MutAnyOrigin](b4)
-        self.bias5_6 = LayoutTensor[ftype, Self.b5_6_layout, MutAnyOrigin](b5)
+        self.bias0_1 = untrack(LayoutTensor[ftype, Self.b0_1_layout](b0))
+        self.bias2_3 = untrack(LayoutTensor[ftype, Self.b2_3_layout](b2))
+        self.bias4_5 = untrack(LayoutTensor[ftype, Self.b4_5_layout](b4))
+        self.bias5_6 = untrack(LayoutTensor[ftype, Self.b5_6_layout](b5))
 
     @staticmethod
     def sizeInBytes() -> Int:
