@@ -3,10 +3,7 @@
 
 = LeNet-5 in Mojo Without Libraries Review
 
-// NEW SECTION [want]: a short opening HOOK before "What is Mojo?" — lead with the result
-// (peak ~1.17M img/s; beats PyTorch eager/compile + ONNX Runtime on GPU, competitive with JAX;
-// one hand-rolled binary across NVIDIA / AMD / Metal). 3-4 sentences, then dive in. Right now the
-// payoff is buried at the very end. Maps to blog Post 1's hook.
+Recently I revisted LeNet-5 yet again (more on that later); I've been using it as a platform to learn new concepts (SIMD, GPU programming), how neural networks work, and higher performance software. As "AI" has grown, this has given me a deep appreciation for how things work under the hood. This version focused on GPU inference and is able to beat every version of PyTorch I can try (compiled, eager), ONNX, and is competitive with JAX. One binary runs on NVidia, AMD, and Apple Metal. Here we'll talk about how this was achieved, exploring the neural network itself along with Mojo, which is releasing at version 1.0 on [INSERT DATE HERE].
 
 == What is Mojo? // make this shorter, link to somebody else, etc
 Mojo is a compiled, memory-safe, MLIR/LLVM-based language built for high-performance, heterogeneous, SIMD-native machine-learning work. It's often called "Python++," but it's really its own beast, and I don't want to undersell it. The 1.0 just dropped — usable and stable, with plenty of room to grow.
@@ -38,9 +35,7 @@ Three professors are why I keep coming back to this little model. After finally 
 tl;dr: I've known this model intimately for over a year of on-and-off nights and weekends, across C, CUDA, and now Mojo (twice). Rebuilding it each time is how I measure my own growth — better patterns, cleaner engineering, more performance, more polish.
 
 = Old Versions (Pros and Cons)
-The original C version I studied is CPU-only and very simple, but it performs very well with all things considered. Read it for yourself and check the benchmark section. A big thing to note that we'll come back to is: parallelization, and stack-allocation of the model itself. OpenMP is very simple to use for parallelizing single image passes, and the way that we can simply define a struct with many layers like "int weight0_1[1][6][5][5]; int weight 2_3[6][16][5][5]" is really "dumb" but efficient: all memory resides next to each other contiguously. We'll revisit this concept as well.
-// NOTE [snippet nit]: stray space in "weight 2_3" (-> "weight2_3"). Also these are `int` weights —
-// worth a word on the C version being integer / fixed-point if that's the reason.
+The original C version I studied is CPU-only and very simple, but it performs very well with all things considered. Read it for yourself and check the benchmark section. A big thing to note that we'll come back to is: parallelization, and stack-allocation of the model itself. OpenMP is very simple to use for parallelizing single image passes, and the way that we can simply define a struct with many layers like "float weight0_1[1][6][5][5]; float weight2_3[6][16][5][5]" is really "dumb" but efficient: all memory resides next to each other contiguously. We'll revisit this concept as well.
 
 My first CUDA version made a LOT of mistakes - namely, not batching things and synchronizing too much. Under a deadline crunch for this final project submission, I did just a very dumb and fast conversion of the CPU path over to GPU. This is not ideal! Again we'll touch on why this is so awful later.
 
@@ -80,6 +75,54 @@ What we can do to help is to open up another "stream" to the GPU that provides i
 // NOTE [needs more explanation]: the "B - N" indexing reads as cryptic cold. Add a tiny concrete
 // timeline — e.g. "launch batches 0,1,2,3,4; before launching 5, collect 0; before 6, collect 1; ...
 // then a drain loop gathers the final 5" — so the pipeline clicks for the reader.
+
+```python
+def _batchRun[
+    batch_size: Int
+](
+    stream_slots: UnsafePointer[StreamSlot[batch_size], MutAnyOrigin],
+    data: MNISTDataView,
+    model: LeNet5GPU,
+    kernels: CompiledKernels[batch_size],
+    num_streams: Int = NUM_GPU_STREAMS,
+) raises -> Int:
+    """Run batches over pre-allocated stream slots. Does not alloc or free slots."""
+    # num_streams = len(stream_slots)`
+    var count = len(data)
+    var total_correct = 0
+    comptime batch_bytes = batch_size * IMAGE_SIZE * IMAGE_SIZE
+    var total_batches = count // batch_size
+
+    for batch_num in range(total_batches):
+        var slot_idx = batch_num % num_streams # ring buffer access pattern
+        var batch_start = batch_num * batch_bytes
+        var batch_span = data.raw_pixels[ # get the current batch slice
+            batch_start : batch_start + batch_bytes
+        ]
+
+        # check for previous slot's results (if ready)
+        if batch_num >= num_streams:
+            var stale = batch_num - num_streams
+            var stale_start = stale * batch_size
+            total_correct += stream_slots[slot_idx].getResults( # D2H
+                data.raw_labels[stale_start : stale_start + batch_size]
+            )
+
+        stream_slots[slot_idx].loadBatch(batch_span) # H2D
+        stream_slots[slot_idx].doWork( # kernels
+            kernels, model
+        )
+
+    var epilogue_start = max(0, total_batches - num_streams)
+    for batch_num in range(epilogue_start, total_batches):
+        var slot_idx = batch_num % num_streams
+        var label_start = batch_num * batch_size
+        total_correct += stream_slots[slot_idx].getResults( # D2H
+            data.raw_labels[label_start : label_start + batch_size]
+        )
+
+    return total_correct
+```
 
 Multi-streams may or may not always speed things up. For most balanced setups, common wisdom appears to say that having more than 3 streams or so probably won't gain much benefit - at some point either H2D, compute, or D2H is your bottleneck, and more streams won't help that. Depending on my kernels, sometimes I saw exactly this behavior. In my current compute pipeline, I'm able to keep seeing gains beyond just 3 streams. The current default is 5 on my device.
 

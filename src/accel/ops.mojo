@@ -780,7 +780,7 @@ struct StreamSlot[batch_size: Int](Movable):
                 correct += 1
         return correct
 
-# TODO: convert stream_slots to a Span, pass CompiledKernels
+# TODO: convert stream_slots to a Span
 def _batchRun[
     batch_size: Int
 ](
@@ -840,7 +840,7 @@ def batchedForwardMultiStream[
     for s in range(num_streams):
         (stream_slots + s).init_pointee_move(StreamSlot[batch_size]())
     try:
-        var result = _batchRun[batch_size](
+        var result = _batchRun(
             stream_slots, data, model, kernels, num_streams
         )
         for s in range(num_streams):
