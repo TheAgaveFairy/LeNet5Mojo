@@ -569,7 +569,9 @@ struct Feature(Movable, ArenaSizable):
         )).fill(0.0)
 
     def loadInput(self, image: Image):
-        var normed_tensor = Image.DataTensor(self.input.ptr)
+        var normed_tensor = untrack(
+            LayoutTensor[ftype, Image.DataLayout](self.input.ptr)
+        )
         image.normalized(normed_tensor)
 
     # def __del__(deinit self):

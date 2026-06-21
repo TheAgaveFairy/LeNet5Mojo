@@ -780,7 +780,7 @@ struct StreamSlot[batch_size: Int](Movable):
 def _batchRun[
     batch_size: Int
 ](
-    stream_slots: UnsafePointer[StreamSlot[batch_size], MutAnyOrigin],
+    stream_slots: UnsafePointer[StreamSlot[batch_size], _],
     data: MNISTDataView,
     model: LeNet5GPU,
     kernels: CompiledKernels[batch_size],

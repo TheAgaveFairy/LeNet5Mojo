@@ -17,7 +17,7 @@ comptime layout = Layout.row_major(ROWS, COLS)
 comptime TILE_SIZE = ROWS * COLS
 
 
-trait GPUAllocator(ImplicitlyDestructible, Movable):
+trait GPUAllocator(ImplicitlyDeletable, Movable):
     def __init__(out self, ctx: DeviceContext, capacity_bytes: Int) raises:
         ...
 

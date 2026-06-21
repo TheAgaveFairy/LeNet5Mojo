@@ -35,7 +35,7 @@ trait CPUAllocator:
 
     def alloc[
         T: AnyType
-    ](mut self, count: Int) -> UnsafePointer[T, MutAnyOrigin]:
+    ](mut self, count: Int) -> UnsafePointer[T, MutUntrackedOrigin]:
         ...
 
     def free_all(mut self):
@@ -66,7 +66,7 @@ struct CPUBumpArenaAllocator(CPUAllocator):
     def alloc[
         T: AnyType
     ](mut self, count: Int = 1) -> UnsafePointer[
-        T, MutAnyOrigin
+        T, MutUntrackedOrigin
     ]:  # , origin_of(self)]:
         """Allocate space for `count` items of type T."""
         var size = size_of[T]() * count
@@ -115,12 +115,12 @@ struct CPUSystemAllocator(CPUAllocator):
 
     def alloc[
         T: AnyType
-    ](mut self, count: Int = 1) -> UnsafePointer[T, MutAnyOrigin]:
+    ](mut self, count: Int = 1) -> UnsafePointer[T, MutUntrackedOrigin]:
         var ptr = alloc[T](count)
         self._allocations.append(
             rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](ptr.bitcast[UInt8]())
         )
-        return ptr
+        return rebind[UnsafePointer[T, MutUntrackedOrigin]](ptr)
 
     def free_all(mut self):
         """Call free() on every tracked pointer."""
