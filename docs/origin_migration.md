@@ -171,15 +171,43 @@ kernel params for free.
 `stack_allocation`, scratch tensors) does *not* hit either rule — it's neither a
 field nor part of the signature — so those were intentionally not touched.
 
-## Remaining deprecation warnings (non-blocking)
+## Deprecation warnings — cleared
 
-The build is green but still prints, for later cleanup:
+The initial migration left 8 warnings; a follow-up pass (commit `1664b4c`)
+took them to zero **without** touching arena design, using the compiler's
+preferred "keep a concrete origin" path:
 
-- `ImplicitlyDestructible` → use `ImplicitlyDeletable` (`accel/arena.mojo`)
-- 7× implicit `UnsafePointer` → `MutUnsafeAnyOrigin` conversions
-  (`main.mojo:329/339`, `cpu/arena.mojo:86`, `cpu/model.mojo:572`). The compiler
-  wants an explicit `.as_unsafe_any_origin()` or, better, a concrete origin —
-  natural follow-ups when approach B is tackled.
+- `ImplicitlyDestructible` → `ImplicitlyDeletable` (`accel/arena.mojo`)
+- `cpu/arena.mojo`: `alloc()` now returns `MutUntrackedOrigin` (matching the
+  buffer field it carves from) instead of widening to `MutAnyOrigin`; the system
+  allocator rebinds its free-`alloc` pointer on return. Every caller already
+  pipes the result through `untrack()`, so nothing downstream changed.
+- `cpu/model.mojo` `loadInput`: build the `DataTensor` via `untrack(...)` rather
+  than constructing a `MutAnyOrigin` view from an already-untracked `.ptr`.
+- `accel/ops.mojo` `_batchRun`: see automatic parameterization below.
+
+### Automatic parameterization (`_`) and the mutability catch
+
+`_` in a parameter slot unbinds it (Mojo auto-creates an inferred parameter).
+For an origin, `_` unbinds the origin **but leaves its mutability free**
+(`Origin[mut=_]`). That has a sharp consequence:
+
+| Body of the function | `_` for the origin |
+|----------------------|--------------------|
+| only reads / passes the view through | ✅ works, and is terser |
+| **writes** through the view | ❌ `error: expression must be mutable` |
+
+`_batchRun` only calls `self` (non-`mut`) methods on its slots, so
+`UnsafePointer[StreamSlot[batch_size], _]` is fine and removes an explicit
+origin parameter. `_randHelper` writes `tensor.ptr[i] = …`, so it must keep
+`[layout: Layout, o: MutOrigin]` — the explicit `MutOrigin` bound carries the
+`mut=True` the body depends on; `_` would force the body to also handle
+`mut=False` and fail. The `untrack` helpers likewise keep named `dt, l, o`
+because those parameters are referenced in the return type.
+
+Rule of thumb: reach for `_` on pass-through/read-only views; keep an explicit
+`MutOrigin` (or named param) wherever the body mutates or needs to name the
+parameter elsewhere.
 
 ## Reference
 
