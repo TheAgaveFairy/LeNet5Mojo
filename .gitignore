@@ -3,6 +3,7 @@
 *.egg-info
 
 batchedops.mojo
+*.pdf
 
 # gpu profiling results
 *.nsys-rep
