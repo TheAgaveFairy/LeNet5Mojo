@@ -378,6 +378,10 @@ def conv1FusedKernel[
     to layer1. Shared staging pays off here (unlike the pools) because every
     input pixel is reused by up to 25 neighboring threads x 6 channels.
     """
+    # Single-channel only: the input staging + MAC loop below assume one input
+    # channel (MNIST grayscale). Fail at compile time rather than silently
+    # producing wrong results if INPUT is ever bumped for a multi-channel set.
+    comptime assert INPUT == 1, "conv1FusedKernel hardcodes INPUT==1 (single channel); multi-channel input not implemented"
     var img_idx = block_idx.x
     var row = thread_idx.y
     var col = thread_idx.x
@@ -392,7 +396,7 @@ def conv1FusedKernel[
     if flat_idx < local_kernels.size():
         local_kernels.ptr[flat_idx] = lenet.weight0_1.ptr[flat_idx]
 
-    # TODO: INPUT > 1 not handled
+    # INPUT > 1 not handled — guarded by the comptime assert above.
     var local_image = LayoutTensor[
         ftype,
         FeatureGPU.input_layout,

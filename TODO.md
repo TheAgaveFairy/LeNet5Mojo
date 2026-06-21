@@ -127,8 +127,12 @@ Check items off as they are completed.
   - CLEANUP (later): drop the `-D BENCH_ONLY` comptime path entirely once nothing depends on
     it — runtime `--bench-only` covers it; the define is just clutter for a minor feature.
 
-- [ ] **conv1 kernel: `INPUT > 1` not handled** (`accel/ops.mojo:501`)
-  - Kernel hardcodes single-channel input. If ever extended beyond MNIST (grayscale), this breaks.
+- [x] **conv1 kernel: `INPUT > 1` not handled** (`accel/ops.mojo`) — DONE 2026-06-20
+  - Kernel hardcodes single-channel input. Added `comptime assert INPUT == 1` at the top of
+    `conv1FusedKernel` so bumping `INPUT` for a multi-channel set fails at compile time with a clear
+    message instead of silently producing wrong results. Verified the assert fires (INPUT=2 →
+    "constraint failed: conv1FusedKernel hardcodes INPUT==1"). Actually implementing multi-channel
+    conv1 remains future work (the staging + MAC loop need an INPUT loop).
 
 - [x] **Implement `LeNet5GPUBuffers.__del__`** (`accel/model.mojo:115`)
   - Stale. `DeviceBuffer` fields are RAII-managed by `DeviceContext`; placeholder comment removed.
