@@ -73,7 +73,7 @@ def main() raises:
         if not os.path.exists(model_path):
             print("cannot load model: file not found:", model_path, file=stderr)
             print(
-                "run without --bench-only / -D BENCH_ONLY first to train and save.",
+                "run without --bench-only first to train and save.",
                 file=stderr,
             )
             return

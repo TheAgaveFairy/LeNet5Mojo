@@ -1,11 +1,6 @@
 from std.sys import argv, stderr
-import std.sys.defines as defines
 
 from constants import NUM_GPU_STREAMS, GPU_STREAM_BATCH_SIZE
-
-# comptime -D BENCH_ONLY stays as the default for back-compat (pixi/nsys tasks,
-# scripts). Runtime --bench-only does the same without re-keying the JIT cache.
-comptime BENCH_ONLY = defines.is_defined["BENCH_ONLY"]()
 
 
 @fieldwise_init
@@ -21,7 +16,7 @@ struct CliArgs(Copyable, Movable):
         """
         var args = argv()
         var num_streams = NUM_GPU_STREAMS
-        var bench_only = BENCH_ONLY
+        var bench_only = False
         var help = False
         for i in range(1, len(args)):
             if args[i] == "--help":
@@ -61,7 +56,6 @@ def printHelp():
     print("  --help            this message")
     print()
     print("comptime -D flags (each new value recompiles):")
-    print("  -D BENCH_ONLY              default for --bench-only (back-compat)")
     print("  -D ALPHA=N                 learning rate * 1000, 1..1000 (default 500)")
     print("  -D ACT_FN                  GELU|GELUTanh|GELUFast|Sigmoid|Tanh (default ReLU)")
     print(t"  -D GPU_STREAM_BATCH_SIZE=N images per stream batch (default {GPU_STREAM_BATCH_SIZE})")
