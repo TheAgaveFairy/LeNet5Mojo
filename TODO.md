@@ -436,8 +436,16 @@ needed so the prose is accurate, not necessarily code changes.
   today; carry a real `origin` so the borrow checker enforces the repo outliving the image instead of
   relying on "the MNIST repo stays alive long enough." Related to the Session pattern. (ideas.typ §Images, §Model)
 
-- [ ] **Load MNIST into `[1, 28, 28]` (explicit channel dim)** (`image.mojo`, `dataloader.mojo`)
-  - Finish the channel-dimension load so the single-channel input is shaped `[C, H, W]`. (ideas.typ §MNIST Data)
+- [x] **Load MNIST into `[1, 28, 28]` (explicit channel dim)** — DONE 2026-06-25
+  - `Image.PixelLayout` `[28,28]` → `[INPUT,28,28]`; `DataLayout` now ALIASES `FeatureLayouts.input`
+    (`[1,32,32]`) since the padded/normalized image *is* the feature input (PADDED_SIZE ==
+    LENGTH_FEATURE0). `normalized()`/`_normalize()` write `tensor[0, r, c]`; deprecated debug
+    `FeatureGPUBuffers.loadInput` indexes `pixels[0, i, j]`. `.size()` unchanged (784/1024) so all
+    dataloader byte math + memcpy counts hold — dataloader needed ZERO changes (all `.size()`/flat
+    `.ptr`). C = INPUT (parameterized for the conv1 multi-channel TODO), not literal 1.
+  - GPU batch-pixel staging left as flat `[N,H,W]` transport (note added in `ops.mojo`); the
+    normalize kernel already writes the channel into `feats[img].input[0,...]`.
+  - Pure rank/type change, no memory layout change: CPU 9648/10000 + GPU 9648/10000 (1.32M fps) match.
 
 - [ ] **`test_data` / `train_data` as `Span`s natively** (`dataloader.mojo`) — instead of `List[Image]`.
   Narrower cousin of "Kill `List[Image]` from CPU hot path." (ideas.typ §Data Loading)

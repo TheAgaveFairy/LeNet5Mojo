@@ -4,7 +4,15 @@ from std.memory import memcpy
 from std.sys import stderr, simd_width_of, size_of
 from std.algorithm.functional import vectorize
 
-from constants import IMAGE_SIZE, PADDED_SIZE, PADDING, ftype, sftype, nelts
+from constants import (
+    INPUT,
+    IMAGE_SIZE,
+    PADDING,
+    ftype,
+    sftype,
+    nelts,
+    FeatureLayouts,
+)
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as Arena
 from origin_util import untrack
 
@@ -14,7 +22,9 @@ struct Image(ImplicitlyCopyable):
     We need the images normalized and possibly padded from raw UInt8.
     """
 
-    comptime PixelLayout = Layout.row_major(IMAGE_SIZE, IMAGE_SIZE)
+    # explicit channel dim [C, H, W] — matches the [C, H, W] feature/weight
+    # convention. C = INPUT (1 today); .size() is unchanged so all byte math holds.
+    comptime PixelLayout = Layout.row_major(INPUT, IMAGE_SIZE, IMAGE_SIZE)
     comptime PixelStorage = InlineArray[ # TODO: remove this
         UInt8, Self.PixelLayout.size()
     ]  # raw bytes
@@ -22,7 +32,9 @@ struct Image(ImplicitlyCopyable):
         DType.uint8, Self.PixelLayout, MutUntrackedOrigin
     ]  # raw pixels
 
-    comptime DataLayout = Layout.row_major(PADDED_SIZE, PADDED_SIZE)
+    # the padded, normalized image IS the network's feature input — same [1,32,32]
+    # shape, so alias it rather than re-deriving (PADDED_SIZE == LENGTH_FEATURE0).
+    comptime DataLayout = FeatureLayouts.input
     comptime DataTensor = LayoutTensor[
         ftype, Self.DataLayout, MutAnyOrigin
     ]  # normalized into ftype and padded
@@ -101,7 +113,7 @@ struct Image(ImplicitlyCopyable):
             for c in range(IMAGE_SIZE):
                 var idx = r * IMAGE_SIZE + c
                 var curr = Float64(Int(self.pixels.ptr[idx]))
-                tensor[r + off, c + off] = ((curr - mean) / std).cast[ftype]()
+                tensor[0, r + off, c + off] = ((curr - mean) / std).cast[ftype]()
 
     @deprecated("Use non-static self.normalized(output_tensor).")
     @staticmethod
@@ -133,4 +145,4 @@ struct Image(ImplicitlyCopyable):
             for c in range(IMAGE_SIZE):
                 var idx = r * IMAGE_SIZE + c
                 var curr = Float64(Int(raw[idx]))
-                tensor[r + off, c + off] = ((curr - mean) / std).cast[ftype]()
+                tensor[0, r + off, c + off] = ((curr - mean) / std).cast[ftype]()

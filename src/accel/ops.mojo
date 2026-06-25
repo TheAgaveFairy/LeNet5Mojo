@@ -703,6 +703,10 @@ struct StreamSlot[batch_size: Int](Movable):
         kernels: CompiledKernels[Self.batch_size],
         model: LeNet5GPU,
     ) raises:
+        # flat [N, H, W] upload transport (C=1 folded out). Could be [N, 1, H, W]
+        # for full [C,H,W] parity with Image/features, but it's a raw staging
+        # buffer and normalizeInputsKernel already writes the channel into
+        # feats[img].input[0, ...], so left as-is. (See Image [1,28,28] change.)
         comptime batch_pixels_layout = Layout.row_major(
             Self.batch_size, IMAGE_SIZE, IMAGE_SIZE
         )

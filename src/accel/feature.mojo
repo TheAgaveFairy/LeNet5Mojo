@@ -112,7 +112,7 @@ struct FeatureGPUBuffers(Movable, ArenaSizable):
                 for i in range(PADDED_SIZE):
                     for j in range(PADDED_SIZE):
                         load_me[i * PADDED_SIZE + j] = rebind[sftype](
-                            image.pixels[i, j]
+                            image.pixels[0, i, j]
                         )
         except e:
             print("loadInput FeatureGPUBuffers ERROR", e)
