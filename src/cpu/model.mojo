@@ -47,6 +47,9 @@ from constants import (
     PADDING,
     IMAGE_SIZE,
     PADDED_SIZE,
+    FeatureLayouts,
+    WeightLayouts,
+    BiasLayouts,
 )
 
 
@@ -64,82 +67,60 @@ struct LeNet5(Movable, ArenaSizable):
     var allocator_owns_memory: Bool
 
     # WEIGHTS
-    comptime w01_layout = Layout.row_major(
-        INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL
-    )
-    var weight0_1: LayoutTensor[ftype, Self.w01_layout, MutUntrackedOrigin]
-
-    comptime w23_layout = Layout.row_major(
-        LAYER2, LAYER3, LENGTH_KERNEL, LENGTH_KERNEL
-    )
-    var weight2_3: LayoutTensor[ftype, Self.w23_layout, MutUntrackedOrigin]
-
-    comptime w45_layout = Layout.row_major(
-        LAYER4, LAYER5, LENGTH_KERNEL, LENGTH_KERNEL
-    )
-    var weight4_5: LayoutTensor[ftype, Self.w45_layout, MutUntrackedOrigin]
-
-    comptime w56_layout = Layout.row_major(
-        LAYER5 * LENGTH_FEATURE5 * LENGTH_FEATURE5, OUTPUT
-    )
-    var weight5_6: LayoutTensor[ftype, Self.w56_layout, MutUntrackedOrigin]
+    var weight0_1: LayoutTensor[ftype, WeightLayouts.w01, MutUntrackedOrigin]
+    var weight2_3: LayoutTensor[ftype, WeightLayouts.w23, MutUntrackedOrigin]
+    var weight4_5: LayoutTensor[ftype, WeightLayouts.w45, MutUntrackedOrigin]
+    var weight5_6: LayoutTensor[ftype, WeightLayouts.w56, MutUntrackedOrigin]
 
     # BIASES
-    comptime b01_layout = Layout.row_major(LAYER1)
-    var bias0_1: LayoutTensor[ftype, Self.b01_layout, MutUntrackedOrigin]
-
-    comptime b23_layout = Layout.row_major(LAYER3)
-    var bias2_3: LayoutTensor[ftype, Self.b23_layout, MutUntrackedOrigin]
-
-    comptime b45_layout = Layout.row_major(LAYER5)
-    var bias4_5: LayoutTensor[ftype, Self.b45_layout, MutUntrackedOrigin]
-
-    comptime b56_layout = Layout.row_major(OUTPUT)
-    var bias5_6: LayoutTensor[ftype, Self.b56_layout, MutUntrackedOrigin]
+    var bias0_1: LayoutTensor[ftype, BiasLayouts.b01, MutUntrackedOrigin]
+    var bias2_3: LayoutTensor[ftype, BiasLayouts.b23, MutUntrackedOrigin]
+    var bias4_5: LayoutTensor[ftype, BiasLayouts.b45, MutUntrackedOrigin]
+    var bias5_6: LayoutTensor[ftype, BiasLayouts.b56, MutUntrackedOrigin]
 
     @staticmethod
     def sizeInBytes() -> Int:
         var weights = comptime (
-            Self.w01_layout.size()
-            + Self.w23_layout.size()
-            + Self.w45_layout.size()
-            + Self.w56_layout.size()
+            WeightLayouts.w01.size()
+            + WeightLayouts.w23.size()
+            + WeightLayouts.w45.size()
+            + WeightLayouts.w56.size()
         )
         var biases = comptime (
-            Self.b01_layout.size()
-            + Self.b23_layout.size()
-            + Self.b45_layout.size()
-            + Self.b56_layout.size()
+            BiasLayouts.b01.size()
+            + BiasLayouts.b23.size()
+            + BiasLayouts.b45.size()
+            + BiasLayouts.b56.size()
         )
         return (weights + biases) * size_of[ftype]()
 
     def __init__(out self):
         self.allocator_owns_memory = False
         # weights
-        self.weight0_1 = untrack(LayoutTensor[ftype, Self.w01_layout](
-            alloc[sftype](comptime (Self.w01_layout.size()))
+        self.weight0_1 = untrack(LayoutTensor[ftype, WeightLayouts.w01](
+            alloc[sftype](comptime (WeightLayouts.w01.size()))
         )).fill(0.0)
-        self.weight2_3 = untrack(LayoutTensor[ftype, Self.w23_layout](
-            alloc[sftype](comptime (Self.w23_layout.size()))
+        self.weight2_3 = untrack(LayoutTensor[ftype, WeightLayouts.w23](
+            alloc[sftype](comptime (WeightLayouts.w23.size()))
         )).fill(0.0)
-        self.weight4_5 = untrack(LayoutTensor[ftype, Self.w45_layout](
-            alloc[sftype](comptime (Self.w45_layout.size()))
+        self.weight4_5 = untrack(LayoutTensor[ftype, WeightLayouts.w45](
+            alloc[sftype](comptime (WeightLayouts.w45.size()))
         )).fill(0.0)
-        self.weight5_6 = untrack(LayoutTensor[ftype, Self.w56_layout](
-            alloc[sftype](comptime (Self.w56_layout.size()))
+        self.weight5_6 = untrack(LayoutTensor[ftype, WeightLayouts.w56](
+            alloc[sftype](comptime (WeightLayouts.w56.size()))
         )).fill(0.0)
         # biases
-        self.bias0_1 = untrack(LayoutTensor[ftype, Self.b01_layout](
-            alloc[sftype](comptime (Self.b01_layout.size()))
+        self.bias0_1 = untrack(LayoutTensor[ftype, BiasLayouts.b01](
+            alloc[sftype](comptime (BiasLayouts.b01.size()))
         )).fill(0.0)
-        self.bias2_3 = untrack(LayoutTensor[ftype, Self.b23_layout](
-            alloc[sftype](comptime (Self.b23_layout.size()))
+        self.bias2_3 = untrack(LayoutTensor[ftype, BiasLayouts.b23](
+            alloc[sftype](comptime (BiasLayouts.b23.size()))
         )).fill(0.0)
-        self.bias4_5 = untrack(LayoutTensor[ftype, Self.b45_layout](
-            alloc[sftype](comptime (Self.b45_layout.size()))
+        self.bias4_5 = untrack(LayoutTensor[ftype, BiasLayouts.b45](
+            alloc[sftype](comptime (BiasLayouts.b45.size()))
         )).fill(0.0)
-        self.bias5_6 = untrack(LayoutTensor[ftype, Self.b56_layout](
-            alloc[sftype](comptime (Self.b56_layout.size()))
+        self.bias5_6 = untrack(LayoutTensor[ftype, BiasLayouts.b56](
+            alloc[sftype](comptime (BiasLayouts.b56.size()))
         )).fill(0.0)
 
     def __init__(out self, mut arena: Some[CPUAllocator]):  # raises
@@ -150,30 +131,30 @@ struct LeNet5(Movable, ArenaSizable):
         """
         self.allocator_owns_memory = True
         # weights
-        self.weight0_1 = untrack(LayoutTensor[ftype, Self.w01_layout](
-            arena.alloc[sftype](comptime (Self.w01_layout.size()))
+        self.weight0_1 = untrack(LayoutTensor[ftype, WeightLayouts.w01](
+            arena.alloc[sftype](comptime (WeightLayouts.w01.size()))
         )).fill(0.0)
-        self.weight2_3 = untrack(LayoutTensor[ftype, Self.w23_layout](
-            arena.alloc[sftype](comptime (Self.w23_layout.size()))
+        self.weight2_3 = untrack(LayoutTensor[ftype, WeightLayouts.w23](
+            arena.alloc[sftype](comptime (WeightLayouts.w23.size()))
         )).fill(0.0)
-        self.weight4_5 = untrack(LayoutTensor[ftype, Self.w45_layout](
-            arena.alloc[sftype](comptime (Self.w45_layout.size()))
+        self.weight4_5 = untrack(LayoutTensor[ftype, WeightLayouts.w45](
+            arena.alloc[sftype](comptime (WeightLayouts.w45.size()))
         )).fill(0.0)
-        self.weight5_6 = untrack(LayoutTensor[ftype, Self.w56_layout](
-            arena.alloc[sftype](comptime (Self.w56_layout.size()))
+        self.weight5_6 = untrack(LayoutTensor[ftype, WeightLayouts.w56](
+            arena.alloc[sftype](comptime (WeightLayouts.w56.size()))
         )).fill(0.0)
         # biases
-        self.bias0_1 = untrack(LayoutTensor[ftype, Self.b01_layout](
-            arena.alloc[sftype](comptime (Self.b01_layout.size()))
+        self.bias0_1 = untrack(LayoutTensor[ftype, BiasLayouts.b01](
+            arena.alloc[sftype](comptime (BiasLayouts.b01.size()))
         )).fill(0.0)
-        self.bias2_3 = untrack(LayoutTensor[ftype, Self.b23_layout](
-            arena.alloc[sftype](comptime (Self.b23_layout.size()))
+        self.bias2_3 = untrack(LayoutTensor[ftype, BiasLayouts.b23](
+            arena.alloc[sftype](comptime (BiasLayouts.b23.size()))
         )).fill(0.0)
-        self.bias4_5 = untrack(LayoutTensor[ftype, Self.b45_layout](
-            arena.alloc[sftype](comptime (Self.b45_layout.size()))
+        self.bias4_5 = untrack(LayoutTensor[ftype, BiasLayouts.b45](
+            arena.alloc[sftype](comptime (BiasLayouts.b45.size()))
         )).fill(0.0)
-        self.bias5_6 = untrack(LayoutTensor[ftype, Self.b56_layout](
-            arena.alloc[sftype](comptime (Self.b56_layout.size()))
+        self.bias5_6 = untrack(LayoutTensor[ftype, BiasLayouts.b56](
+            arena.alloc[sftype](comptime (BiasLayouts.b56.size()))
         )).fill(0.0)
 
     def zero(mut self):
@@ -470,49 +451,24 @@ struct Feature(Movable, ArenaSizable):
     These buffers hold intermediate results.
     """
 
-    comptime input_layout = Layout.row_major(
-        INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0
-    )
-    var input: LayoutTensor[ftype, Feature.input_layout, MutUntrackedOrigin]
-
-    comptime layer1_layout = Layout.row_major(
-        LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE1
-    )
-    var layer1: LayoutTensor[ftype, Feature.layer1_layout, MutUntrackedOrigin]
-
-    comptime layer2_layout = Layout.row_major(
-        LAYER2, LENGTH_FEATURE2, LENGTH_FEATURE2
-    )
-    var layer2: LayoutTensor[ftype, Feature.layer2_layout, MutUntrackedOrigin]
-
-    comptime layer3_layout = Layout.row_major(
-        LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE3
-    )
-    var layer3: LayoutTensor[ftype, Feature.layer3_layout, MutUntrackedOrigin]
-
-    comptime layer4_layout = Layout.row_major(
-        LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4
-    )
-    var layer4: LayoutTensor[ftype, Feature.layer4_layout, MutUntrackedOrigin]
-
-    comptime layer5_layout = Layout.row_major(
-        LAYER5, LENGTH_FEATURE5, LENGTH_FEATURE5
-    )
-    var layer5: LayoutTensor[ftype, Feature.layer5_layout, MutUntrackedOrigin]
-
-    comptime output_layout = Layout.row_major(OUTPUT)
-    var output: LayoutTensor[ftype, Feature.output_layout, MutUntrackedOrigin]
+    var input: LayoutTensor[ftype, FeatureLayouts.input, MutUntrackedOrigin]
+    var layer1: LayoutTensor[ftype, FeatureLayouts.layer1, MutUntrackedOrigin]
+    var layer2: LayoutTensor[ftype, FeatureLayouts.layer2, MutUntrackedOrigin]
+    var layer3: LayoutTensor[ftype, FeatureLayouts.layer3, MutUntrackedOrigin]
+    var layer4: LayoutTensor[ftype, FeatureLayouts.layer4, MutUntrackedOrigin]
+    var layer5: LayoutTensor[ftype, FeatureLayouts.layer5, MutUntrackedOrigin]
+    var output: LayoutTensor[ftype, FeatureLayouts.output, MutUntrackedOrigin]
 
     @staticmethod
     def sizeInBytes() -> Int:
         var n = comptime (
-            Self.input_layout.size()
-            + Self.layer1_layout.size()
-            + Self.layer2_layout.size()
-            + Self.layer3_layout.size()
-            + Self.layer4_layout.size()
-            + Self.layer5_layout.size()
-            + Self.output_layout.size()
+            FeatureLayouts.input.size()
+            + FeatureLayouts.layer1.size()
+            + FeatureLayouts.layer2.size()
+            + FeatureLayouts.layer3.size()
+            + FeatureLayouts.layer4.size()
+            + FeatureLayouts.layer5.size()
+            + FeatureLayouts.output.size()
         )
         return n * size_of[ftype]()
 
@@ -520,52 +476,52 @@ struct Feature(Movable, ArenaSizable):
         """
         Needs to start as all zeros.
         """
-        self.input = untrack(LayoutTensor[ftype, Self.input_layout](
-            alloc[sftype](comptime (Self.input_layout.size()))
+        self.input = untrack(LayoutTensor[ftype, FeatureLayouts.input](
+            alloc[sftype](comptime (FeatureLayouts.input.size()))
         )).fill(0.0)
-        self.layer1 = untrack(LayoutTensor[ftype, Self.layer1_layout](
-            alloc[sftype](comptime (Self.layer1_layout.size()))
+        self.layer1 = untrack(LayoutTensor[ftype, FeatureLayouts.layer1](
+            alloc[sftype](comptime (FeatureLayouts.layer1.size()))
         )).fill(0.0)
-        self.layer2 = untrack(LayoutTensor[ftype, Self.layer2_layout](
-            alloc[sftype](comptime (Self.layer2_layout.size()))
+        self.layer2 = untrack(LayoutTensor[ftype, FeatureLayouts.layer2](
+            alloc[sftype](comptime (FeatureLayouts.layer2.size()))
         )).fill(0.0)
-        self.layer3 = untrack(LayoutTensor[ftype, Self.layer3_layout](
-            alloc[sftype](comptime (Self.layer3_layout.size()))
+        self.layer3 = untrack(LayoutTensor[ftype, FeatureLayouts.layer3](
+            alloc[sftype](comptime (FeatureLayouts.layer3.size()))
         )).fill(0.0)
-        self.layer4 = untrack(LayoutTensor[ftype, Self.layer4_layout](
-            alloc[sftype](comptime (Self.layer4_layout.size()))
+        self.layer4 = untrack(LayoutTensor[ftype, FeatureLayouts.layer4](
+            alloc[sftype](comptime (FeatureLayouts.layer4.size()))
         )).fill(0.0)
-        self.layer5 = untrack(LayoutTensor[ftype, Self.layer5_layout](
-            alloc[sftype](comptime (Self.layer5_layout.size()))
+        self.layer5 = untrack(LayoutTensor[ftype, FeatureLayouts.layer5](
+            alloc[sftype](comptime (FeatureLayouts.layer5.size()))
         )).fill(0.0)
-        self.output = untrack(LayoutTensor[ftype, Self.output_layout](
-            alloc[sftype](comptime (Self.output_layout.size()))
+        self.output = untrack(LayoutTensor[ftype, FeatureLayouts.output](
+            alloc[sftype](comptime (FeatureLayouts.output.size()))
         )).fill(0.0)
 
     def __init__(out self, mut arena: Some[CPUAllocator]):
         """
         Needs to start as all zeros.
         """
-        self.input = untrack(LayoutTensor[ftype, Self.input_layout](
-            arena.alloc[sftype](comptime (Self.input_layout.size()))
+        self.input = untrack(LayoutTensor[ftype, FeatureLayouts.input](
+            arena.alloc[sftype](comptime (FeatureLayouts.input.size()))
         )).fill(0.0)
-        self.layer1 = untrack(LayoutTensor[ftype, Self.layer1_layout](
-            arena.alloc[sftype](comptime (Self.layer1_layout.size()))
+        self.layer1 = untrack(LayoutTensor[ftype, FeatureLayouts.layer1](
+            arena.alloc[sftype](comptime (FeatureLayouts.layer1.size()))
         )).fill(0.0)
-        self.layer2 = untrack(LayoutTensor[ftype, Self.layer2_layout](
-            arena.alloc[sftype](comptime (Self.layer2_layout.size()))
+        self.layer2 = untrack(LayoutTensor[ftype, FeatureLayouts.layer2](
+            arena.alloc[sftype](comptime (FeatureLayouts.layer2.size()))
         )).fill(0.0)
-        self.layer3 = untrack(LayoutTensor[ftype, Self.layer3_layout](
-            arena.alloc[sftype](comptime (Self.layer3_layout.size()))
+        self.layer3 = untrack(LayoutTensor[ftype, FeatureLayouts.layer3](
+            arena.alloc[sftype](comptime (FeatureLayouts.layer3.size()))
         )).fill(0.0)
-        self.layer4 = untrack(LayoutTensor[ftype, Self.layer4_layout](
-            arena.alloc[sftype](comptime (Self.layer4_layout.size()))
+        self.layer4 = untrack(LayoutTensor[ftype, FeatureLayouts.layer4](
+            arena.alloc[sftype](comptime (FeatureLayouts.layer4.size()))
         )).fill(0.0)
-        self.layer5 = untrack(LayoutTensor[ftype, Self.layer5_layout](
-            arena.alloc[sftype](comptime (Self.layer5_layout.size()))
+        self.layer5 = untrack(LayoutTensor[ftype, FeatureLayouts.layer5](
+            arena.alloc[sftype](comptime (FeatureLayouts.layer5.size()))
         )).fill(0.0)
-        self.output = untrack(LayoutTensor[ftype, Self.output_layout](
-            arena.alloc[sftype](comptime (Self.output_layout.size()))
+        self.output = untrack(LayoutTensor[ftype, FeatureLayouts.output](
+            arena.alloc[sftype](comptime (FeatureLayouts.output.size()))
         )).fill(0.0)
 
     def loadInput(self, image: Image):

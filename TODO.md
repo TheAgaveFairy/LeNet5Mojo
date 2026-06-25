@@ -29,12 +29,21 @@ Check items off as they are completed.
     Renamed `_calcArenaSize` → `sizeInBytes` on CPU structs. `LeNet5`, `Feature`,
     `FeatureGPUBuffers`, `LeNet5GPUBuffers`, `LeNet5GPU` all conform.
 
-- [ ] **Centralize weight + feature layouts into structs in `constants.mojo`** (`constants.mojo`, `accel/ops.mojo`, `accel/feature.mojo`)
-  - Today the per-layer dims (K/M of each weight, feature flat sizes) are re-derived inline in each
-    kernel (e.g. conv3 flattening `LAYER4*5*5=400`, weight4_5 as `[400,120]`, weight5_6 as `[120,10]`).
-  - Hoist into named layout structs so the GEMM-style ops (conv3, matmul5_6) can read K, M, and the
-    `Layout` straight off a shared definition instead of open-coding shapes. Makes the generic
-    `gemm[B,K,M,...]` reuse clean and keeps CPU/GPU shape definitions in one place.
+- [x] **Centralize weight + feature layouts into structs in `constants.mojo`** — DONE 2026-06-25
+  - The `Layout.row_major(...)` defs were duplicated across BOTH CPU (`cpu/model.mojo` `LeNet5`,
+    `Feature`) and GPU (`accel/feature.mojo` `FeatureGPU`, `accel/model.mojo` `LeNet5GPU`) with
+    byte-identical shapes, only the member names differing (`w01_layout` vs `w0_1_layout`).
+  - Hoisted into three namespace structs in `constants.mojo`: `FeatureLayouts` (input, layer1..5,
+    output), `WeightLayouts` (w01/w23/w45/w56), `BiasLayouts` (b01/b23/b45/b56). Dropped the
+    `_layout` suffix — the struct prefix reads well (`FeatureLayouts.layer4`). Standardized the
+    `w01` (no-underscore) naming per Paul; left the `weight0_1`/`bias0_1` *field* names alone
+    (already consistent everywhere). All four structs + the kernels in `accel/ops.mojo` now point
+    at the central defs; single source of truth for CPU + GPU.
+  - Pure no-op refactor: build green, accuracy exact CPU 9648/10000 + GPU 9648/10000 (1.32M fps s=5).
+  - NOTE: did NOT add GEMM K/M descriptors (the original blurb's `gemm[B,K,M,...]` angle) — Paul
+    scoped this as clarity/organization only. If Tier B wants named K/M, add a thin descriptor
+    layer over these later. Also dovetails with the explicit `[1,28,28]` single-channel TODO
+    (would just edit `FeatureLayouts.input` + the MNIST loader in one place now).
 
 - [ ] **(Future) Kill `List[Image]` from CPU hot path; share SoA spans for both CPU and GPU** (`dataloader.mojo`)
   - CPU path currently uses `List[Image]` (AoS, 785-byte stride with label interleaved).
@@ -124,8 +133,11 @@ Check items off as they are completed.
     main.mojo + tests/profile_gpu.mojo. grid_search now sweeps streams via runtime arg (bs
     outer/comptime → one compile per bs). `-D NUM_GPU_STREAMS` / `-D BENCH_ONLY` kept as
     defaults for back-compat.
-  - CLEANUP (later): drop the `-D BENCH_ONLY` comptime path entirely once nothing depends on
-    it — runtime `--bench-only` covers it; the define is just clutter for a minor feature.
+  - CLEANUP DONE 2026-06-24: dropped the `-D BENCH_ONLY` comptime path entirely. `comptime
+    BENCH_ONLY` + its `defines` import removed from `cli.mojo`; `bench_only` defaults to `False`;
+    `-D BENCH_ONLY` line dropped from `printHelp`; main.mojo error message no longer mentions it.
+    Migrated the three callers to runtime `--bench-only`: pixi `bench` + `nsysprofile` tasks,
+    `scripts/grid_search_gpu.sh`. Build green, `--help` + `--bench-only` verified.
 
 - [x] **conv1 kernel: `INPUT > 1` not handled** (`accel/ops.mojo`) — DONE 2026-06-20
   - Kernel hardcodes single-channel input. Added `comptime assert INPUT == 1` at the top of

@@ -1,4 +1,4 @@
-from layout import Layout, LayoutTensor
+from layout import LayoutTensor
 
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
@@ -12,22 +12,8 @@ from origin_util import untrack
 from constants import (
     ftype,
     sftype,
-    LENGTH_KERNEL,
-    LENGTH_KERNEL_SQ,
-    LENGTH_FEATURE0,
-    LENGTH_FEATURE1,
-    LENGTH_FEATURE2,
-    LENGTH_FEATURE3,
-    LENGTH_FEATURE4,
-    LENGTH_FEATURE5,
-    INPUT,
-    LAYER1,
-    LAYER2,
-    LAYER3,
-    LAYER4,
-    LAYER5,
-    OUTPUT,
-    PADDED_SIZE,
+    WeightLayouts,
+    BiasLayouts,
 )
 
 
@@ -66,55 +52,55 @@ struct LeNet5GPUBuffers(ArenaSizable):
     def __init__(out self, mut arena: Some[GPUAllocator]) raises:
         self.allocator_owns_memory = True
         self.w01_storage = arena.alloc[ftype](
-            comptime (LeNet5GPU.w0_1_layout.size())
+            comptime (WeightLayouts.w01.size())
         )
         self.w23_storage = arena.alloc[ftype](
-            comptime (LeNet5GPU.w2_3_layout.size())
+            comptime (WeightLayouts.w23.size())
         )
         self.w45_storage = arena.alloc[ftype](
-            comptime (LeNet5GPU.w4_5_layout.size())
+            comptime (WeightLayouts.w45.size())
         )
         self.w56_storage = arena.alloc[ftype](
-            comptime (LeNet5GPU.w5_6_layout.size())
+            comptime (WeightLayouts.w56.size())
         )
         self.b01_storage = arena.alloc[ftype](
-            comptime (LeNet5GPU.b0_1_layout.size())
+            comptime (BiasLayouts.b01.size())
         )
         self.b23_storage = arena.alloc[ftype](
-            comptime (LeNet5GPU.b2_3_layout.size())
+            comptime (BiasLayouts.b23.size())
         )
         self.b45_storage = arena.alloc[ftype](
-            comptime (LeNet5GPU.b4_5_layout.size())
+            comptime (BiasLayouts.b45.size())
         )
         self.b56_storage = arena.alloc[ftype](
-            comptime (LeNet5GPU.b5_6_layout.size())
+            comptime (BiasLayouts.b56.size())
         )
 
     def __init__(out self, ctx: DeviceContext) raises:
         self.allocator_owns_memory = False
         self.w01_storage = ctx.enqueue_create_buffer[ftype](
-            comptime (LeNet5GPU.w0_1_layout.size())
+            comptime (WeightLayouts.w01.size())
         )
         self.w23_storage = ctx.enqueue_create_buffer[ftype](
-            comptime (LeNet5GPU.w2_3_layout.size())
+            comptime (WeightLayouts.w23.size())
         )
         self.w45_storage = ctx.enqueue_create_buffer[ftype](
-            comptime (LeNet5GPU.w4_5_layout.size())
+            comptime (WeightLayouts.w45.size())
         )
         self.w56_storage = ctx.enqueue_create_buffer[ftype](
-            comptime (LeNet5GPU.w5_6_layout.size())
+            comptime (WeightLayouts.w56.size())
         )
         self.b01_storage = ctx.enqueue_create_buffer[ftype](
-            comptime (LeNet5GPU.b0_1_layout.size())
+            comptime (BiasLayouts.b01.size())
         )
         self.b23_storage = ctx.enqueue_create_buffer[ftype](
-            comptime (LeNet5GPU.b2_3_layout.size())
+            comptime (BiasLayouts.b23.size())
         )
         self.b45_storage = ctx.enqueue_create_buffer[ftype](
-            comptime (LeNet5GPU.b4_5_layout.size())
+            comptime (BiasLayouts.b45.size())
         )
         self.b56_storage = ctx.enqueue_create_buffer[ftype](
-            comptime (LeNet5GPU.b5_6_layout.size())
+            comptime (BiasLayouts.b56.size())
         )
         self.zero(sync_ctx=ctx)
         # ctx.synchronize() # or pass no ctx (sync_ctx = None) and do it yourself here
@@ -157,38 +143,16 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable, ArenaSizable):
     comptime device_type: AnyType = Self
 
     # WEIGHTS
-    comptime w0_1_layout = Layout.row_major(
-        INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL
-    )
-    var weight0_1: LayoutTensor[ftype, Self.w0_1_layout, MutUntrackedOrigin]
-
-    comptime w2_3_layout = Layout.row_major(
-        LAYER2, LAYER3, LENGTH_KERNEL, LENGTH_KERNEL
-    )
-    var weight2_3: LayoutTensor[ftype, Self.w2_3_layout, MutUntrackedOrigin]
-
-    comptime w4_5_layout = Layout.row_major(
-        LAYER4, LAYER5, LENGTH_KERNEL, LENGTH_KERNEL
-    )
-    var weight4_5: LayoutTensor[ftype, Self.w4_5_layout, MutUntrackedOrigin]
-
-    comptime w5_6_layout = Layout.row_major(
-        LAYER5 * LENGTH_FEATURE5 * LENGTH_FEATURE5, OUTPUT
-    )
-    var weight5_6: LayoutTensor[ftype, Self.w5_6_layout, MutUntrackedOrigin]
+    var weight0_1: LayoutTensor[ftype, WeightLayouts.w01, MutUntrackedOrigin]
+    var weight2_3: LayoutTensor[ftype, WeightLayouts.w23, MutUntrackedOrigin]
+    var weight4_5: LayoutTensor[ftype, WeightLayouts.w45, MutUntrackedOrigin]
+    var weight5_6: LayoutTensor[ftype, WeightLayouts.w56, MutUntrackedOrigin]
 
     # BIASES
-    comptime b0_1_layout = Layout.row_major(LAYER1)
-    var bias0_1: LayoutTensor[ftype, Self.b0_1_layout, MutUntrackedOrigin]
-
-    comptime b2_3_layout = Layout.row_major(LAYER3)
-    var bias2_3: LayoutTensor[ftype, Self.b2_3_layout, MutUntrackedOrigin]
-
-    comptime b4_5_layout = Layout.row_major(LAYER5)
-    var bias4_5: LayoutTensor[ftype, Self.b4_5_layout, MutUntrackedOrigin]
-
-    comptime b5_6_layout = Layout.row_major(OUTPUT)
-    var bias5_6: LayoutTensor[ftype, Self.b5_6_layout, MutUntrackedOrigin]
+    var bias0_1: LayoutTensor[ftype, BiasLayouts.b01, MutUntrackedOrigin]
+    var bias2_3: LayoutTensor[ftype, BiasLayouts.b23, MutUntrackedOrigin]
+    var bias4_5: LayoutTensor[ftype, BiasLayouts.b45, MutUntrackedOrigin]
+    var bias5_6: LayoutTensor[ftype, BiasLayouts.b56, MutUntrackedOrigin]
 
     def __init__(out self, bufs: LeNet5GPUBuffers) raises:
         """Ensure you are initialized to all zeros..
@@ -199,30 +163,30 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable, ArenaSizable):
         var w2 = bufs.w23_storage
         var w4 = bufs.w45_storage
         var w5 = bufs.w56_storage
-        self.weight0_1 = untrack(LayoutTensor[ftype, Self.w0_1_layout](w0))
-        self.weight2_3 = untrack(LayoutTensor[ftype, Self.w2_3_layout](w2))
-        self.weight4_5 = untrack(LayoutTensor[ftype, Self.w4_5_layout](w4))
-        self.weight5_6 = untrack(LayoutTensor[ftype, Self.w5_6_layout](w5))
+        self.weight0_1 = untrack(LayoutTensor[ftype, WeightLayouts.w01](w0))
+        self.weight2_3 = untrack(LayoutTensor[ftype, WeightLayouts.w23](w2))
+        self.weight4_5 = untrack(LayoutTensor[ftype, WeightLayouts.w45](w4))
+        self.weight5_6 = untrack(LayoutTensor[ftype, WeightLayouts.w56](w5))
         var b0 = bufs.b01_storage
         var b2 = bufs.b23_storage
         var b4 = bufs.b45_storage
         var b5 = bufs.b56_storage
-        self.bias0_1 = untrack(LayoutTensor[ftype, Self.b0_1_layout](b0))
-        self.bias2_3 = untrack(LayoutTensor[ftype, Self.b2_3_layout](b2))
-        self.bias4_5 = untrack(LayoutTensor[ftype, Self.b4_5_layout](b4))
-        self.bias5_6 = untrack(LayoutTensor[ftype, Self.b5_6_layout](b5))
+        self.bias0_1 = untrack(LayoutTensor[ftype, BiasLayouts.b01](b0))
+        self.bias2_3 = untrack(LayoutTensor[ftype, BiasLayouts.b23](b2))
+        self.bias4_5 = untrack(LayoutTensor[ftype, BiasLayouts.b45](b4))
+        self.bias5_6 = untrack(LayoutTensor[ftype, BiasLayouts.b56](b5))
 
     @staticmethod
     def sizeInBytes() -> Int:
         var num_ftypes = comptime (
-            Self.w0_1_layout.size()
-            + Self.w2_3_layout.size()
-            + Self.w4_5_layout.size()
-            + Self.w5_6_layout.size()
-            + Self.b0_1_layout.size()
-            + Self.b2_3_layout.size()
-            + Self.b4_5_layout.size()
-            + Self.b5_6_layout.size()
+            WeightLayouts.w01.size()
+            + WeightLayouts.w23.size()
+            + WeightLayouts.w45.size()
+            + WeightLayouts.w56.size()
+            + BiasLayouts.b01.size()
+            + BiasLayouts.b23.size()
+            + BiasLayouts.b45.size()
+            + BiasLayouts.b56.size()
         )
         return num_ftypes * size_of[ftype]()
 

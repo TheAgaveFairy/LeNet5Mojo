@@ -38,6 +38,9 @@ from constants import (
     PADDING,
     NUM_GPU_STREAMS,
     GPU_STREAM_BATCH_SIZE,
+    FeatureLayouts,
+    WeightLayouts,
+    BiasLayouts,
 )
 from accel.model import LeNet5GPU
 from accel.feature import FeatureGPU, FeatureGPUBuffers
@@ -210,7 +213,7 @@ def conv3FusedKernel[
 
     var local_feats = LayoutTensor[
         ftype,
-        FeatureGPU.layer4_layout,
+        FeatureLayouts.layer4,
         MutAnyOrigin,
         address_space=AddressSpace.SHARED,
     ].stack_allocation()
@@ -321,7 +324,7 @@ def conv2FusedKernel[
 
     var local_image = LayoutTensor[
         ftype,
-        FeatureGPU.layer2_layout,
+        FeatureLayouts.layer2,
         MutAnyOrigin,
         address_space=AddressSpace.SHARED,
     ].stack_allocation()
@@ -389,7 +392,7 @@ def conv1FusedKernel[
 
     var local_kernels = LayoutTensor[
         ftype,
-        LeNet5GPU.w0_1_layout,
+        WeightLayouts.w01,
         MutAnyOrigin,
         address_space=AddressSpace.SHARED,
     ].stack_allocation()
@@ -399,7 +402,7 @@ def conv1FusedKernel[
     # INPUT > 1 not handled — guarded by the comptime assert above.
     var local_image = LayoutTensor[
         ftype,
-        FeatureGPU.input_layout,
+        FeatureLayouts.input,
         MutAnyOrigin,
         address_space=AddressSpace.SHARED,
     ].stack_allocation()
@@ -415,7 +418,7 @@ def conv1FusedKernel[
 
     var local_biases = LayoutTensor[
         ftype,
-        LeNet5GPU.b0_1_layout,
+        BiasLayouts.b01,
         MutAnyOrigin,
         address_space=AddressSpace.SHARED,
     ].stack_allocation()

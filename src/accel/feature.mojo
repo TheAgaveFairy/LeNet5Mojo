@@ -1,4 +1,4 @@
-from layout import Layout, LayoutTensor
+from layout import LayoutTensor
 from cpu.arena import ArenaSizable
 from origin_util import untrack
 
@@ -10,20 +10,8 @@ from std.reflection.reflect import reflect
 from constants import (
     ftype,
     sftype,
-    INPUT,
-    LAYER1,
-    LAYER2,
-    LAYER3,
-    LAYER4,
-    LAYER5,
-    OUTPUT,
     PADDED_SIZE,
-    LENGTH_FEATURE0,
-    LENGTH_FEATURE1,
-    LENGTH_FEATURE2,
-    LENGTH_FEATURE3,
-    LENGTH_FEATURE4,
-    LENGTH_FEATURE5,
+    FeatureLayouts,
 )
 from image import Image
 from accel.arena import GPUBumpArenaAllocator
@@ -49,13 +37,13 @@ struct FeatureGPUBuffers(Movable, ArenaSizable):
         """Total bytes needed from the arena for one FeatureGPUBuffers instance.
         """
         return (
-            comptime (FeatureGPU.input_layout.size())
-            + comptime (FeatureGPU.layer1_layout.size())
-            + comptime (FeatureGPU.layer2_layout.size())
-            + comptime (FeatureGPU.layer3_layout.size())
-            + comptime (FeatureGPU.layer4_layout.size())
-            + comptime (FeatureGPU.layer5_layout.size())
-            + comptime (FeatureGPU.output_layout.size())
+            comptime (FeatureLayouts.input.size())
+            + comptime (FeatureLayouts.layer1.size())
+            + comptime (FeatureLayouts.layer2.size())
+            + comptime (FeatureLayouts.layer3.size())
+            + comptime (FeatureLayouts.layer4.size())
+            + comptime (FeatureLayouts.layer5.size())
+            + comptime (FeatureLayouts.output.size())
         ) * size_of[sftype]()
 
     def __init__(out self, mut arena: GPUBumpArenaAllocator) raises:
@@ -64,55 +52,55 @@ struct FeatureGPUBuffers(Movable, ArenaSizable):
         """
         self.allocator_owns_memory = True
         self.input = arena.alloc[ftype](
-            comptime (FeatureGPU.input_layout.size())
+            comptime (FeatureLayouts.input.size())
         )
         self.layer1 = arena.alloc[ftype](
-            comptime (FeatureGPU.layer1_layout.size())
+            comptime (FeatureLayouts.layer1.size())
         )
         self.layer2 = arena.alloc[ftype](
-            comptime (FeatureGPU.layer2_layout.size())
+            comptime (FeatureLayouts.layer2.size())
         )
         self.layer3 = arena.alloc[ftype](
-            comptime (FeatureGPU.layer3_layout.size())
+            comptime (FeatureLayouts.layer3.size())
         )
         self.layer4 = arena.alloc[ftype](
-            comptime (FeatureGPU.layer4_layout.size())
+            comptime (FeatureLayouts.layer4.size())
         )
         self.layer5 = arena.alloc[ftype](
-            comptime (FeatureGPU.layer5_layout.size())
+            comptime (FeatureLayouts.layer5.size())
         )
         self.output = arena.alloc[ftype](
-            comptime (FeatureGPU.output_layout.size())
+            comptime (FeatureLayouts.output.size())
         )
 
     def __init__(out self, ctx: DeviceContext) raises:
         self.allocator_owns_memory = False
         self.input = ctx.enqueue_create_buffer[ftype](
-            comptime (FeatureGPU.input_layout.size())
+            comptime (FeatureLayouts.input.size())
         )
         self.input.enqueue_fill(0.0)
         self.layer1 = ctx.enqueue_create_buffer[ftype](
-            comptime (FeatureGPU.layer1_layout.size())
+            comptime (FeatureLayouts.layer1.size())
         )
         self.layer1.enqueue_fill(0.0)
         self.layer2 = ctx.enqueue_create_buffer[ftype](
-            comptime (FeatureGPU.layer2_layout.size())
+            comptime (FeatureLayouts.layer2.size())
         )
         self.layer2.enqueue_fill(0.0)
         self.layer3 = ctx.enqueue_create_buffer[ftype](
-            comptime (FeatureGPU.layer3_layout.size())
+            comptime (FeatureLayouts.layer3.size())
         )
         self.layer3.enqueue_fill(0.0)
         self.layer4 = ctx.enqueue_create_buffer[ftype](
-            comptime (FeatureGPU.layer4_layout.size())
+            comptime (FeatureLayouts.layer4.size())
         )
         self.layer4.enqueue_fill(0.0)
         self.layer5 = ctx.enqueue_create_buffer[ftype](
-            comptime (FeatureGPU.layer5_layout.size())
+            comptime (FeatureLayouts.layer5.size())
         )
         self.layer5.enqueue_fill(0.0)
         self.output = ctx.enqueue_create_buffer[ftype](
-            comptime (FeatureGPU.output_layout.size())
+            comptime (FeatureLayouts.output.size())
         )
         self.output.enqueue_fill(0.0)
 
@@ -138,33 +126,13 @@ struct FeatureGPU(Copyable, DevicePassable, Movable):
 
     comptime device_type: AnyType = Self
 
-    comptime input_layout = Layout.row_major(
-        INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0
-    )
-    comptime layer1_layout = Layout.row_major(
-        LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE1
-    )
-    comptime layer2_layout = Layout.row_major(
-        LAYER2, LENGTH_FEATURE2, LENGTH_FEATURE2
-    )
-    comptime layer3_layout = Layout.row_major(
-        LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE3
-    )
-    comptime layer4_layout = Layout.row_major(
-        LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4
-    )
-    comptime layer5_layout = Layout.row_major(
-        LAYER5, LENGTH_FEATURE5, LENGTH_FEATURE5
-    )
-    comptime output_layout = Layout.row_major(OUTPUT)
-
-    var input: LayoutTensor[ftype, FeatureGPU.input_layout, MutUntrackedOrigin]
-    var layer1: LayoutTensor[ftype, FeatureGPU.layer1_layout, MutUntrackedOrigin]
-    var layer2: LayoutTensor[ftype, FeatureGPU.layer2_layout, MutUntrackedOrigin]
-    var layer3: LayoutTensor[ftype, FeatureGPU.layer3_layout, MutUntrackedOrigin]
-    var layer4: LayoutTensor[ftype, FeatureGPU.layer4_layout, MutUntrackedOrigin]
-    var layer5: LayoutTensor[ftype, FeatureGPU.layer5_layout, MutUntrackedOrigin]
-    var output: LayoutTensor[ftype, FeatureGPU.output_layout, MutUntrackedOrigin]
+    var input: LayoutTensor[ftype, FeatureLayouts.input, MutUntrackedOrigin]
+    var layer1: LayoutTensor[ftype, FeatureLayouts.layer1, MutUntrackedOrigin]
+    var layer2: LayoutTensor[ftype, FeatureLayouts.layer2, MutUntrackedOrigin]
+    var layer3: LayoutTensor[ftype, FeatureLayouts.layer3, MutUntrackedOrigin]
+    var layer4: LayoutTensor[ftype, FeatureLayouts.layer4, MutUntrackedOrigin]
+    var layer5: LayoutTensor[ftype, FeatureLayouts.layer5, MutUntrackedOrigin]
+    var output: LayoutTensor[ftype, FeatureLayouts.output, MutUntrackedOrigin]
 
     @staticmethod
     def get_type_name() -> String:
@@ -183,10 +151,10 @@ struct FeatureGPU(Copyable, DevicePassable, Movable):
         var b_layer4 = bufs.layer4
         var b_layer5 = bufs.layer5
         var b_output = bufs.output
-        self.input = untrack(LayoutTensor[ftype, Self.input_layout](b_input))
-        self.layer1 = untrack(LayoutTensor[ftype, Self.layer1_layout](b_layer1))
-        self.layer2 = untrack(LayoutTensor[ftype, Self.layer2_layout](b_layer2))
-        self.layer3 = untrack(LayoutTensor[ftype, Self.layer3_layout](b_layer3))
-        self.layer4 = untrack(LayoutTensor[ftype, Self.layer4_layout](b_layer4))
-        self.layer5 = untrack(LayoutTensor[ftype, Self.layer5_layout](b_layer5))
-        self.output = untrack(LayoutTensor[ftype, Self.output_layout](b_output))
+        self.input = untrack(LayoutTensor[ftype, FeatureLayouts.input](b_input))
+        self.layer1 = untrack(LayoutTensor[ftype, FeatureLayouts.layer1](b_layer1))
+        self.layer2 = untrack(LayoutTensor[ftype, FeatureLayouts.layer2](b_layer2))
+        self.layer3 = untrack(LayoutTensor[ftype, FeatureLayouts.layer3](b_layer3))
+        self.layer4 = untrack(LayoutTensor[ftype, FeatureLayouts.layer4](b_layer4))
+        self.layer5 = untrack(LayoutTensor[ftype, FeatureLayouts.layer5](b_layer5))
+        self.output = untrack(LayoutTensor[ftype, FeatureLayouts.output](b_output))
