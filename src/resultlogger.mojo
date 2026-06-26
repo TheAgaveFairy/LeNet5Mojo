@@ -4,6 +4,31 @@ from std.reflection import reflect
 from constants import act_fn
 
 
+# Generic CSV via reflection — header from field NAMES, row from field VALUES
+# (`reflect[T].field_ref[i]` + `trait_downcast` to a Writable view; both builtins).
+# EVERY field must be Writable — that's why `ftype` is materialized to a String
+# below instead of kept as a DType (which reflects as lowercase "float32"). Adding
+# a CSV column is now just adding a struct field; toCSV/getHeaders never change.
+def reflectHeaders[T: AnyType]() -> String:
+    comptime names = reflect[T].field_names()
+    var line = String("")
+    comptime for i in range(reflect[T].field_count()):
+        if i > 0:
+            line += ","
+        line += String(names[i])
+    return line^
+
+
+def reflectCSV[T: AnyType](ref s: T) -> String:
+    var line = String("")
+    comptime for i in range(reflect[T].field_count()):
+        if i > 0:
+            line += ","
+        ref fr = reflect[T].field_ref[i](s)
+        line += String(trait_downcast[Writable](fr))
+    return line^
+
+
 @fieldwise_init
 struct LogFormat(Copyable, Movable, ImplicitlyCopyable):
     var value: Int  # enum esque
@@ -37,7 +62,7 @@ struct InferenceResult(LogEntry):
     var test_size: Int
     var stream_batch_size: Int
     var num_streams: Int
-    var ftype: DType
+    var ftype: String  # materialized from DType so reflection emits "Float32"/"Float64"
     var activation_fn: String
 
     def __init__(
@@ -62,43 +87,15 @@ struct InferenceResult(LogEntry):
         self.test_size = test_size
         self.stream_batch_size = stream_batch_size
         self.num_streams = num_streams
-        self.ftype = ftype
+        self.ftype = "Float64" if ftype == DType.float64 else "Float32"
         self.activation_fn = reflect[act_fn].base_name()
 
     def toCSV(self) -> String:
-        var datatype_string = "Float32"
-        if self.ftype == DType.float64:
-            datatype_string = "Float64"
-        return (
-            self.timestamp
-            + ","
-            + self.device
-            + ","
-            + String(self.elapsed_ns)
-            + ","
-            + String(self.correct)
-            + ","
-            + String(self.test_size)
-            + ","
-            + String(self.stream_batch_size)
-            + ","
-            + String(self.num_streams)
-            + ","
-            + datatype_string
-            + ","
-            + self.activation_fn
-        )
+        return reflectCSV(self)
 
     @staticmethod
     def getHeaders() -> String:
-        comptime r = reflect[Self]
-        comptime names = r.field_names()
-        var header = String("")
-        comptime for i in range(r.field_count()):
-            if i > 0:
-                header += ","
-            header += String(names[i])
-        return header
+        return reflectHeaders[Self]()
 
 
 struct TrainingResult(LogEntry):
@@ -110,7 +107,7 @@ struct TrainingResult(LogEntry):
     var sample_size: Int
     var loss: Float32
     var learning_rate: Float32
-    var ftype: DType
+    var ftype: String  # materialized from DType so reflection emits "Float32"/"Float64"
     var activation_fn: String
 
     def __init__(
@@ -137,45 +134,15 @@ struct TrainingResult(LogEntry):
         self.sample_size = sample_size
         self.loss = loss
         self.learning_rate = learning_rate
-        self.ftype = ftype
+        self.ftype = "Float64" if ftype == DType.float64 else "Float32"
         self.activation_fn = reflect[act_fn].base_name()
 
     def toCSV(self) -> String:
-        var datatype_string = "Float32"
-        if self.ftype == DType.float64:
-            datatype_string = "Float64"
-        return (
-            self.timestamp
-            + ","
-            + self.device
-            + ","
-            + String(self.epoch)
-            + ","
-            + String(self.elapsed_ns)
-            + ","
-            + String(self.correct)
-            + ","
-            + String(self.sample_size)
-            + ","
-            + String(self.loss)
-            + ","
-            + String(self.learning_rate)
-            + ","
-            + datatype_string
-            + ","
-            + self.activation_fn
-        )
+        return reflectCSV(self)
 
     @staticmethod
     def getHeaders() -> String:
-        comptime r = reflect[Self]
-        comptime names = r.field_names()
-        var header = String("")
-        comptime for i in range(r.field_count()):
-            if i > 0:
-                header += ","
-            header += String(names[i])
-        return header
+        return reflectHeaders[Self]()
 
 
 trait MyLogger:

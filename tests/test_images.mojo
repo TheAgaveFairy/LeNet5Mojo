@@ -2,7 +2,8 @@ from std.python import Python, PythonObject
 from std.random import random_ui64
 
 from dataloader import MNISTDataRepository
-from constants import PADDED_SIZE
+from constants import PADDED_SIZE, ftype
+from image import Image
 
 
 # CLAUDE CODE VIBE CODED FILE 4.7 OPUS I THINK?
@@ -28,11 +29,16 @@ def main() raises:
         var idx = indices[i]
         var img = repo.test_data[idx]
 
-        # Build a flat Python list from the 32x32 normalized float tensor, then reshape
+        # Normalize into a 32x32 DataTensor ([1,32,32]), then flatten to a Python list
+        var dptr = alloc[Scalar[ftype]](comptime (Image.DataLayout.size()))
+        var dtensor = Image.DataTensor(dptr)
+        img.normalized(dtensor)
+
         var flat: PythonObject = []
         for r in range(PADDED_SIZE):
             for c in range(PADDED_SIZE):
-                flat.append(img.pixels[r, c])
+                flat.append(Float64(rebind[Scalar[ftype]](dtensor[0, r, c])))
+        dptr.free()
 
         var np_img = np.array(flat).reshape(PADDED_SIZE, PADDED_SIZE)
 

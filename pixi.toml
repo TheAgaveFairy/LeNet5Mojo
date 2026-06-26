@@ -7,6 +7,7 @@ version = "0.2.0"
 
 [tasks]
 formatall = "mojo format src/*.mojo src/cpu/*.mojo src/accel/*.mojo tests/*.mojo"
+buildall = { cmd = "bash scripts/build_all.sh", cwd = "." }
 doit = {cmd = "mojo src/main.mojo", cwd = "."}
 bench = {cmd = "mojo src/main.mojo --bench-only", cwd = "."}
 sanitize = { cmd = "mojo build -g2 -O1 --sanitize=address -Xlinker -lm src/main.mojo && ./main"}

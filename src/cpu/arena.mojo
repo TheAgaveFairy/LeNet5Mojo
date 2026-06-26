@@ -1,11 +1,4 @@
-# for reflection
 from layout import Layout, LayoutTensor
-from std.reflection import (
-    struct_field_types,
-    struct_field_names,
-    struct_field_count,
-    get_type_name,
-)
 
 # from attention import Weights, ModelParams
 from constants import ftype, sftype
@@ -118,7 +111,9 @@ struct CPUSystemAllocator(CPUAllocator):
     ](mut self, count: Int = 1) -> UnsafePointer[T, MutUntrackedOrigin]:
         var ptr = alloc[T](count)
         self._allocations.append(
-            rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](ptr.bitcast[UInt8]())
+            rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](
+                ptr.bitcast[UInt8]()
+            )
         )
         return rebind[UnsafePointer[T, MutUntrackedOrigin]](ptr)
 
@@ -207,7 +202,7 @@ def test_allocator_free_all() raises:
 
 
 def test_system_alloc_basic() raises:
-    var sa = CPUSystemAllocator(0)
+    var sa = CPUSystemAllocator()
     var ptr = sa.alloc[sitype](4)
     assert_equal(len(sa._allocations), 1)
     ptr[0] = 42
@@ -215,7 +210,7 @@ def test_system_alloc_basic() raises:
 
 
 def test_system_alloc_multi_type() raises:
-    var sa = CPUSystemAllocator(0)
+    var sa = CPUSystemAllocator()
     var p0 = sa.alloc[sftype](5)
     var p1 = sa.alloc[sitype](3)
     var p2 = sa.alloc[UInt8](16)
@@ -229,7 +224,7 @@ def test_system_alloc_multi_type() raises:
 
 
 def test_system_free_all_clears() raises:
-    var sa = CPUSystemAllocator(0)
+    var sa = CPUSystemAllocator()
     _ = sa.alloc[sitype](8)
     _ = sa.alloc[sftype](8)
     assert_equal(len(sa._allocations), 2)
@@ -241,7 +236,7 @@ def test_system_free_all_clears() raises:
 
 
 def test_system_alloc_write_read() raises:
-    var sa = CPUSystemAllocator(0)
+    var sa = CPUSystemAllocator()
     var ptr = sa.alloc[sftype](10)
     for i in range(10):
         ptr[i] = Float32(i) * 0.5

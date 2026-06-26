@@ -49,8 +49,12 @@ from origin_util import untrack, untrack_imm
 from dataloader import MNISTDataView
 
 # IME these don't change performance a ton
-comptime div_chans_conv2 = defines.get_defined_int["DIV_CHANS_CONV2", 4]()  # lower risks using too many resources, any factor of 16
-comptime div_chans_conv3 = defines.get_defined_int["DIV_CHANS_CONV3", 8]()  # needs to be a factor of 120
+comptime div_chans_conv2 = defines.get_defined_int[
+    "DIV_CHANS_CONV2", 4
+]()  # lower risks using too many resources, any factor of 16
+comptime div_chans_conv3 = defines.get_defined_int[
+    "DIV_CHANS_CONV3", 8
+]()  # needs to be a factor of 120
 
 comptime conv3_feat_total = LAYER4 * LENGTH_KERNEL * LENGTH_KERNEL
 comptime conv3_reduction_threads = next_power_of_two(conv3_feat_total)
@@ -78,14 +82,20 @@ def normalizeInputsKernel[
     # inactive threads clamp to (0,0) — valid index, value masked to 0 below
     var row = (flat // IMAGE_SIZE) if active else 0
     var col = flat % IMAGE_SIZE
-    var pix = sftype(rebind[UInt8](raw_pixels[img, row, col])) if active else sftype(0)
+    var pix = sftype(
+        rebind[UInt8](raw_pixels[img, row, col])
+    ) if active else sftype(0)
 
     var sum_total = block.sum[block_size=reduction_size, broadcast=False](pix)
-    var sq_total = block.sum[block_size=reduction_size, broadcast=False](pix * pix)
+    var sq_total = block.sum[block_size=reduction_size, broadcast=False](
+        pix * pix
+    )
 
     # 2-element shared buffer: [mean, std]. Only thread 0 writes, all active threads read.
     var stats = LayoutTensor[
-        ftype, Layout.row_major(2), MutAnyOrigin,
+        ftype,
+        Layout.row_major(2),
+        MutAnyOrigin,
         address_space=AddressSpace.SHARED,
     ].stack_allocation()
     if flat == 0:
@@ -93,12 +103,16 @@ def normalizeInputsKernel[
         var temp = sq_total / sftype(img_sz) - mean_val * mean_val
         stats[0] = mean_val
         var temp_fp32 = Float32(temp)
-        stats[1] = sftype(sqrt(max(temp_fp32, Float32(0))) + Float32(1e-7)) # NVIDIA GPU doesn't support fp64 sqrt (yet)
+        stats[1] = sftype(
+            sqrt(max(temp_fp32, Float32(0))) + Float32(1e-7)
+        )  # NVIDIA GPU doesn't support fp64 sqrt (yet)
     barrier()
 
     if active:
         # buffers are zeroed at arena / allocator init, so padding border is already 0
-        feats[img].input[0, row + PADDING, col + PADDING] = (pix - stats[0]) / stats[1]
+        feats[img].input[0, row + PADDING, col + PADDING] = (
+            pix - stats[0]
+        ) / stats[1]
 
 
 def matMulFusedKernel[
@@ -151,7 +165,9 @@ def matMulFusedKernel[
 
 def maxPool2Kernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]) -> None:
+](
+    lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
+) -> None:
     """
     Runs as block_dim = (LAYER4, LF4, LF4) = 16 * 5 * 5 = 400, grid_dim = (batch_size).
     One thread per output. 2x2 non-overlapping pool has no data reuse, so inputs
@@ -170,7 +186,9 @@ def maxPool2Kernel[
             feats[img_idx].layer3[chan, tr + 1, tc],
         )
     )
-    temp = max(temp, rebind[sftype](feats[img_idx].layer3[chan, tr + 1, tc + 1]))
+    temp = max(
+        temp, rebind[sftype](feats[img_idx].layer3[chan, tr + 1, tc + 1])
+    )
     temp = max(temp, rebind[sftype](feats[img_idx].layer3[chan, tr, tc + 1]))
 
     feats[img_idx].layer4[chan, row, col] = temp
@@ -178,7 +196,9 @@ def maxPool2Kernel[
 
 def maxPool1Kernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]) -> None:
+](
+    lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
+) -> None:
     """
     Runs as block_dim = (LF2, LF2), grid_dim = (batch_size, num_channels).
     One thread per output (was one per *input* with 75% idling after a shared
@@ -197,15 +217,20 @@ def maxPool1Kernel[
             feats[img_idx].layer1[chan, tr + 1, tc],
         )
     )
-    temp = max(temp, rebind[sftype](feats[img_idx].layer1[chan, tr + 1, tc + 1]))
+    temp = max(
+        temp, rebind[sftype](feats[img_idx].layer1[chan, tr + 1, tc + 1])
+    )
     temp = max(temp, rebind[sftype](feats[img_idx].layer1[chan, tr, tc + 1]))
     feats[img_idx].layer2[chan, row, col] = temp
 
 
 def conv3FusedKernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]) -> None: # TODO: convert these kernels to take Spans
-    """Call with grid_dim = (batch_size), block_dim = LAYER5. Each thread handles one output channel."""
+](
+    lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
+) -> None:  # TODO: convert these kernels to take Spans
+    """Call with grid_dim = (batch_size), block_dim = LAYER5. Each thread handles one output channel.
+    """
     var img_idx = block_idx.x
     var oc = thread_idx.x
 
@@ -227,66 +252,20 @@ def conv3FusedKernel[
     comptime for ic in range(LAYER4):
         comptime for kw in range(LENGTH_KERNEL):
             comptime for kh in range(LENGTH_KERNEL):
-                acc += rebind[sftype](local_feats[ic, kw, kh]) * rebind[sftype](lenet.weight4_5[ic, oc, kw, kh])
+                acc += rebind[sftype](local_feats[ic, kw, kh]) * rebind[sftype](
+                    lenet.weight4_5[ic, oc, kw, kh]
+                )
 
     feats[img_idx].layer5[oc, 0, 0] = act_fn.simdForward(
         acc + lenet.bias4_5[oc]
     )
 
 
-def conv3FusedKernelOld[
-    batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]) -> None:
-    """
-    Grid Dim = (batch_size, chan_div = 8)
-    Block Dim = (conv3_reduction_threads = 512), 1D.
-    Each block handles num_ocs = 120 // chan_div = 15 output channels for one image.
-    Each thread owns one of the LAYER4*5*5 = 400 (in_chan, row, col) products;
-    threads 400..511 are padding and contribute 0 to the block.sum reduction.
-    """
-    comptime out_chans = LAYER5
-    comptime div_chans = div_chans_conv3
-    comptime num_ocs = out_chans // div_chans
-    comptime ksq = LENGTH_KERNEL * LENGTH_KERNEL
-
-    var flat_idx = Int(thread_idx.x)  # 0..conv3_reduction_threads-1
-    var img_idx = block_idx.x
-    var chans_set = block_idx.y
-    var offset = chans_set * num_ocs
-
-    var active = flat_idx < conv3_feat_total
-    var in_chan = 0
-    var row = 0
-    var col = 0
-    var feat_val: sftype = 0
-    if active:
-        in_chan = flat_idx // ksq
-        var rem = flat_idx % ksq
-        row = rem // LENGTH_KERNEL
-        col = rem % LENGTH_KERNEL
-        # could also just use flat_idx and access things with layer4.ptr[flat_idx] etc - ordering doesn't matter for this reduction
-        feat_val = rebind[sftype](feats[img_idx].layer4[in_chan, row, col])
-
-    # if this isn't a 'comptime for', accuracy goes down
-    comptime for oc in range(num_ocs):
-        var prod: sftype = 0
-        if active:
-            prod = feat_val * rebind[sftype](
-                lenet.weight4_5[in_chan, oc + offset, row, col]
-            )
-        var total = block.sum[
-            block_size=conv3_reduction_threads, broadcast=False
-        ](prod)
-        if flat_idx == 0:
-            var biased = total + rebind[sftype](lenet.bias4_5[oc + offset])
-            feats[img_idx].layer5[oc + offset, 0, 0] = act_fn.simdForward(
-                biased
-            )
-
-
 def conv2FusedKernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]) -> None:
+](
+    lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
+) -> None:
     """
     Grid Dim = (batch_size, channel_divisions).
     Block Dim = (LAYER3 // div_chans, LENGTH_FEATURE3, LENGTH_FEATURE3).
@@ -331,11 +310,11 @@ def conv2FusedKernel[
 
     var idx = flat_idx
     while idx < local_image.size():
-        #var tch = idx // (LENGTH_FEATURE2 * LENGTH_FEATURE2)
-        #var rem = idx % (LENGTH_FEATURE2 * LENGTH_FEATURE2)
-        #var tr = rem // LENGTH_FEATURE2
-        #var tc = rem % LENGTH_FEATURE2
-        #local_image[tch, tr, tc] = feats[img_idx].layer2[tch, tr, tc]
+        # var tch = idx // (LENGTH_FEATURE2 * LENGTH_FEATURE2)
+        # var rem = idx % (LENGTH_FEATURE2 * LENGTH_FEATURE2)
+        # var tr = rem // LENGTH_FEATURE2
+        # var tc = rem % LENGTH_FEATURE2
+        # local_image[tch, tr, tc] = feats[img_idx].layer2[tch, tr, tc]
         local_image.ptr[idx] = feats[img_idx].layer2.ptr[idx]
         idx += TPB
 
@@ -352,7 +331,7 @@ def conv2FusedKernel[
     barrier()
     """
     barrier()
-    
+
     var result: sftype = 0
     comptime for ic in range(LAYER2):
         comptime for i in range(LENGTH_KERNEL):
@@ -363,12 +342,16 @@ def conv2FusedKernel[
                     local_image[ic, in_row, in_col]
                 ) * rebind[sftype](local_kernels[ic, local_chan, i, j])
 
-    feats[img_idx].layer3[global_chan, row, col] = act_fn.simdForward(result + lenet.bias2_3[global_chan])
+    feats[img_idx].layer3[global_chan, row, col] = act_fn.simdForward(
+        result + lenet.bias2_3[global_chan]
+    )
 
 
 def conv1FusedKernel[
     batch_size: Int
-](lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]) -> None:
+](
+    lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
+) -> None:
     """
     Grid Dim = (batch_size)
     Block Dim = (LENGTH_FEATURE1, LENGTH_FEATURE1) = 28 x 28
@@ -384,7 +367,10 @@ def conv1FusedKernel[
     # Single-channel only: the input staging + MAC loop below assume one input
     # channel (MNIST grayscale). Fail at compile time rather than silently
     # producing wrong results if INPUT is ever bumped for a multi-channel set.
-    comptime assert INPUT == 1, "conv1FusedKernel hardcodes INPUT==1 (single channel); multi-channel input not implemented"
+    comptime assert INPUT == 1, (
+        "conv1FusedKernel hardcodes INPUT==1 (single channel); multi-channel"
+        " input not implemented"
+    )
     var img_idx = block_idx.x
     var row = thread_idx.y
     var col = thread_idx.x
@@ -437,7 +423,9 @@ def conv1FusedKernel[
                     result += rebind[sftype](
                         local_image[ic, in_row, in_col]
                     ) * rebind[sftype](local_kernels[ic, oc, i, j])
-        feats[img_idx].layer1[oc, row, col] = act_fn.simdForward(result + local_biases[oc])
+        feats[img_idx].layer1[oc, row, col] = act_fn.simdForward(
+            result + local_biases[oc]
+        )
 
 
 def printerGPU[
@@ -569,9 +557,7 @@ struct CompiledKernels[batch_size: Int](Movable):
         self.conv2 = ctx.compile_function[conv2FusedKernel[Self.batch_size]]()
         self.pool2 = ctx.compile_function[maxPool2Kernel[Self.batch_size]]()
         self.conv3 = ctx.compile_function[conv3FusedKernel[Self.batch_size]]()
-        self.matmul = ctx.compile_function[
-            matMulFusedKernel[Self.batch_size]
-        ]()
+        self.matmul = ctx.compile_function[matMulFusedKernel[Self.batch_size]]()
 
 
 struct StreamSlot[batch_size: Int](Movable):
@@ -584,11 +570,15 @@ struct StreamSlot[batch_size: Int](Movable):
     var features_ptr: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
     var hosted_inputs: HostBuffer[DType.uint8]
     var device_inputs: DeviceBuffer[DType.uint8]
-    var outputs_buffer: DeviceBuffer[ftype]  # device logits (debug/inspection — not D2H'd in the hot path)
+    var outputs_buffer: DeviceBuffer[
+        ftype
+    ]  # device logits (debug/inspection — not D2H'd in the hot path)
     var outputs: LayoutTensor[
         ftype, Layout.row_major(Self.batch_size, OUTPUT), MutUntrackedOrigin
     ]
-    var guesses_buffer: DeviceBuffer[DType.uint8]  # argmax per image, staged for d2h
+    var guesses_buffer: DeviceBuffer[
+        DType.uint8
+    ]  # argmax per image, staged for d2h
     var hosted_guesses: HostBuffer[DType.uint8]
     var guesses: LayoutTensor[
         DType.uint8, Layout.row_major(Self.batch_size), MutUntrackedOrigin
@@ -636,9 +626,9 @@ struct StreamSlot[batch_size: Int](Movable):
             Self.batch_size * OUTPUT
         )
         self.outputs = untrack(
-            LayoutTensor[
-                ftype, Layout.row_major(Self.batch_size, OUTPUT)
-            ](self.outputs_buffer)
+            LayoutTensor[ftype, Layout.row_major(Self.batch_size, OUTPUT)](
+                self.outputs_buffer
+            )
         )
         self.guesses_buffer = self.ctx.enqueue_create_buffer[DType.uint8](
             Self.batch_size
@@ -647,9 +637,9 @@ struct StreamSlot[batch_size: Int](Movable):
             Self.batch_size
         )
         self.guesses = untrack(
-            LayoutTensor[
-                DType.uint8, Layout.row_major(Self.batch_size)
-            ](self.guesses_buffer)
+            LayoutTensor[DType.uint8, Layout.row_major(Self.batch_size)](
+                self.guesses_buffer
+            )
         )
         self.ctx.synchronize()
 
@@ -773,7 +763,8 @@ struct StreamSlot[batch_size: Int](Movable):
         self.hosted_guesses.enqueue_copy_from(self.guesses_buffer)
 
     def getResults(self, labels: Span[UInt8, _]) raises -> Int:
-        """Returns number correct for a batch. Syncs the slot's stream first. Does not check for a full batch - handle at call."""
+        """Returns number correct for a batch. Syncs the slot's stream first. Does not check for a full batch - handle at call.
+        """
         if len(labels) < Self.batch_size:
             raise Error(
                 t"getResults: labels span ({len(labels)}) shorter than"
@@ -787,6 +778,7 @@ struct StreamSlot[batch_size: Int](Movable):
                 correct += 1
         return correct
 
+
 # TODO: convert stream_slots to a Span
 def _batchRun[
     batch_size: Int
@@ -797,7 +789,8 @@ def _batchRun[
     kernels: CompiledKernels[batch_size],
     num_streams: Int = NUM_GPU_STREAMS,
 ) raises -> Int:
-    """Run batches over pre-allocated stream slots. Does not alloc or free slots."""
+    """Run batches over pre-allocated stream slots. Does not alloc or free slots.
+    """
     var count = len(data)
     var total_correct = 0
     comptime batch_bytes = batch_size * IMAGE_SIZE * IMAGE_SIZE
@@ -805,7 +798,9 @@ def _batchRun[
 
     for batch_num in range(total_batches):
         var slot_idx = batch_num % num_streams
-        var batch_start = batch_num * batch_bytes #batch_size * IMAGE_SIZE * IMAGE_SIZE
+        var batch_start = (
+            batch_num * batch_bytes
+        )  # batch_size * IMAGE_SIZE * IMAGE_SIZE
         var batch_span = data.raw_pixels[
             batch_start : batch_start + batch_bytes
         ]
@@ -813,14 +808,12 @@ def _batchRun[
         if batch_num >= num_streams:
             var stale = batch_num - num_streams
             var stale_start = stale * batch_size
-            total_correct += stream_slots[slot_idx].getResults( # D2H
+            total_correct += stream_slots[slot_idx].getResults(  # D2H
                 data.raw_labels[stale_start : stale_start + batch_size]
             )
 
-        stream_slots[slot_idx].loadBatch(batch_span) # H2D
-        stream_slots[slot_idx].doWork( # kernels
-            kernels, model
-        )
+        stream_slots[slot_idx].loadBatch(batch_span)  # H2D
+        stream_slots[slot_idx].doWork(kernels, model)  # kernels
 
     var epilogue_start = max(0, total_batches - num_streams)
     for batch_num in range(epilogue_start, total_batches):
@@ -842,14 +835,13 @@ def batchedForwardMultiStream[
     kernels: CompiledKernels[batch_size],
     num_streams: Int = NUM_GPU_STREAMS,
 ) raises -> Int:
-    """Effective batch size is batch_size * num_streams. Allocates and frees slots each call."""
+    """Effective batch size is batch_size * num_streams. Allocates and frees slots each call.
+    """
     var stream_slots = alloc[StreamSlot[batch_size]](num_streams)
     for s in range(num_streams):
         (stream_slots + s).init_pointee_move(StreamSlot[batch_size]())
     try:
-        var result = _batchRun(
-            stream_slots, data, model, kernels, num_streams
-        )
+        var result = _batchRun(stream_slots, data, model, kernels, num_streams)
         for s in range(num_streams):
             (stream_slots + s).destroy_pointee()
         stream_slots.free()

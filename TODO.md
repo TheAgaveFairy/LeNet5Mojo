@@ -492,8 +492,16 @@ needed so the prose is accurate, not necessarily code changes.
     `__init__` pass the matching destination fields — disjoint, so separate `mut` args avoid a
     whole-`self` borrow. Build green, accuracy unchanged.
 
-- [ ] **Finalize reflection usage in the Logger** (`resultlogger.mojo`) — the rest of the logger TODOs
-  are done; settle how reflection is used so it can be shown cleanly in the writeup. (ideas.typ §Logger)
+- [x] **Finalize reflection usage in the Logger** (`resultlogger.mojo`) — DONE 2026-06-25
+  - Both `getHeaders` AND `toCSV` are now reflection-driven via two free helpers: `reflectHeaders[T]`
+    (field NAMES) and `reflectCSV[T](ref s)` (field VALUES via `reflect[T].field_ref[i](s)` +
+    `trait_downcast[Writable](...)` — both builtins). Adding a CSV column = adding a struct field;
+    the hand-written concatenation is gone. The one blocker — `ftype: DType` reflects as lowercase
+    `float32` — was fixed by materializing it to a `String` field ("Float32"/"Float64") in `__init__`,
+    same trick already used for `activation_fn` (`reflect[act_fn].base_name()`). Output is
+    byte-identical to the old format; full project builds; CSVs verified. Clean to show in the writeup.
+  - Gotcha for the writeup: pass `trait_downcast[Writable](fr)` DIRECTLY into `String(...)` — binding
+    it to a `var` first fails (the downcast existential isn't `ImplicitlyCopyable`).
 
 - [ ] **Add a simple divide-by-constant MNIST normalization option** (`accel/ops.mojo`
   `normalizeInputsKernel`, `image.mojo`) — alongside the per-image mean/std path; closer to what the
