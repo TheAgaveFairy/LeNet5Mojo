@@ -468,6 +468,21 @@ needed so the prose is accurate, not necessarily code changes.
   today; carry a real `origin` so the borrow checker enforces the repo outliving the image instead of
   relying on "the MNIST repo stays alive long enough." Related to the Session pattern. (ideas.typ §Images, §Model)
 
+- [ ] **(Optional, low priority) `MNISTDataView`: split into TWO origin params** (`dataloader.mojo`)
+  - Today both `raw_pixels`/`raw_labels` are `Span[UInt8, Self.origin]` — ONE abstract mutable origin.
+    That made `__getitem__`'s sub-view trip the exclusivity checker (two same-origin mutable spans to
+    one ctor look like aliasing even though they index disjoint buffers). Patched 2026-06-25 by making
+    the sub-view immutable + untracked (`ImmutUntrackedOrigin`) — fine because the slicer is read-only
+    and was unused. See [[project-register-passable-origin]].
+  - The principled version (only if sub-views get real use, or to show origins off in the writeup):
+    give the struct distinct `p_origin`/`l_origin` params so pixels/labels provably don't alias →
+    exclusivity error gone, sub-view stays MUTABLE + tracked. Fully compatible with
+    `TrivialRegisterPassable` (which IS the right trait here: it's a tiny non-owning 2-span view, so
+    trivial bitwise copy + no-op destroy are correct). Cost: mildly viral — every `MNISTDataView[origin]`
+    annotation (`accel/ops.mojo`, the two repo builders) becomes `[p_origin, l_origin]`, and
+    `origin_of(self.raw_pixels, self.raw_labels)` unions become useful for any method returning a ptr
+    into either buffer. Pairs naturally with the `Image`-on-origin coloring above. (ideas.typ §origins)
+
 - [x] **Load MNIST into `[1, 28, 28]` (explicit channel dim)** — DONE 2026-06-25
   - `Image.PixelLayout` `[28,28]` → `[INPUT,28,28]`; `DataLayout` now ALIASES `FeatureLayouts.input`
     (`[1,32,32]`) since the padded/normalized image *is* the feature input (PADDED_SIZE ==
