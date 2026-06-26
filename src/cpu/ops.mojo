@@ -131,6 +131,15 @@ def loadTarget(features: Feature, errors: Feature, label: Int) -> None:
     softMax(features.output, errors.output, label)
 
 
+# NOTE: the 3 call sites must pass `kernel_size=LENGTH_KERNEL` explicitly — it will NOT infer.
+# Mojo binds parameters left-to-right with NO deferred unification. `input` binds in_chan/feat_size;
+# the very next arg `outerror` has layout (out_chan, feat_size-kernel_size+1, ...), which the compiler
+# checks immediately while out_chan/kernel_size are still unbound. `feat_size-kernel_size+1` is
+# non-invertible arithmetic so kernel_size can't be solved there, and it does NOT skip ahead to
+# `weight` (where kernel_size appears directly as dims 2,3). Reordering weight/wdeltas BEFORE outerror
+# makes it infer (verified: ignoreme/probe_conv_infer.mojo, fB vs fA) — but that argument order reads
+# worse, so we keep the explicit param. Believed to be an upstream inference limitation, not user
+# error ("types parameters include unfolded expression at parser time"). See TODO.md.
 def convoluteBackward[
     in_chan: Int,
     out_chan: Int,

@@ -353,7 +353,10 @@ struct LeNet5(Movable, ArenaSizable):
             num_elems == tensor.layout.size()
         ), "FATAL ERROR CONVERTING BYTES TO TENSOR"
 
-        # FIXME: comptime unrolling might slow compilation for a large LayoutTensor
+        # NOTE: this outer loop is RUNTIME (`for i in range(...)`); `comptime(...)` only
+        # materializes the size as a value, it does NOT unroll. The single unrolled loop is the
+        # inner `comptime for bi in range(f_sz)` over f_sz (4 for Float32, 8 for Float64) — tiny.
+        # No compile-time blowup regardless of tensor size. (was a stale FIXME)
         for i in range(comptime (tensor.layout.size())):
             var buffer = InlineArray[Byte, size_of[Scalar[filetype]]()](fill=0)
             comptime for bi in range(f_sz):

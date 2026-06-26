@@ -11,6 +11,39 @@ error: struct fields cannot expose AnyOrigin in their type;
 This doc records what broke, the two ways out, which one we took, and the exact
 patterns so the next person (or the eventual "approach B" migration) has a map.
 
+## Status update (2026-06-25): approach A is *correct*, not a stopgap
+
+The upstream rename proposal —
+<https://github.com/modular/modular/blob/main/mojo/proposals/untracked-and-any-origin-renames.md>
+— reclassifies the two origins this migration touched, and it lands in our favor:
+
+| Old name | New name | Proposal's verdict |
+|----------|----------|--------------------|
+| `MutExternalOrigin` | `MutUntrackedOrigin` | "a **legitimate, supported tool**" for external / hand-managed memory |
+| `MutAnyOrigin` | `MutUnsafeAnyOrigin` | "temporary escape hatch… **will never be stabilized**… slated for removal" |
+
+Takeaways (so nobody "fixes" what's already right):
+
+- **We moved fields + stored-`DeviceFunction` kernel params FROM the deprecated
+  origin TO the supported one.** That's the sanctioned direction, not a hack.
+  `untrack()` / `untrack_imm()` are keepers, not scaffolding.
+- **Field side is already future-proof.** `MutUntrackedOrigin` *is* the
+  post-rename name — no edit needed when the rename lands.
+- **The `*Session` pattern (`DeviceSession`/`CPUSession`) makes approach B
+  largely unnecessary.** A session owns arena + views together, so a view can't
+  outlive its buffer — the lifetime boundary is structural. `UntrackedOrigin`
+  ("compiler isn't tracking; I manage it by hand") is honest here: the Session
+  *is* that management. B would re-derive, virally across the host→device
+  boundary, a guarantee the Session already gives by construction. **Not worth
+  it.** Polish A; don't pursue B.
+- **Only forward debt:** the ~60 surviving `MutAnyOrigin` *function arguments*
+  (activation `forward`/`backward`, `convoluteForward/Backward`, loss helpers)
+  become `MutUnsafeAnyOrigin` and will warn someday. The clean fix is
+  origin-generic args (`o: MutOrigin` for writers, `_` for readers — already done
+  for `_randHelper`), but it "colors" ~60 leaf signatures and cascades through
+  every activation impl's `backward`. **Deliberately deferred** — do it in one
+  mechanical sweep if/when the rename actually starts warning, not before.
+
 ## What the compiler now forbids
 
 `MutAnyOrigin` / `ImmutAnyOrigin` are *erased* origins — they name "some origin,
@@ -211,5 +244,10 @@ parameter elsewhere.
 
 ## Reference
 
-A minimal, self-contained comparison of A vs B (both compile and run) lives in
-`ignoreme/origin_mwe.mojo`. Read that first if you're picking up the B migration.
+A minimal, self-contained comparison of **A vs B vs C** (all compile and run;
+every claim compiler-verified, including B's use-after-move catch) lives in
+`ignoreme/origin_mwe.mojo`. Read that first to feel the trade-offs:
+A = store view @ untracked (no tracking); B = store view @ real origin param
+(viral, but UAF is a compile error); C = store the *storage*, rebuild views
+per-method @ `origin_of(self.storage)` (tracked to self, no viral param, no
+`untrack()` — the "tracking back without going viral" door).

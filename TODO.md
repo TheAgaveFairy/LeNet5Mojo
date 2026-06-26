@@ -308,29 +308,61 @@ Check items off as they are completed.
 - [x] **`predict` / `predictNew` could be methods of `LeNet5`** (`cpu/ops.mojo:691`)
   - Already methods on `LeNet5` in `cpu/model.mojo`. TODO was stale.
 
-- [ ] **`trainBatchParallel` accumulation is single-threaded** (`cpu/ops.mojo:751`)
-  - The loop that calls `buffer.accumulateFromOther(deltas[i], 1.0)` runs serially after `parallelize`.
-  - Should use atomics or a critical section, or restructure to reduce into a tree.
+- [x] **`trainBatchParallel` grad accumulation is serial — WON'T FIX (low ROI)** (`cpu/ops.mojo:640`)
+  - The loop calling `buffer.accumulateFromOther(deltas[i], 1.0)` runs serially after the
+    `parallelize(work, batch_size)` — but the heavy fwd/bwd per image is ALREADY parallel across
+    cores (each writes its own `deltas[tid]`, race-free). Only the reduction is serial, and
+    `accumulateFromOther` is ALREADY SIMD-vectorized (`_accumHelper` → `vectorize[nelts]`).
+  - Cost is tiny: reduction streams ~52k floats/img (~208 KB; w4_5 dominates at 48k), memory-bound,
+    ~4% of batch flops (fwd/bwd ≈ 60M flop/batch). Amdahl ceiling on any fix = that small slice.
+  - Training is NOT the project headline (inference benchmark is) → low ROI. KEEP SERIAL.
+  - If ever revisited: profile FIRST; and the old "atomics / critical section" note is WRONG for this
+    shape (per-element atomic-add on 52k floats serializes worse). Right design = strided tree reduce
+    into `deltas[0]` (race-free, batch_size/2-way first pass), then `model.accumulateFromOther(deltas[0], k)`
+    dropping `buffer` entirely. No atomics.
 
 - [x] **`testingParallel`: handle `len(data) % batch_size != 0`** (`cpu/ops.mojo:942`)
   - Added remainder pass after main loop — sequential, avoids race condition, handles any dataset size.
 
-- [ ] **`convoluteBackward` requires explicit `kernel_size=` — investigate why** (`cpu/ops.mojo:649,664,679`)
-  - Three call sites need `convoluteBackward[kernel_size=LENGTH_KERNEL](...)` explicitly.
-  - File a Mojo bug report if this is a compiler inference failure.
+- [x] **`convoluteBackward` requires explicit `kernel_size=` — ROOT CAUSE FOUND (upstream)** (`cpu/model.mojo:293,302,311`)
+  - DIAGNOSED 2026-06-25 (reproducer `ignoreme/probe_conv_infer.mojo`): Mojo binds params
+    left-to-right with NO deferred unification. `input` binds in_chan/feat_size; the next arg
+    `outerror` (layout `(out_chan, feat_size-kernel_size+1, ...)`) is checked immediately while
+    out_chan/kernel_size are still unbound. `feat_size-kernel_size+1` is non-invertible arithmetic →
+    kernel_size unsolvable there, and the compiler does NOT skip ahead to `weight` (kernel_size
+    appears directly as dims 2,3). Error: "types parameters include unfolded expression at parser
+    time." Probe variant `fB` (weight BEFORE outerror) infers fine; `fA` (real order) fails. So it's
+    an inference-ordering limitation, not user error.
+  - RESOLUTION (#1): keep the explicit `kernel_size=LENGTH_KERNEL` (harmless, arguably clearer);
+    root-cause comment added at `convoluteBackward` in `cpu/ops.mojo`. Paul to ask Discord first
+    (known? expected?) before filing an upstream issue — reproducer is ready to paste.
+  - FUTURE OPTION #2 (only if the explicit param becomes annoying): reorder the fn args so
+    `weight, wdeltas` come BEFORE `outerror` → kernel_size + out_chan infer, drop the explicit param
+    at all 3 call sites. Cost: arg order reads worse (weight ahead of the output it helps produce).
+  - FUTURE OPTION #3 (most robust, biggest change): drop the int params entirely; take generic
+    `Layout` params for weight/outerror/wdeltas and derive sizes inside via `.shape[N]()` + comptime
+    asserts — the pattern already used by `convoluteValid`/`convoluteFull` in the same file. Decouples
+    from param inference completely. Do this if a future refactor touches the conv backward path anyway.
 
 - [ ] **`CPUBumpArenaAllocator.alloc`: consider returning `Span` instead of raw pointer** (`cpu/arena.mojo:39`)
   - Would make ownership and bounds clearer at call sites.
 
-- [ ] **`accumulateFromOther`: needs compiler/stdlib fix** (`cpu/model.mojo:231`)
-  - Direct `tensor *= scalar` LayoutTensor math was removed because it explodes compile times.
-  - Re-evaluate when Mojo LayoutTensor math performance improves.
+- [x] **`accumulateFromOther` / `_randHelper`: direct LayoutTensor math — UPSTREAM, WON'T FIX** (`cpu/model.mojo`)
+  - Both keep a hand-rolled `vectorize[nelts]` workaround instead of direct elementwise LayoutTensor
+    math (`tensor *= scalar`, `accum += other * lr`, `tensor *= sqrt(6.0)/scale`). The direct form
+    explodes compile times — it appears to unroll an op per element at comptime.
+  - MEASURED 2026-06-25 (probes in `ignoreme/probe_lt_direct.mojo` vs `probe_lt_vectorize.mojo`,
+    single N=48000 tensor = real w4_5 size): vectorize workaround builds in **2.1s / 417 MB**; the
+    direct-math build did **NOT finish in 10 min** (killed). Same machine, same nightly.
+  - Verdict: this is a Mojo compiler/stdlib limitation, OUT OF OUR CONTROL — nothing to fix in this
+    repo. The vectorize path is correct AND fast; keep it. Re-test only if a future nightly is
+    reported to fix LayoutTensor elementwise math (rerun the two probes). Not blocking anything.
 
-- [ ] **`_randHelper`: FIXME compile times from LayoutTensor math** (`cpu/model.mojo:253`)
-  - `tensor *= sftype(sqrt(6.0)) / scale` is commented out for the same reason as above.
-
-- [ ] **`bytesToFType`: comptime unrolling may slow compilation for large tensors** (`cpu/model.mojo:303`)
-  - Currently uses `for i in range(comptime(tensor.layout.size()))`. Profile compile time impact.
+- [x] **`bytesToFType`: comptime unrolling — STALE FIXME, no blowup** (`cpu/model.mojo`)
+  - False alarm. The outer `for i in range(comptime(tensor.layout.size()))` is a RUNTIME loop —
+    `comptime(...)` just materializes the size as a value, it does NOT unroll. The only unrolled
+    loop is the inner `comptime for bi in range(f_sz)` over f_sz (4 for Float32 / 8 for Float64) —
+    tiny, size-independent. Corrected the comment in-place; nothing to profile.
 
 ---
 
