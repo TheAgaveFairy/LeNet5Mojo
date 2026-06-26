@@ -55,14 +55,26 @@ struct MNISTDataView[
     def __len__(self) -> Int:
         return len(self.raw_labels)
 
-    def __getitem__(self, start: Int, end: Int) -> MNISTDataView[Self.origin]:
+    def __getitem__(
+        self, start: Int, end: Int
+    ) -> MNISTDataView[ImmutUntrackedOrigin]:
+        # Read-only sub-view (slicing for inference). It can't tie to origin_of(self):
+        # MNISTDataView is TrivialRegisterPassable, so `self` is a register value with
+        # no memory origin (unlike the repo, which is why getTrainBatch/getTestBatch
+        # can use origin_of(self)). And the abstract mutable Self.origin made the
+        # exclusivity checker treat the disjoint pixel/label spans as aliasing. So the
+        # sub-view is IMMUTABLE + untracked: immutable spans don't alias-conflict, and
+        # untracked matches the project's hand-managed-lifetime approach.
         comptime image_size = Image.PixelLayout.size()
-        var p_ptr = self.raw_pixels.unsafe_ptr() + start * image_size
-        var l_ptr = self.raw_labels.unsafe_ptr() + start
-        return MNISTDataView(
-            Span(ptr=p_ptr, length=(end - start) * image_size),
-            Span(ptr=l_ptr, length=(end - start)),
+        var p_ptr = rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](
+            self.raw_pixels.unsafe_ptr() + start * image_size
         )
+        var l_ptr = rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](
+            self.raw_labels.unsafe_ptr() + start
+        )
+        var pixels_span = Span(ptr=p_ptr, length=(end - start) * image_size)
+        var labels_span = Span(ptr=l_ptr, length=(end - start))
+        return MNISTDataView(pixels_span, labels_span)
 
 
 struct MNISTDataRepository:
