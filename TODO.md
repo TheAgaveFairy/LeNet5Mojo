@@ -57,9 +57,34 @@ Check items off as they are completed.
     GEMMs over the whole eff_batch (better coalescing, fewer/larger launches). This is the natural
     generalization of conv3 Tier B — note it here so Tier B is designed with batched layouts in mind.
 
+- [ ] **GPU ops should take weight/bias FIELDS directly, not the `lenet` holder** (`accel/ops.mojo`, `accel/model.mojo`, `main.mojo`)
+  - DECISION 2026-07-01: pass each kernel only the tensors it uses (e.g. `matMulFused(weight5_6, bias5_6,
+    ...)`, `conv3(weight4_5, bias4_5, ...)`) instead of the whole `LeNet5GPU`. Rationale: the signature
+    becomes the real dependency contract (standard cuDNN/CUTLASS style); it's a SMALLER by-value param
+    footprint (2-3 fat-pointer tensors vs an 8-field struct); and with `//`-inferred `Layout` params the
+    dims fold to comptime cleanly (`weight5_6.shape[0]()`) — no `type_of()` workaround, and the compiler
+    checks the passed tensor. Makes kernels unit-testable in isolation → pairs with the PyTorch-parity
+    suite (#7). `LeNet5GPU` STAYS as the host-side owning aggregate (lifetimes via `DeviceSession`); it just
+    stops needing `DevicePassable`/`TrivialRegisterPassable` (drop that machinery — individual LayoutTensors
+    are already device-passable). Writeup: keep the DevicePassable-model trick as an exploration→refinement
+    arc, ship the cleaner API.
+  - SCOPE: WEIGHTS-FIRST (mechanical: ~7 kernel sigs + their `enqueue_function`/`CompiledKernels` call sites
+    + drop `lenet` arg). The `feats`/`FeatureGPU` side is per-image AoS pointer-passed on purpose (param
+    ceiling) → leave it to the batched-SoA refactor above. SUPERSEDES the `type_of(lenet.weightX).shape[N]()`
+    half-measure for GPU kernels (see the shape[N]() item + Discord follow-up). Do after the low-hanging
+    fruit; it's a real refactor, not a style tweak.
+
 - [ ] **Style guide: index via `tensor.shape[N]()`, not hardcoded constants** (all ops, `cpu/ops.mojo` + `accel/ops.mojo`)
   - Marker at `accel/ops.mojo:76`. Prefer `input.shape[0]()`-style queries over `IMAGE_SIZE`/`LAYER5`
     etc. so kernels/ops stay correct if a layout changes. Sweep CPU + accel ops; pure clarity/robustness.
+  - IN PROGRESS 2026-07-01: `normalizeInputsKernel` converted (reads `raw_pixels.shape[1/2]()` — a DIRECT
+    param). BLOCKER found: `shape[N]()` is only comptime on a direct `LayoutTensor` param, NOT on a struct
+    field — so the GPU conv/matmul kernels (take `lenet`/`feats` structs; dims live in `lenet.weightX` /
+    `feats[i].layerN`) can't adopt it for their `comptime`/`comptime for` dims. See the Discord follow-up +
+    MWE (`ignoreme/shape_comptime_mwe.mojo`) in the Upstream section. Realistic scope until resolved:
+    ops/kernels that take the relevant tensor as a DIRECT param (CPU `convolute*` already do; GPU
+    `normalizeInputsKernel` done). The struct-field kernels stay on named constants (single source =
+    the `*Layouts` structs) for now.
 
 - [ ] **Parameterize + fuse the `act_fn` epilogue (CPU + GPU)** (`accel/ops.mojo:158`, `cpu/ops.mojo:418`, `cpu/ops.mojo:582`)
   - Three markers, one theme: make the post-op activation a compile-time knob (enable/disable) and fuse
@@ -236,6 +261,15 @@ Check items off as they are completed.
 ---
 
 ## Benchmarking / Profiling
+
+- [ ] **Add a deliberately-bad allocator to benchmark against** (`cpu/arena.mojo`, `accel/arena.mojo`)
+  - The bump-vs-system swap is ~noise on inference (both allocate once, then `zero()` a small buffer).
+    A "BadAllocator" that emulates bad-design practices would give the benchmark real contrast and show
+    WHY the arena matters. E.g. `zero()` frees the old buffer, allocates a fresh one, and memsets it in a
+    dumb (e.g. byte-at-a-time / unaligned / per-element) way; `alloc()` could over-allocate or never reuse.
+    Conforms to `CPUAllocator`/`GPUAllocator` so it drops straight into the existing `-D *_SYSTEM_ALLOC`-style
+    toggle (add a `-D *_BAD_ALLOC` arm to the `ConditionalType` in `constants.mojo`). Pairs with the
+    "Benchmark the GPU arena allocator" item — the bad allocator is the pessimal baseline the arena beats.
 
 - [ ] **Run the act_fn × ALPHA search + finish the rigor pass** (`scripts/search_alpha.sh`)
   - DONE 2026-06-30 (script prep/improvements): fixed stale paths (`src/main.mojo`, `results/` output);
@@ -616,6 +650,15 @@ Check items off as they are completed.
 ---
 
 ## Upstream Bug Reports to File
+
+- [x] **`tensor.shape[N]()` dynamic on a struct-FIELD LayoutTensor — EXPECTED (Discord)** (`ignoreme/shape_comptime_mwe.mojo`) — RESOLVED 2026-07-01
+  - `shape[N]()` folds to COMPTIME on a direct `LayoutTensor` PARAMETER but is DYNAMIC through a runtime
+    struct field (`lenet.weight5_6.shape[0]()` → "cannot use a dynamic value in comptime initializer";
+    definition-time error, `comptime if` / parametric gating don't hide it). Discord verdict: EXPECTED —
+    the compiler can't prove a field reached through a runtime instance is the statically-known one, so it's
+    conservatively dynamic. FIX = read from the TYPE: `type_of(lenet.weight5_6).shape[0]()` or the layout-
+    tensor alias `.shape[0]()` (both fold to comptime — verified in the MWE). NOT a bug; nothing to file.
+    Superseded for the GPU kernels by the "take fields directly" refactor above (direct params dodge it).
 
 - [ ] **Ask Discord: `trait_downcast` lint not silenced by `comptime assert conforms_to`** (`resultlogger.mojo:31`)
   - Nightly `1.0.0b3.dev2026062906` warns "use `conforms_to(type_of(src), Trait)` instead in a `where`

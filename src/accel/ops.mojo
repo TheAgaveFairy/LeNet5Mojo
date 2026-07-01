@@ -74,14 +74,16 @@ def normalizeInputsKernel[
     Pads and normalizes raw uint8 pixels into the feature input buffer.
     """
     # TODO: for all ops, cpu and accel, let's use input_layout_tensor.shape[0]() style calls instead of constants as a style guide
-    comptime img_sz = IMAGE_SIZE * IMAGE_SIZE
+    comptime img_h = raw_pixels.shape[1]()  # IMAGE_SIZE (rows)
+    comptime img_w = raw_pixels.shape[2]()  # IMAGE_SIZE (cols)
+    comptime img_sz = img_h * img_w
     comptime reduction_size = next_power_of_two(img_sz)
 
     var img = block_idx.x
     var flat = thread_idx.x
     var active = flat < img_sz
-    var row = (flat // IMAGE_SIZE) if active else 0
-    var col = flat % IMAGE_SIZE
+    var row = (flat // img_w) if active else 0
+    var col = flat % img_w
     var pix = sftype(
         rebind[UInt8](raw_pixels[img, row, col])
     ) if active else sftype(0)
