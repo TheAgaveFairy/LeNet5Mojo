@@ -437,8 +437,12 @@ Check items off as they are completed.
 - [ ] **`loadFromFile`: kill the extra copy** (`cpu/model.mojo:397`)
   - Reads into an `InlineArray` then `memcpy`s; load straight into the destination buffer.
 
-- [ ] **`CPUSession`: offer constructors for other allocators** (`cpu/model.mojo:537`)
-  - Today hardwires the bump arena; allow alternate allocators (mirrors a future `DeviceSession` knob).
+- [x] **`CPUSession`: offer constructors for other allocators** (`cpu/model.mojo:537`) — DONE 2026-06-30
+  - Now `CPUSession[Allocator: CPUAllocator = CPUBumpArenaAllocator]` — parameterized on the allocator,
+    default keeps every `CPUSession()` call working. Required aligning the `CPUAllocator` trait to
+    `GPUAllocator` (uniform `__init__`/`zero`/`wipe` + `ImplicitlyDeletable, Movable` supertraits) so the
+    allocator can be a session field and swapped with no branching. Verified: generic `exercise[A:
+    CPUAllocator]` runs Bump + System identically; main still 9691/10000.
 
 - [ ] **Drop the `benchmark.keep()` calls in train loops** (`cpu/ops.mojo:642`, `cpu/ops.mojo:698`)
   - `trainBatchParallel` + `trainBatch` both `keep()` arenas to dodge DCE; check if the new

@@ -22,7 +22,7 @@ trait ArenaSizable:
         ...
 
 
-trait CPUAllocator:
+trait CPUAllocator(ImplicitlyDeletable, Movable):
     """Uniform allocator interface — mirrors GPU `GPUAllocator` (System ignores capacity)."""
 
     def __init__(out self, capacity_bytes: Int):

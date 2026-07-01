@@ -534,12 +534,16 @@ struct Feature(Movable, ArenaSizable):
         image.normalized(normed_tensor)
 
 
-struct CPUSession(): # TODO: maybe offer other constructors for other allocators
-    """Ties arena and model lifetimes together — mirrors DeviceSession."""
+struct CPUSession[Allocator: CPUAllocator = CPUArena]():
+    """Ties arena and model lifetimes together — mirrors DeviceSession.
 
-    var arena: CPUArena
+    Parameterized on the allocator (defaults to the bump arena) so a system
+    allocator can be swapped in with no call-site changes.
+    """
+
+    var arena: Self.Allocator
     var model: LeNet5
 
     def __init__(out self):
-        self.arena = CPUArena(LeNet5.sizeInBytes())
+        self.arena = Self.Allocator(LeNet5.sizeInBytes())
         self.model = LeNet5(self.arena)
