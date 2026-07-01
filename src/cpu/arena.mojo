@@ -23,8 +23,11 @@ trait ArenaSizable:
 
 
 trait CPUAllocator:
-    # def __init__(out self, capacity_bytes: Int):
-    #    ...
+    """Uniform allocator interface — mirrors GPU `GPUAllocator` (System ignores capacity)."""
+
+    def __init__(out self, capacity_bytes: Int):
+        # Bump: allocate the slab. System: ignore (sizes per alloc()).
+        ...
 
     def alloc[
         T: AnyType
@@ -34,6 +37,14 @@ trait CPUAllocator:
     def free_all(mut self):
         # Bump arena: resets offset so slab can be reused (no system free).
         # System allocator: calls free() on every tracked pointer.
+        ...
+
+    def zero(mut self):
+        # Fill all allocated memory with 0 — offset/tracking unchanged.
+        ...
+
+    def wipe(mut self):
+        # Bump: zero the slab + reset offset. System: zero then free_all.
         ...
 
 
@@ -99,9 +110,13 @@ struct CPUSystemAllocator(CPUAllocator):
     """
 
     var _allocations: List[UnsafePointer[UInt8, MutUntrackedOrigin]]
+    var _sizes: List[Int]  # byte size of each tracked alloc — needed by zero()
 
-    def __init__(out self):
+    def __init__(out self, capacity_bytes: Int = 0):
+        # capacity_bytes ignored — the system allocator sizes per alloc(). The
+        # param exists so it's a drop-in for the bump arena in generic code.
         self._allocations = List[UnsafePointer[UInt8, MutUntrackedOrigin]]()
+        self._sizes = List[Int]()
 
     def __del__(deinit self):
         self.free_all()
@@ -115,6 +130,7 @@ struct CPUSystemAllocator(CPUAllocator):
                 ptr.bitcast[UInt8]()
             )
         )
+        self._sizes.append(count * size_of[T]())
         return rebind[UnsafePointer[T, MutUntrackedOrigin]](ptr)
 
     def free_all(mut self):
@@ -122,6 +138,17 @@ struct CPUSystemAllocator(CPUAllocator):
         for i in range(len(self._allocations)):
             self._allocations[i].free()
         self._allocations.clear()
+        self._sizes.clear()
+
+    def zero(mut self):
+        """Zero every tracked allocation; keeps them allocated/tracked."""
+        for i in range(len(self._allocations)):
+            memset_zero(self._allocations[i], self._sizes[i])
+
+    def wipe(mut self):
+        """Zero then release all tracked allocations."""
+        self.zero()
+        self.free_all()
 
 
 def main() raises:
