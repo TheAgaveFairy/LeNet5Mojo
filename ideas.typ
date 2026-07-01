@@ -617,3 +617,12 @@ This shows a number of features: shared memory, block primitives, natural indexi
 //       (training's per-batch wipe+realloc, or the ~20% CPU figure that still needs re-verifying) — a
 //       clean "measure before you claim; know WHERE the allocator is on the hot path" lesson.
 // Ties into the Ops/Memory post and the existing GPU-arena-benchmark TODO.
+
+// NEW ASIDE [want]: = The Reference's "Branchless" Maxpool Was Slower — measure inherited cleverness.
+// The maxpool argmax is branchless (x0 += ismax * (l0 - x0)) — that's how the old reference LeNet5 I
+// worked from did it; I translated it faithfully for an apples-to-apples port, didn't invent it.
+// A/B'd it against the natural `if` form (tests/bench_maxpool.mojo, real LeNet pool shapes): branchy
+// WON — fwd 3.5x, bwd 1.7x. Why: branchless does extra mul/add per element AND re-loads the running
+// best from memory each step (address-dependent load that serializes on the index), while the `if`
+// keeps best in a register and the predictor nails it. Beat: don't carry over a source's micro-opt on
+// faith — the trick that helped some 2005-era compiler/CPU can be a pessimization today. Benchmark it.

@@ -476,9 +476,14 @@ Check items off as they are completed.
     (`(out-1)*len + (len-1) < out*len <= in`), so this guards *ignored rows / garbage calls*, not OOB.
     Also noted the scatter precondition: caller must pre-zero `inerror` (backward only writes argmax cells).
 
-- [ ] **Benchmark "branchless" maxpool vs a normal one** (`cpu/ops.mojo:450`, `cpu/ops.mojo:462`)
-  - Two markers: verify the branchless `maxPoolBackward` inner loop is actually faster, and A/B the
-    branchless `maxPoolForward` against a straightforward max. May not be worth the obfuscation.
+- [x] **Benchmark "branchless" maxpool vs a normal one** (`cpu/ops.mojo:450`, `cpu/ops.mojo:462`)
+  - DONE: `tests/bench_maxpool.mojo` (`pixi run mojo -I src tests/bench_maxpool.mojo`), real LeNet
+    pool shapes. RESULT: branchy `if` WINS — fwd 3.5x (0.00147 vs 0.00516 ms), bwd 1.7x (0.00428 vs
+    0.00726 ms). Branchless does extra mul/add per element + re-loads running-best (address-dependent,
+    serializes on the index); branchy keeps best in a register and the predictor nails it. The
+    branchless form (inherited from the reference LeNet5 translation) is a pessimization on modern HW.
+  - FOLLOW-UP (pending Paul's ok): rewrite `maxPoolForward`/`maxPoolBackward` inner loops to the branchy
+    form, verify 9691/10000 holds. Straight win + simpler code. Aside logged in `ideas.typ`.
 
 - [ ] **`loadFromFile`: kill the extra copy** (`cpu/model.mojo:397`)
   - Reads into an `InlineArray` then `memcpy`s; load straight into the destination buffer.
