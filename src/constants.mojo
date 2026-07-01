@@ -4,6 +4,8 @@ from std.utils.type_functions import ConditionalType
 from layout import Layout
 
 from activation_fn import *
+from cpu.arena import CPUAllocator, CPUBumpArenaAllocator, CPUSystemAllocator
+from accel.arena import GPUAllocator, GPUBumpArenaAllocator, GPUSystemAllocator
 
 
 # Architecture dimensions
@@ -76,6 +78,21 @@ comptime act_fn = ConditionalType[
         ],
     ],
 ]  # options: ReLU, GELU, GELUFast, GELUTanh, Sigmoid
+
+# Compile-time allocator selection (mirrors act_fn). Bump arena by default; the
+# system allocator is a benchmarking baseline. -D CPU_SYSTEM_ALLOC / -D GPU_SYSTEM_ALLOC.
+comptime CPU_ALLOCATOR = ConditionalType[
+    Trait=CPUAllocator,
+    If=defines.is_defined["CPU_SYSTEM_ALLOC"](),
+    Then=CPUSystemAllocator,
+    Else=CPUBumpArenaAllocator,
+]
+comptime GPU_ALLOCATOR = ConditionalType[
+    Trait=GPUAllocator,
+    If=defines.is_defined["GPU_SYSTEM_ALLOC"](),
+    Then=GPUSystemAllocator,
+    Else=GPUBumpArenaAllocator,
+]
 
 comptime DISPLAY = True if defines.is_defined["DISPLAY"]() else False
 

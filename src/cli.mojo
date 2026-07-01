@@ -76,5 +76,6 @@ def printHelp():
     print("  -D DIV_CHANS_CONV3=N        conv3 channel divisor, factor of 120 (default 8)")
     print("  -D N_WARMUP=N / -D N_PASSES=N   bench warmup / timed passes (default 3 / 10)")
     print("  -D DISPLAY                 enable display output")
+    print("  -D CPU_SYSTEM_ALLOC        CPU inference uses the system allocator instead of the bump arena (benchmarking)")
     print("  -D GPU_SYSTEM_ALLOC        GPU inference uses the system allocator instead of the bump arena (benchmarking)")
     print("  see constants.mojo for full list")

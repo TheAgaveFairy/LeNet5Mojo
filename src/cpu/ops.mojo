@@ -21,6 +21,7 @@ from constants import (
     PADDED_SIZE,
     ALPHA,
     DISPLAY,
+    CPU_ALLOCATOR,
 )
 from image import Image
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena
@@ -763,7 +764,7 @@ def training(
 
 def testing(model: LeNet5, data: List[Image]) -> Int:
     var correct = 0
-    var feat_arena = CPUArena(Feature.sizeInBytes())
+    var feat_arena = CPU_ALLOCATOR(Feature.sizeInBytes())
     var feat = Feature(feat_arena)
     for i in range(len(data)):
         feat_arena.zero()
@@ -778,7 +779,7 @@ def testingParallel(
     model: LeNet5, data: List[Image], batch_size: Int = 50
 ) -> Int:
     var correct = 0
-    var feat_arena = CPUArena(Feature.sizeInBytes() * batch_size)
+    var feat_arena = CPU_ALLOCATOR(Feature.sizeInBytes() * batch_size)
     var feats = alloc[Feature](batch_size)
 
     for i in range(batch_size):

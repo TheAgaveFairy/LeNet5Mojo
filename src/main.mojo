@@ -20,6 +20,7 @@ from constants import (
     DISPLAY,
     GPU_STREAM_BATCH_SIZE,
     NUM_GPU_STREAMS,
+    GPU_ALLOCATOR,
 )
 from cpu.ops import (
     training,
@@ -28,13 +29,7 @@ from cpu.ops import (
     testingParallel,
 )
 
-from accel import (
-    DeviceSession,
-    GPUBumpArenaAllocator,
-    GPUAllocator,
-)
-from accel.arena import GPUSystemAllocator
-from std.utils.type_functions import ConditionalType
+from accel import DeviceSession
 from accel.ops import (
     _batchRun,
     StreamSlot,
@@ -299,14 +294,8 @@ def runGPUTest(
 ) raises:
     comptime batch_size = GPU_STREAM_BATCH_SIZE
     with DeviceContext() as ctx:
-        comptime GPUAllocT = ConditionalType[
-            Trait=GPUAllocator,
-            If=defines.is_defined["GPU_SYSTEM_ALLOC"](),
-            Then=GPUSystemAllocator,
-            Else=GPUBumpArenaAllocator,
-        ]
-        comptime alloc_name = reflect[GPUAllocT].base_name()
-        var gpu_session = DeviceSession[GPUAllocT](ctx)
+        comptime alloc_name = reflect[GPU_ALLOCATOR].base_name()
+        var gpu_session = DeviceSession[GPU_ALLOCATOR](ctx)
         gpu_session.bufs.loadCPUWeights(model)
         print(
             "\nDevice found:",
