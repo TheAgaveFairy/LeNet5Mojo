@@ -408,20 +408,18 @@ def maxPoolBackward[
     comptime for i in range(num_channels):
         for o0 in range(out_feat_size):
             for o1 in range(out_feat_size):
-                var x0 = Int(0)
-                var x1 = Int(0)
-                var ismax: Int
-
-                # branchless approach again
-                # TODO: see if this is actually faster
+                var x0 = 0
+                var x1 = 0
+                var best = rebind[sftype](input[i, o0 * len0, o1 * len1])
                 for l0 in range(len0):
                     for l1 in range(len1):
-                        ismax = (
-                            1 if input[i, o0 * len0 + l0, o1 * len1 + l1]
-                            > input[i, o0 * len0 + x0, o1 * len1 + x1] else 0
+                        var v = rebind[sftype](
+                            input[i, o0 * len0 + l0, o1 * len1 + l1]
                         )
-                        x0 += ismax * (l0 - x0)
-                        x1 += ismax * (l1 - x1)
+                        if v > best:
+                            best = v
+                            x0 = l0
+                            x1 = l1
 
                 inerror[i, o0 * len0 + x0, o1 * len1 + x1] = outerror[i, o0, o1]
 
@@ -446,27 +444,15 @@ def maxPoolForward[
             comptime for j in range(
                 output.shape[2]()
             ):  # feature size (should match shape[1]())
-                var x0: Int = 0
-                var y0: Int = 0
-
+                var best = rebind[sftype](input[c, i * lenx, j * leny])
                 comptime for x in range(lenx):
                     comptime for y in range(leny):
-                        var temp_idx_x = Int(i * lenx + x)
-                        var temp_idx_y = Int(j * leny + y)
-                        var temp_idx_xx = Int(i * lenx + x0)
-                        var temp_idx_yy = Int(j * leny + y0)
-
-                        var ismax = (
-                            1 if input[c, temp_idx_x, temp_idx_y]
-                            > input[c, temp_idx_xx, temp_idx_yy] else 0
+                        var v = rebind[sftype](
+                            input[c, i * lenx + x, j * leny + y]
                         )
-                        x0 += Int(ismax * (x - x0))
-                        y0 += Int(ismax * (y - y0))
-
-                var temp_idx_xx = Int(i * lenx + x0)
-                var temp_idx_yy = Int(j * leny + y0)
-
-                output[c, i, j] = input[c, temp_idx_xx, temp_idx_yy]
+                        if v > best:
+                            best = v
+                output[c, i, j] = best
 
 
 def matmulBackward[
