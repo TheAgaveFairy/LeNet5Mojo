@@ -200,6 +200,7 @@ struct LeNet5(Movable, ArenaSizable):
     ):
         comptime N = x.size()
         _ = """
+        # this is the "simple" way to do this
         var a = accum.ptr
         var b = other.ptr
         for i in range(N):
@@ -239,8 +240,8 @@ struct LeNet5(Movable, ArenaSizable):
         comptime N = tensor.layout.size()
         var data = Span(ptr=tensor.ptr, length=comptime (N))
         rand(data, min=-1.0, max=1.0)  # uniform distribution
-        # FIXME: compile times might slow down from these LayoutTensor math ops
-        # tensor *= sftype(sqrt(6.0)) / scale  # from the paper
+        # tensor *= sftype(sqrt(6.0)) / scale  # from the paper # compiler is slow for this
+        # naive could look like this, but we want SIMD speedup
         _ = """
         for i in range(comptime(tensor.layout.size())):
             tensor.ptr[i] *= sftype(sqrt(6.0)) / scale
@@ -317,6 +318,7 @@ struct LeNet5(Movable, ArenaSizable):
             deltas.bias0_1,
         )
 
+    # TODO: make feat explicit Optional[Feature] and combine these two
     def predict(self, image: Image) -> Int:
         var feat_arena = CPUArena(Feature.sizeInBytes())
         var feat = Feature(feat_arena)
@@ -353,20 +355,17 @@ struct LeNet5(Movable, ArenaSizable):
             num_elems == tensor.layout.size()
         ), "FATAL ERROR CONVERTING BYTES TO TENSOR"
 
-        # NOTE: this outer loop is RUNTIME (`for i in range(...)`); `comptime(...)` only
-        # materializes the size as a value, it does NOT unroll. The single unrolled loop is the
-        # inner `comptime for bi in range(f_sz)` over f_sz (4 for Float32, 8 for Float64) — tiny.
-        # No compile-time blowup regardless of tensor size. (was a stale FIXME)
         for i in range(comptime (tensor.layout.size())):
             var buffer = InlineArray[Byte, size_of[Scalar[filetype]]()](fill=0)
             comptime for bi in range(f_sz):
                 var temp_idx = i * f_sz + bi
                 buffer[bi] = bytes[temp_idx]
             # var value = Self._bytesHelper[filetype](buffer)
+            # FIXME: big_endian flag was having compiler issues, investigate or file bug etc
             var value = Scalar[filetype].from_bytes(buffer)
             tensor.ptr[i] = sftype(
                 value
-            )  # ftype might not match file precision
+            )  # ftype might not match file precision, that's a feature! we can convert!
 
     def loadFromFile[filetype: DType](mut self, filename: Path):
         """
@@ -376,7 +375,7 @@ struct LeNet5(Movable, ArenaSizable):
         """
         comptime bytes_per_file_weight = size_of[
             filetype
-        ]()  # sizeof[filetype]() won't work, must use filetype.sizeof()
+        ]()
 
         try:
             with open(filename, "r") as model_file:
@@ -395,6 +394,7 @@ struct LeNet5(Movable, ArenaSizable):
                     var buffer = InlineArray[
                         Scalar[DType.uint8], bytes_to_read
                     ](uninitialized=True)
+                    # TODO: get rid of extra copy, etc
                     # for i in range(bytes_to_read):
                     #    buffer[i] = bytes[i]  # memcpy
                     memcpy(
@@ -430,7 +430,7 @@ struct LeNet5(Movable, ArenaSizable):
         var temp_buf = alloc[UInt8](ptr_len)
         var bytes_span = Span(ptr=temp_buf, length=ptr_len)
         memcpy(src=ptr_bytes, dest=temp_buf, count=ptr_len)
-        comptime if is_big_endian():
+        comptime if is_big_endian(): # TODO: maybe make this a function parameter / arg check
             for i in range(0, ptr_len, fbs):
                 comptime for j in range(fbs // 2):
                     swap(temp_buf[i + j], temp_buf[i + (fbs - 1) - j])
@@ -533,11 +533,8 @@ struct Feature(Movable, ArenaSizable):
         )
         image.normalized(normed_tensor)
 
-    # def __del__(deinit self):
-    #    pass
 
-
-struct CPUSession:
+struct CPUSession(): # TODO: maybe offer other constructors for other allocators
     """Ties arena and model lifetimes together — mirrors DeviceSession."""
 
     var arena: CPUArena

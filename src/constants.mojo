@@ -30,6 +30,9 @@ comptime NUM_WEIGHTS = 51902  # hardcoding here for simplicity, can be calculate
 comptime ALPHA = Float32(defines.get_defined_int["ALPHA", 500]()) / 1000
 comptime PADDING = 2
 
+# RNG seed — single source of truth (weight init + shuffle). Override at runtime with --seed.
+comptime DEFAULT_SEED = 42
+
 comptime IMAGE_SIZE = 28
 comptime PADDED_SIZE = IMAGE_SIZE + 2 * PADDING  # == LENGTH_FEATURE0
 

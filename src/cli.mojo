@@ -1,6 +1,6 @@
 from std.sys import argv, stderr
 
-from constants import NUM_GPU_STREAMS, GPU_STREAM_BATCH_SIZE
+from constants import NUM_GPU_STREAMS, GPU_STREAM_BATCH_SIZE, DEFAULT_SEED
 
 
 @fieldwise_init
@@ -8,6 +8,7 @@ struct CliArgs(Copyable, Movable):
     var num_streams: Int
     var bench_only: Bool
     var help: Bool
+    var seed: Int
 
     @staticmethod
     def parse() raises -> CliArgs:
@@ -18,11 +19,21 @@ struct CliArgs(Copyable, Movable):
         var num_streams = NUM_GPU_STREAMS
         var bench_only = False
         var help = False
+        var seed = DEFAULT_SEED
         for i in range(1, len(args)):
             if args[i] == "--help":
                 help = True
             elif args[i] == "--bench-only":
                 bench_only = True
+            elif args[i] == "--seed":
+                if i + 1 >= len(args):
+                    print("--seed needs an integer value", file=stderr)
+                    raise Error("seed missing value")
+                try:
+                    seed = atol(args[i + 1])
+                except:
+                    print("--seed: not an int:", args[i + 1], file=stderr)
+                    raise Error("seed not an int")
             elif args[i] == "--num-streams":
                 if i + 1 >= len(args):
                     print("--num-streams needs a value 1..10", file=stderr)
@@ -43,7 +54,7 @@ struct CliArgs(Copyable, Movable):
                 # default is used and the numbers still look real. Fail loud.
                 print("unknown flag:", args[i], "(see --help)", file=stderr)
                 raise Error(t"unknown flag: {args[i]}")
-        return CliArgs(num_streams, bench_only, help)
+        return CliArgs(num_streams, bench_only, help, seed)
 
 
 def printHelp():
@@ -53,15 +64,17 @@ def printHelp():
     print("runtime args (no recompile):")
     print(t"  --num-streams N   GPU concurrent streams, 1..10 (default {NUM_GPU_STREAMS})")
     print("  --bench-only      load saved model, skip training, bench only")
+    print(t"  --seed N          RNG seed for weight init/shuffle (default {DEFAULT_SEED})")
     print("  --help            this message")
     print()
     print("comptime -D flags (each new value recompiles):")
     print("  -D ALPHA=N                 learning rate * 1000, 1..1000 (default 500)")
-    print("  -D ACT_FN                  GELU|GELUTanh|GELUFast|Sigmoid|Tanh (default ReLU)")
+    print("  -D <ACT>                   bare activation flag: GELU|GELUTanh|GELUFast|Sigmoid|Tanh (default ReLU)")
     print(t"  -D GPU_STREAM_BATCH_SIZE=N images per stream batch (default {GPU_STREAM_BATCH_SIZE})")
     print("  -D NUM_GPU_STREAMS=N        compile-time stream default (prefer --num-streams)")
     print("  -D DIV_CHANS_CONV2=N        conv2 channel divisor, factor of 16 (default 4)")
     print("  -D DIV_CHANS_CONV3=N        conv3 channel divisor, factor of 120 (default 8)")
     print("  -D N_WARMUP=N / -D N_PASSES=N   bench warmup / timed passes (default 3 / 10)")
     print("  -D DISPLAY                 enable display output")
+    print("  -D GPU_SYSTEM_ALLOC        GPU inference uses the system allocator instead of the bump arena (benchmarking)")
     print("  see constants.mojo for full list")

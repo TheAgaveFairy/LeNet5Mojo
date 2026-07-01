@@ -30,7 +30,6 @@ def showProgress(progress: Int, total: Int) -> None:
     comptime bar_width = 50
     var ratio = Float32(progress) / Float32(total)
     var filled = Int(Float32(bar_width) * ratio)
-    # print(chr(27) + "[2J",end="")
     print("\r[", end="")
     for _ in range(filled):
         print("=", end="")
@@ -42,7 +41,7 @@ def showProgress(progress: Int, total: Int) -> None:
 def argMax[layout: Layout](output: LayoutTensor[ftype, layout, _]) -> Int:
     var largest_value: sftype = FloatLiteral[].negative_infinity
     var pos: Int = 0
-    comptime for i in range(layout.size()):
+    comptime for i in range(layout.size()): # TODO: does this need to be comptime
         var value = rebind[sftype](output[i])
         if value > largest_value:
             largest_value = value
@@ -88,7 +87,7 @@ def crossEntropyLoss[
 ](
     preds: LayoutTensor[ftype, Layout.row_major(count), MutAnyOrigin],
     label: Int,
-) -> Float32:
+    ) -> Float32: # TODO: why is this Float32
     var max_val: sftype = rebind[sftype](preds[0])
 
     comptime for i in range(1, count):
@@ -173,6 +172,7 @@ def convoluteBackward[
 ):
     comptime out_feat_size = feat_size - kernel_size + 1
 
+    # TODO: rebind helper for slicing or see if we can remove rebinds entirely
     comptime for x in range(in_chan):
         comptime for y in range(out_chan):
             var inerror_slice = rebind[
@@ -215,12 +215,7 @@ def convoluteBackward[
             convoluteFull(weight_slice, outerror_slice, inerror_slice)
 
     act_fn.backward(input, inerror, inerror)
-    _ = """
-    for c in range(in_chan): # each element gets "actiongrad"
-        for m in range(feat_size):
-            for n in range(feat_size):
-                inerror[c, m, n] *= 1 if input[c, m, n] > 0 else 0
-    """
+
     comptime for c in range(out_chan):
         comptime for i in range(out_feat_size):
             comptime for j in range(out_feat_size):
@@ -271,8 +266,6 @@ def convoluteBackward[
 
 
 def convoluteValid[
-    # feat_size: Int,
-    # kernel_size: Int,
     k_layout: Layout,
     i_layout: Layout,
     r_layout: Layout,
@@ -418,16 +411,11 @@ def convoluteForward[
 
             convoluteValid(kern_slice, image_slice, result_slice)
 
-    # activation function (named "action")
     comptime for c in range(result.shape[0]()):
         for i in range(result.shape[1]()):
             for j in range(result.shape[2]()):
                 result[c, i, j] += bias[c]
-                _ = """
-                result[c, i, j] = (
-                    result[c, i, j] if result[c, i, j] > 0.0 else 0.0
-                )
-                """
+    # TODO: fuse this into the above loop using simdForward()
     act_fn.forward(result)
 
 
@@ -447,6 +435,7 @@ def maxPoolBackward[
         ftype, Layout.row_major(num_channels, out_feat_size, out_feat_size), _
     ],
 ):
+    # TODO: some asserts on shapes would be good
     comptime len0 = inerror.shape[1]() // outerror.shape[1]()
     comptime len1 = inerror.shape[2]() // outerror.shape[2]()
 
@@ -458,6 +447,7 @@ def maxPoolBackward[
                 var ismax: Int
 
                 # branchless approach again
+                # TODO: see if this is actually faster
                 for l0 in range(len0):
                     for l1 in range(len1):
                         ismax = (
@@ -469,7 +459,7 @@ def maxPoolBackward[
 
                 inerror[i, o0 * len0 + x0, o1 * len1 + x1] = outerror[i, o0, o1]
 
-
+# TODO: also compare this "branchless" to a "normal" maxpool
 def maxPoolForward[
     num_channels: Int, in_feat_size: Int, out_feat_size: Int
 ](
@@ -548,12 +538,6 @@ def matmulBackward[
             inerror[ie_i, ie_j, ie_k] += outerror[y] * weight[x, y]
 
     act_fn.backward(input, inerror, inerror)
-    _ = """
-    for i in range(num_chan):
-        for j in range(feat_size):
-            for k in range(feat_size):
-                inerror[i, j, k] *= 1 if input[i, j, k] > 0 else 0
-    """
 
     comptime for i in range(output_size):
         bdeltas[i] += outerror[i]
@@ -566,7 +550,7 @@ def matmulBackward[
             var ie_k = rem % feat_size  # feat_size
             wdeltas[x, y] += input[ie_i, ie_j, ie_k] * outerror[y]
 
-
+# TODO: this is not production grade, i have one somewhere to copy over...
 def matmulForward[
     num_chan: Int,
     feat_size: Int,
@@ -583,7 +567,6 @@ def matmulForward[
     ],
     bias: LayoutTensor[ftype, Layout.row_major(output_size), _],
 ) -> None:
-    # input is m x l, weight is l x n, output is m x n
     # input is (layer5, feat5, feat5), weight is (layer5 * feat5 * feat5, output), output is (output)
     # feature_length5 is equal to the value 1
     comptime for x in range(weight.shape[0]()):
@@ -596,6 +579,7 @@ def matmulForward[
         # output[i] = output[i] if output[i] > 0 else 0
     # act_fn.forward(output)
     # TODO: look into if this is good or bad
+    # TODO: parameterize to enable/ disable, fuse into loop above?
     # FIXME: just a louder reminder
 
 
@@ -616,7 +600,6 @@ def trainBatchParallel(
     var errors = alloc[Feature](batch_size)
     var deltas = alloc[LeNet5](batch_size)
 
-    # could have uninitialized
     var losses = alloc[Float32](batch_size)  # reduce add -> total_loss
     var corrects = alloc[Int](batch_size)  # reduce add, effectively bools
 
@@ -656,6 +639,7 @@ def trainBatchParallel(
 
     var avg_loss = total_loss / Float32(batch_size)
 
+    # TODO: can we get rid of these keeps()
     benchmark.keep(buffer_arena)
     benchmark.keep(intermediate_arena)
     features.free()
@@ -711,6 +695,7 @@ def trainBatch(
 
     var avg_loss = total_loss / Float32(batch_size)
 
+    # TODO: can we get rid of these keep() calls
     benchmark.keep(buffer_arena)
     benchmark.keep(delta_arena)
     benchmark.keep(feat_arena)

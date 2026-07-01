@@ -197,5 +197,4 @@ struct LeNet5GPU(DevicePassable, TrivialRegisterPassable, ArenaSizable):
     def _to_device_type(
         self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]
     ):
-        # target.bitcast[Self.device_type]()[] = self
         encoder.encode(self, target)

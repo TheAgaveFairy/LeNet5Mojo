@@ -73,13 +73,13 @@ def normalizeInputsKernel[
     """Call with grid_dim=batch_size, block_dim=next_power_of_two(IMAGE_SIZE*IMAGE_SIZE) (1D).
     Pads and normalizes raw uint8 pixels into the feature input buffer.
     """
+    # TODO: for all ops, cpu and accel, let's use input_layout_tensor.shape[0]() style calls instead of constants as a style guide
     comptime img_sz = IMAGE_SIZE * IMAGE_SIZE
     comptime reduction_size = next_power_of_two(img_sz)
 
     var img = block_idx.x
     var flat = thread_idx.x
     var active = flat < img_sz
-    # inactive threads clamp to (0,0) — valid index, value masked to 0 below
     var row = (flat // IMAGE_SIZE) if active else 0
     var col = flat % IMAGE_SIZE
     var pix = sftype(
@@ -91,7 +91,7 @@ def normalizeInputsKernel[
         pix * pix
     )
 
-    # 2-element shared buffer: [mean, std]. Only thread 0 writes, all active threads read.
+    # 2-element shared buffer: [mean, std]
     var stats = LayoutTensor[
         ftype,
         Layout.row_major(2),
@@ -155,6 +155,7 @@ def matMulFusedKernel[
             )
             outputs[img_idx, oc] = logit
             # raw logits by design: no act_fn after the final FC layer
+            # TODO: parameterize act_fn epilogue
             if logit > best:
                 best = logit
                 best_idx = UInt8(oc)
@@ -318,18 +319,6 @@ def conv2FusedKernel[
         local_image.ptr[idx] = feats[img_idx].layer2.ptr[idx]
         idx += TPB
 
-    _ = """
-    var local_biases = LayoutTensor[
-        ftype,
-        Layout.row_major(CHANS_TO_HANDLE),
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-    ].stack_allocation()
-    if row == 0 and col == 0:
-        local_biases[local_chan] = lenet.bias2_3[global_chan]
-
-    barrier()
-    """
     barrier()
 
     var result: sftype = 0

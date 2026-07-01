@@ -25,6 +25,9 @@ def reflectCSV[T: AnyType](ref s: T) -> String:
         if i > 0:
             line += ","
         ref fr = reflect[T].field_ref[i](s)
+        comptime assert conforms_to(type_of(fr), Writable), (
+            "reflectCSV: every field of " + reflect[T].name() + " must be Writable"
+        )
         line += String(trait_downcast[Writable](fr))
     return line^
 
@@ -172,7 +175,7 @@ trait MyLogger:
         ...
 
 
-comptime LeNet5Logger = MyLogger & Copyable & Movable
+comptime LeNet5Logger = MyLogger & Copyable
 
 
 struct ResultLogger(LeNet5Logger, ImplicitlyCopyable):

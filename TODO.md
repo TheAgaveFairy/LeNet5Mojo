@@ -57,6 +57,18 @@ Check items off as they are completed.
     GEMMs over the whole eff_batch (better coalescing, fewer/larger launches). This is the natural
     generalization of conv3 Tier B — note it here so Tier B is designed with batched layouts in mind.
 
+- [ ] **Style guide: index via `tensor.shape[N]()`, not hardcoded constants** (all ops, `cpu/ops.mojo` + `accel/ops.mojo`)
+  - Marker at `accel/ops.mojo:76`. Prefer `input.shape[0]()`-style queries over `IMAGE_SIZE`/`LAYER5`
+    etc. so kernels/ops stay correct if a layout changes. Sweep CPU + accel ops; pure clarity/robustness.
+
+- [ ] **Parameterize + fuse the `act_fn` epilogue (CPU + GPU)** (`accel/ops.mojo:158`, `cpu/ops.mojo:418`, `cpu/ops.mojo:582`)
+  - Three markers, one theme: make the post-op activation a compile-time knob (enable/disable) and fuse
+    it into the preceding accumulation loop instead of a separate `act_fn.forward` pass — `matMulFusedKernel`
+    (GPU, raw-logits epilogue), `convoluteForward` (fuse `simdForward()` into the bias add loop), and
+    `matmulForward` (CPU, enable/disable + fuse). Pairs with the existing matmul-act decision (skip after
+    final FC). Supersedes the loose `# TODO: look into if this is good or bad` / `# FIXME: just a louder
+    reminder` cluster at `cpu/ops.mojo:581-583`.
+
 ---
 
 ## GPU Pipeline
@@ -210,9 +222,41 @@ Check items off as they are completed.
   - 120 threads = 3.75 warps; the partial warp wastes a scheduler slot. Cheap experiment: launch 128,
     guard `oc < LAYER5` (or give the 8 spare threads shared-load duty).
 
+- [ ] **FC matmul as a real GPU GEMM** (`accel/gemm.mojo` — new WIP file)
+  - New untracked scaffold: `gemm3` kernel stub + a copy of `matMulFusedKernel`. Goal is a tiled GEMM
+    for the final FC layer (`LAYER5`×`OUTPUT`) instead of the per-block reduction. Separate from conv3
+    Tier B. Marker `# TODO: dram to local call possible` (`accel/gemm.mojo:68`). NOTE: file is untracked
+    (`git add` when ready).
+
+- [ ] **GPU signature/cleanup nits** (`accel/ops.mojo`)
+  - Pre-existing uncatalogued markers: take `Span`s in the conv kernels (`:232`); make `stream_slots` a
+    `Span` (`:771`); bypass an intermediate (`:587`); replace ad-hoc print with proper logging (`:675`).
+    Low priority; grouped here so they're tracked.
+
 ---
 
 ## Benchmarking / Profiling
+
+- [ ] **Run the act_fn × ALPHA search + finish the rigor pass** (`scripts/search_alpha.sh`)
+  - DONE 2026-06-30 (script prep/improvements): fixed stale paths (`src/main.mojo`, `results/` output);
+    added **phase 3** FINE sweep (±16 step 4) around the phase-2 peak — recovers the precision the step-10
+    grid lost (the `HALF_WIDTH=100` concern); bumped phase-2 half-width 100→120; **dedup** across phases
+    via the CSV; **CENTER_ALPHA** / default PRIMARY-full-then-VARIANTS-centered-on-GELU flow so the GELU
+    variants skip the coarse sweep. Helper logic offline-validated. Usage documented in
+    `docs/activation_tuning.md`.
+  - REMAINING:
+    - **RUN it** — ~1.5–2 h (each point recompiles + trains ~35 s). Paul to hammer it on a free machine,
+      then fill `docs/activation_tuning.md`.
+    - **Noise**: still single-seed (deterministic at `--seed 42`). Average N seeds per point / report
+      mean±sd so "best ALPHA" isn't chasing jitter.
+    - **Leakage**: still tuned on the TEST set — carve a validation split from train.
+    - **Refinement (optional)**: the fixed coarse→linear→fine phases could become adaptive
+      (golden-section / successive-halving / small Bayesian) for fewer evals to a tighter optimum.
+  - Output feeds the per-act_fn suggested-defaults doc (`docs/activation_tuning.md`).
+
+- [ ] **Fill in per-act_fn suggested ALPHA defaults** (`docs/activation_tuning.md`)
+  - Doc scaffold created 2026-06-30 with a table + the few data points we have (mostly TBD). Populate it
+    from the improved search above so people have sane starting `-D <ACT> -D ALPHA=N` combos per activation.
 
 - [x] **Hoist StreamSlot construction OUT of the timed region — kills run-to-run variance** (`accel/ops.mojo`, `main.mojo`)
   - `runGPUTest` times the whole `batchedForwardMultiStream` call, which `alloc`s + `free`s all
@@ -364,6 +408,118 @@ Check items off as they are completed.
     loop is the inner `comptime for bi in range(f_sz)` over f_sz (4 for Float32 / 8 for Float64) —
     tiny, size-independent. Corrected the comment in-place; nothing to profile.
 
+### New markers (added 2026-06-29 pass)
+
+- [ ] **`matmulForward` is not production-grade — port the real CPU matmul** (`cpu/ops.mojo:553`)
+  - Marker: "this is not production grade, i have one somewhere to copy over...". CPU-only; bring over
+    Paul's existing CPU matmul and replace the naive triple-loop. Unrelated to the GPU `gemm.mojo` /
+    conv3 work below.
+
+- [ ] **`predict`: make `feat` an explicit `Optional[Feature]` and combine the two paths** (`cpu/model.mojo:321`)
+  - One predict that takes/builds the feature arena instead of two near-duplicate methods.
+
+- [ ] **`crossEntropyLoss` returns `Float32` not `sftype` — confirm intent** (`cpu/ops.mojo:90`)
+  - Marker: "why is this Float32". Decide: keep fixed fp32 loss accumulation (numerics) or follow `ftype`.
+
+- [ ] **`argMax`: does the loop need to be `comptime for`?** (`cpu/ops.mojo:44`)
+  - Cheap to test runtime `for` — comptime unroll over `layout.size()` may bloat with no payoff here.
+
+- [ ] **`convoluteBackward`: rebind helper for slicing, or eliminate rebinds entirely** (`cpu/ops.mojo:175`)
+  - The per-slice `rebind[...]` calls are noisy; factor a helper or restructure layouts to drop them.
+
+- [ ] **`maxPoolBackward`: add shape asserts** (`cpu/ops.mojo:438`)
+  - `comptime assert` the in/out feat-size divisibility (`len0`/`len1`) instead of trusting callers.
+
+- [ ] **Benchmark "branchless" maxpool vs a normal one** (`cpu/ops.mojo:450`, `cpu/ops.mojo:462`)
+  - Two markers: verify the branchless `maxPoolBackward` inner loop is actually faster, and A/B the
+    branchless `maxPoolForward` against a straightforward max. May not be worth the obfuscation.
+
+- [ ] **`loadFromFile`: kill the extra copy** (`cpu/model.mojo:397`)
+  - Reads into an `InlineArray` then `memcpy`s; load straight into the destination buffer.
+
+- [ ] **`CPUSession`: offer constructors for other allocators** (`cpu/model.mojo:537`)
+  - Today hardwires the bump arena; allow alternate allocators (mirrors a future `DeviceSession` knob).
+
+- [ ] **Drop the `benchmark.keep()` calls in train loops** (`cpu/ops.mojo:642`, `cpu/ops.mojo:698`)
+  - `trainBatchParallel` + `trainBatch` both `keep()` arenas to dodge DCE; check if the new
+    Session/origin lifetimes make them unnecessary now.
+
+- [ ] **`bytesToFType` big-endian: `from_bytes` flag had compiler issues; parameterize the swap** (`cpu/model.mojo:364`, `cpu/model.mojo:433`)
+  - FIXME at :364 — `Scalar.from_bytes(buffer, big_endian=...)` errored, fell back to default; investigate
+    or file upstream (see Upstream section). TODO at :433 — make the manual `is_big_endian()` swap a
+    function parameter / arg check instead of comptime-only.
+
+### New markers (added 2026-06-30 pen-and-paper audit)
+
+- [x] **`MNISTDataView.__getitem__(start, end)`: add range validation** (`dataloader.mojo:58`) — DONE 2026-06-30
+  - Added loud `raise` guard (`start<0 or end<=start or end>len(self)`). Also refactored the body to Span
+    slice syntax (`raw_pixels[start*image_size:end*image_size]`) + rebind to `ImmutUntrackedOrigin`,
+    dropping the manual pointer math. NOTE: Span slice CLAMPS OOB (`slc.indices()`) rather than raising,
+    so the explicit guard is the real validation — slicing alone would silently give a wrong-size view.
+
+- [x] **`_timing_stats`: drop the hand-rolled `less_than` sort closure** (`main.mojo:148`) — DONE 2026-06-30
+  - Replaced the `@parameter less_than` closure + `sort[cmp_fn=less_than]` with bare `sort(Span(times))`.
+    Default ascending overload (`builtin/sort.mojo:585`, `T: Copyable & Comparable`) covers `UInt`. 5→1 line.
+
+- [x] **Seed: one mature default + expose via the LIVE cli** (`dataloader.mojo:206`, `main.mojo:107`, `cli.mojo`) — DONE 2026-06-30
+  - Added `comptime DEFAULT_SEED = 42` to `constants.mojo` (single source). Wired `--seed N` into the LIVE
+    `cli.mojo` (`CliArgs.seed` field + fail-loud parse + `printHelp` line); `main.mojo` now `seed(cli.seed)`
+    (was `42069`); `dataloader.seed_default` now aliases `DEFAULT_SEED` (was `69`). Verified: `--help` shows
+    `--seed` (default 42), `--seed abc` fails loud. Dormant `cliparser.mojo` left alone. Audit item 4.
+
+- [x] **Relocate `origin_util.mojo`'s `untrack` / `untrack_imm`** — AUDITED, NO MOVE 2026-06-30
+  - `origin_util` is imported by 7 files across BOTH packages (`image`, `cpu/model`, `cpu/arena`,
+    `accel/feature`, `accel/ops`, `accel/gemm`, `accel/model`). Folding into `cpu/ops.mojo` would make
+    `accel/*` import the heavy CPU-training module — wrong dependency direction; rejected. And there's no
+    pile of generic helpers to justify a `utils.mojo` (cpu/ops free-fns are all domain ops; only
+    `showProgress` is generic). Verdict: `origin_util.mojo` is already the correct home — minimal, shared,
+    descriptively named. Kept as-is. Audit item 5.
+
+- [x] **`act_fn.forward` should call `simdForward()` internally** (`activation_fn.mojo`) — DONE 2026-06-30
+  - Went further than delegation: since every `forward` was just its `simdForward` mapped elementwise,
+    hoisted ONE default `forward` into the `ActivationFunction` trait (load → `Self.simdForward` → store)
+    and DELETED all 6 per-struct overrides (ReLU/Sigmoid/Tanh/GELU/GELUTanh/GELUFast). Trait-default method
+    with a nested `vectorize` closure + `Self.simdForward` compiles fine. Verified: build green; bench ReLU
+    9691/10000 (CPU==GPU); full train+test `-D GELUFast` 9003/10000 (CPU==GPU) — forward AND backward good.
+    Also fixed `cli.mojo printHelp` (advertised bogus `-D ACT_FN`; real flags are bare `-D GELU` etc.).
+    Surfaced dead imports → new cleanup item above. Audit item 6.
+
+- [ ] **PyTorch parity test suite via Mojo/Python interop** (`tests/`)
+  - Compare each op (conv/pool/fc/activation, fwd + bwd) against a PyTorch reference through Python interop.
+    SKILL: `mojo-python-interop`. New test target. Audit item 7.
+
+- [x] **GPU arena trait audit** (`accel/arena.mojo`) — AUDITED 2026-06-30
+  - Generic consumers (`DeviceSession[Allocator: GPUAllocator]`, `LeNet5GPUBuffers`) call only `alloc`
+    (+ `__init__` for `DeviceSession(ctx)`). No production call sites for `.free_all()`/`.zero()`/`.wipe()`/
+    `.base_address()` — test-only. `GPUSystemAllocator` is production-dead (test-only), same as CPU's.
+  - Parity vs CPU `CPUAllocator`: `__init__`-in-trait is JUSTIFIED (GPU constructs the allocator generically;
+    CPU doesn't) — cost is `GPUSystemAllocator.__init__` ignoring `capacity_bytes` (`:101`). `zero`/`wipe`
+    in the trait is an UNJUSTIFIED divergence (CPU keeps them out as "arena-specific") but Paul chose to
+    LEAVE AS-IS for symmetry/future use — no code change.
+  - USEFUL FOLLOW-UP: `GPUSystemAllocator` is the arena-vs-system BENCHMARK baseline, not dead weight.
+    Wired a `-D GPU_SYSTEM_ALLOC` comptime toggle in `runGPUTest` (`ConditionalType` picking
+    `DeviceSession[GPUSystemAllocator]` vs `[GPUBumpArenaAllocator]`; label via `reflect[GPUAllocT].base_name()`).
+    Verified 2026-06-30: `GPUSystemAllocator` runs cleanly through `DeviceSession` (safe — no `free_all`/`wipe`
+    mid-run, so system buffers persist).
+  - CAVEAT (matters for the "Benchmark the GPU arena allocator" item, ideas.typ §GPU Pinned Memory): the
+    session allocator only allocates the 8 weight/bias buffers ONCE at setup, OUTSIDE the timed loop, so
+    `-D GPU_SYSTEM_ALLOC` moves fps by ~noise (measured ~1.12M both ways). The HOT-PATH per-batch feature
+    buffers use a SEPARATE arena — `device_arena`, hardcoded `GPUBumpArenaAllocator` in `accel/ops.mojo:554,579`
+    (`StreamSlot`). To actually benchmark arena-vs-system on throughput, parameterize `StreamSlot`'s
+    `device_arena` on the allocator too (or add a matching `-D`), not just the session. Audit item 8.
+
+- [x] **`_randHelper`: misleading commented reference math** (`cpu/model.mojo:243-248`) — VOID 2026-06-30
+  - Paul reviewed: code is fine as-is, no change wanted. Not a bug. Audit item 9 closed.
+
+- [ ] **Docstrings audit** (repo-wide) — open-ended
+  - Sweep public structs/methods/free-fns for missing, stale, or misleading docstrings. Prioritize the
+    public API surface (`cpu/model.mojo`, `accel/model.mojo`, `dataloader.mojo`, `cli.mojo`). Ongoing.
+
+- [ ] **Error-path / abort audit** (repo-wide) — open-ended
+  - Sweep for silent failures, clamps, and hard aborts: functions that should `raise` but swallow (cf. the
+    `__getitem__` clamp finding), `debug_assert` that vanishes in release, and any `abort`/unreachable that
+    should be a recoverable error with a message. Decide raise-vs-assert per site. Ongoing.
+
 ---
 
 ## Data Loading
@@ -405,6 +561,12 @@ Check items off as they are completed.
 ---
 
 ## Cleanup / Dead Code
+
+- [x] **`activation_fn.mojo`: remove unused test/random imports** (`activation_fn.mojo:4-10`) — DONE 2026-06-30
+  - Dropped the dead `std.testing` block (`TestSuite, assert_equal, assert_true, assert_almost_equal`) and
+    `from std.random import seed, randn` — each symbol appeared exactly once (the import itself), no file
+    tests/main. Build green. (Restoring an actual activation test suite comparing forward/simdForward/backward
+    still belongs with the PyTorch-parity test item #7.)
 
 - [x] **Remove unused `reflect` import in `main.mojo`** (`main.mojo:11`) — still used for `act_fn_name`; TODO was stale
 
@@ -451,11 +613,24 @@ Check items off as they are completed.
 
 ## Upstream Bug Reports to File
 
+- [ ] **Ask Discord: `trait_downcast` lint not silenced by `comptime assert conforms_to`** (`resultlogger.mojo:31`)
+  - Nightly `1.0.0b3.dev2026062906` warns "use `conforms_to(type_of(src), Trait)` instead in a `where`
+    clause or `comptime assert`" on `trait_downcast[Writable](fr)` in `reflectCSV`. Adding
+    `comptime assert conforms_to(type_of(fr), Writable), ...` does NOT silence it — the stdlib silences
+    via `_constrained_conforms_to` (`builtin/constrained.mojo:87`), which takes `conforms_to(...)` as a
+    comptime PARAMETER (not a statement). Ask: is a statement-form `comptime assert` supposed to satisfy
+    the lint, or must the guard be in parameter/`where` position? Keeping the assert for its clean
+    diagnostic; living with the one warning until resolved.
+
 - [ ] **`convoluteForward` slice syntax — API bug** (`cpu/ops.mojo:389`)
   - Slice call requires specific form that differs from what docs describe. File Mojo issue.
 
 - [ ] **`convoluteForward` slice IndexList vs Int — docs bug** (`cpu/ops.mojo:405`)
   - Docs say `IndexList` is expected but passing `Int` is needed. File Mojo issue.
+
+- [ ] **`Scalar.from_bytes` big-endian flag — compiler issue** (`cpu/model.mojo:364`)
+  - FIXME: passing a `big_endian=` flag to `from_bytes` had compiler issues, so `bytesToFType` falls back
+    to the default + a manual swap (`cpu/model.mojo:433`). Make a minimal reproducer; investigate or file.
 
 ---
 

@@ -90,6 +90,8 @@ mojo -D Tanh main.mojo       # Tanh
 
 Each activation implements `forward`, `backward`, `simdForward`, and `simdBackward`. CPU operations use the layout-level SIMD-vectorized versions; GPU kernels call `simdForward` directly per-element in shared memory.
 
+**The right learning rate is activation-dependent** — the same `-D ALPHA=N` (learning rate `N/1000`) that trains one activation can stall another. For example, ReLU alone swings from **8726/10000** at `ALPHA=50` to **9721/10000** at `ALPHA=1000` (quick single-run trains); GELUFast peaks in a different range. ⚠️ **Sigmoid collapses to ~10–18%** under the default short schedule regardless of `ALPHA` — presumably vanishing gradients — a reminder that some activations need a different setup entirely, not just a retuned learning rate. See [`docs/activation_tuning.md`](docs/activation_tuning.md) for suggested per-activation defaults.
+
 ### Arena Allocators
 
 Both CPU and GPU use custom bump arena allocators to avoid per-tensor allocation overhead:

@@ -1,13 +1,6 @@
 from std.algorithm.functional import vectorize
 from layout import Layout, LayoutTensor
 from std.math import tanh, exp, sqrt, erf, log, pi, tau
-from std.testing import (
-    TestSuite,
-    assert_equal,
-    assert_true,
-    assert_almost_equal,
-)
-from std.random import seed, randn
 
 from constants import ftype, sftype, nelts
 
@@ -17,8 +10,18 @@ trait ActivationFunction:
     @staticmethod
     @always_inline("nodebug")
     def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
-        """Operates in-place."""
-        ...
+        """Operates in-place. Default: map `simdForward` over the tensor.
+
+        Every activation's forward is just its `simdForward` applied elementwise,
+        so this default covers all of them — a struct only overrides it if it needs
+        something other than a pure elementwise map.
+        """
+
+        def vectorize_closure[width: Int](i: Int) {read}:
+            var nums = x.ptr.load[width=width](i)
+            x.ptr.store[width=width](i, Self.simdForward(nums))
+
+        vectorize[nelts](comptime (layout.size()), vectorize_closure)
 
     @staticmethod
     @always_inline("nodebug")
@@ -55,18 +58,6 @@ trait ActivationFunction:
 
 
 struct ReLU(ActivationFunction):
-    @staticmethod
-    @always_inline("nodebug")
-    def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
-        def vectorize_closure[width: Int](i: Int) {read}:
-            var nums = x.ptr.load[width=width](i)
-            comptime zeros = SIMD[ftype, width](0)
-            var mask = nums.gt(zeros)
-            var relu = mask.select(nums, zeros)
-            x.ptr.store[width=width](i, relu)
-
-        vectorize[nelts](comptime (layout.size()), vectorize_closure)
-
     @staticmethod
     @always_inline("nodebug")
     def backward[
@@ -122,17 +113,6 @@ struct Sigmoid(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
-        def vectorize_closure[width: Int](i: Int) {read}:
-            var nums = x.ptr.load[width=width](i)
-            comptime ones = SIMD[ftype, width](1.0)
-            var sigmoid = ones / (ones + exp(-nums))
-            x.ptr.store[width=width](i, sigmoid)
-
-        vectorize[nelts](comptime (layout.size()), vectorize_closure)
-
-    @staticmethod
-    @always_inline("nodebug")
     def backward[
         layout: Layout
     ](
@@ -185,15 +165,6 @@ struct Tanh(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
-        def vectorize_closure[width: Int](i: Int) {read}:
-            var nums = x.ptr.load[width=width](i)
-            x.ptr.store[width=width](i, tanh(nums))
-
-        vectorize[nelts](comptime (layout.size()), vectorize_closure)
-
-    @staticmethod
-    @always_inline("nodebug")
     def backward[
         layout: Layout
     ](
@@ -242,21 +213,6 @@ struct GELU(ActivationFunction):
     GELU(x) = x * CDF(x) = x * (1 + erf(x / sqrt(2))) / 2
     Can be approximated with a tanh version, or quick version (see GELU paper).
     """
-
-    @staticmethod
-    @always_inline("nodebug")
-    def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
-        comptime sqrt2 = sqrt(2.0)
-
-        def vectorize_closure[width: Int](i: Int) {read}:
-            var nums = x.ptr.load[width=width](i)
-            comptime sqrt2_vec = SIMD[ftype, width](sqrt2)
-            comptime halves = SIMD[ftype, width](0.5)
-            comptime ones = SIMD[ftype, width](1.0)
-            var gelu = halves * nums * (ones + erf(nums / sqrt2_vec))
-            x.ptr.store[width=width](i, gelu)
-
-        vectorize[nelts](comptime (layout.size()), vectorize_closure)
 
     @staticmethod
     @always_inline("nodebug")
@@ -341,27 +297,6 @@ struct GELUTanh(ActivationFunction):
     GELUTanh(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
     .
     """
-
-    @staticmethod
-    @always_inline("nodebug")
-    def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
-        comptime term = sftype(sqrt(2.0 / pi))
-
-        def vectorize_closure[width: Int](i: Int) {read}:
-            var nums = x.ptr.load[width=width](i)
-            var nums_cubed = nums * nums * nums
-            comptime scaling = SIMD[ftype, width](0.044715)
-            comptime terms = SIMD[ftype, width](term)
-            comptime halves = SIMD[ftype, width](0.5)
-            comptime ones = SIMD[ftype, width](1.0)
-            var gelu = (
-                halves
-                * nums
-                * (ones + tanh(terms * (nums + scaling * nums_cubed)))
-            )
-            x.ptr.store[width=width](i, gelu)
-
-        vectorize[nelts](comptime (layout.size()), vectorize_closure)
 
     @staticmethod
     @always_inline("nodebug")
@@ -459,17 +394,6 @@ struct GELUFast(ActivationFunction):
         comptime neg_ones = SIMD[stype, width](-1.0)
         var input = x * neg_ones
         return ones / (ones + exp(input))
-
-    @staticmethod
-    @always_inline("nodebug")
-    def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
-        def vectorize_closure[width: Int](i: Int) {read}:
-            var nums = x.ptr.load[width=width](i)
-            comptime scaling = SIMD[ftype, width](1.702)
-            var gelu = nums * Self._sigmoid(scaling * nums)
-            x.ptr.store[width=width](i, gelu)
-
-        vectorize[nelts](comptime (layout.size()), vectorize_closure)
 
     @staticmethod
     @always_inline("nodebug")

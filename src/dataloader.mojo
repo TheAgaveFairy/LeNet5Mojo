@@ -5,6 +5,7 @@ from std.sys import size_of, stderr
 
 from image import Image
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as Arena
+from constants import DEFAULT_SEED
 
 
 # TODO: (future) if CPU hot path also moves off List[Image] AoS, both CPU and GPU can share these
@@ -57,7 +58,12 @@ struct MNISTDataView[
 
     def __getitem__(
         self, start: Int, end: Int
-    ) -> MNISTDataView[ImmutUntrackedOrigin]:
+    ) raises -> MNISTDataView[ImmutUntrackedOrigin]:
+        if start < 0 or end <= start or end > len(self):
+            raise Error(
+                t"MNISTDataView.__getitem__ error: invalid slice {start}:{end}",
+                t" for view of length {len(self)}.",
+            )
         # Read-only sub-view (slicing for inference). It can't tie to origin_of(self):
         # MNISTDataView is TrivialRegisterPassable, so `self` is a register value with
         # no memory origin (unlike the repo, which is why getTrainBatch/getTestBatch
@@ -65,15 +71,17 @@ struct MNISTDataView[
         # exclusivity checker treat the disjoint pixel/label spans as aliasing. So the
         # sub-view is IMMUTABLE + untracked: immutable spans don't alias-conflict, and
         # untracked matches the project's hand-managed-lifetime approach.
+        # Slice syntax (Span.__getitem__) does the pointer + length math for us; it
+        # CLAMPS OOB rather than raising (slc.indices()), so the guard above stays as
+        # the real validation. rebind drops the mutable Self.origin to the immutable
+        # untracked origin (see the comment above for why the sub-view must be so).
         comptime image_size = Image.PixelLayout.size()
-        var p_ptr = rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](
-            self.raw_pixels.unsafe_ptr() + start * image_size
+        var pixels_span = rebind[Span[UInt8, ImmutUntrackedOrigin]](
+            self.raw_pixels[start * image_size : end * image_size]
         )
-        var l_ptr = rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](
-            self.raw_labels.unsafe_ptr() + start
+        var labels_span = rebind[Span[UInt8, ImmutUntrackedOrigin]](
+            self.raw_labels[start:end]
         )
-        var pixels_span = Span(ptr=p_ptr, length=(end - start) * image_size)
-        var labels_span = Span(ptr=l_ptr, length=(end - start))
         return MNISTDataView(pixels_span, labels_span)
 
 
@@ -203,7 +211,7 @@ struct MNISTDataRepository:
 
     # Shuffle helpers
 
-    comptime seed_default = 69
+    comptime seed_default = DEFAULT_SEED
 
     @staticmethod
     def _shuffleData(mut data: List[Image], seed: Int = Self.seed_default):

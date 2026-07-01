@@ -31,7 +31,10 @@ from cpu.ops import (
 from accel import (
     DeviceSession,
     GPUBumpArenaAllocator,
+    GPUAllocator,
 )
+from accel.arena import GPUSystemAllocator
+from std.utils.type_functions import ConditionalType
 from accel.ops import (
     _batchRun,
     StreamSlot,
@@ -104,7 +107,7 @@ def main() raises:
     else:
         comptime cpu_batch_size = 300
         comptime train_name = "models/deleteme.test"
-        seed(42069)
+        seed(cli.seed)
 
         var session = CPUSession()
         session.model.zero()
@@ -145,11 +148,7 @@ struct TimingStats(Copyable, Movable):
 
 
 def _timing_stats(mut times: List[UInt]) -> TimingStats:
-    @parameter
-    def less_than(a: UInt, b: UInt) capturing -> Bool:
-        return a < b
-
-    sort[cmp_fn=less_than](Span(times))
+    sort(Span(times))  # default ascending sort (UInt is Comparable)
     var n = len(times)
     var median = (times[n // 2] + times[(n - 1) // 2]) // 2
     return TimingStats(median, times[0], times[n - 1])
@@ -300,10 +299,21 @@ def runGPUTest(
 ) raises:
     comptime batch_size = GPU_STREAM_BATCH_SIZE
     with DeviceContext() as ctx:
-        var gpu_session = DeviceSession[GPUBumpArenaAllocator](ctx)
+        comptime GPUAllocT = ConditionalType[
+            Trait=GPUAllocator,
+            If=defines.is_defined["GPU_SYSTEM_ALLOC"](),
+            Then=GPUSystemAllocator,
+            Else=GPUBumpArenaAllocator,
+        ]
+        comptime alloc_name = reflect[GPUAllocT].base_name()
+        var gpu_session = DeviceSession[GPUAllocT](ctx)
         gpu_session.bufs.loadCPUWeights(model)
         print(
-            "\nDevice found:", ctx.name(), ". Compiling kernels and testing..."
+            "\nDevice found:",
+            ctx.name(),
+            "| allocator:",
+            alloc_name,
+            ". Compiling kernels and testing...",
         )
 
         var kernels = CompiledKernels[batch_size](ctx)
