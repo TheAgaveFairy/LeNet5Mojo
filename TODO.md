@@ -461,8 +461,14 @@ Check items off as they are completed.
     `sftype` so the sum widens if `ftype`→fp64; only the final report truncates to `Float32`.
     Report-narrow / accumulate-wide is the right shape. Comment updated to say so.
 
-- [ ] **`convoluteBackward`: rebind helper for slicing, or eliminate rebinds entirely** (`cpu/ops.mojo:175`)
-  - The per-slice `rebind[...]` calls are noisy; factor a helper or restructure layouts to drop them.
+- [x] **`convoluteBackward`: rebind helper for slicing, or eliminate rebinds entirely** (`cpu/ops.mojo:175`)
+  - DONE (`c840f0f`): factored into `channelSlice`/`kernelSlice` (`@always_inline("nodebug")`). The
+    rebind is UNAVOIDABLE — `.slice[...]` returns a computed offset/stride layout type, not nominal
+    `row_major`, so it can't be dropped, only centralized. MWE: `ignoreme/conv_slice_mwe.mojo`.
+  - TileTensor alternative (its `.slice` may return a cleaner type, no rebind): NOT pursued. Whole CPU
+    conv family (`convoluteValid/Full`, act_fn, maxpool) is LayoutTensor-based; migrating one op means
+    converting the family or bouncing types at boundaries — large cross-cutting change for a cosmetic
+    win the helper already delivered. Revisit only if we migrate CPU ops to TileTensor wholesale.
 
 - [x] **`maxPoolBackward`: add shape asserts** (`cpu/ops.mojo:438`)
   - RESOLVED: `comptime assert in_feat_size % out_feat_size == 0` (clean pooling — floor-div `len`
