@@ -42,7 +42,7 @@ def showProgress(progress: Int, total: Int) -> None:
 def argMax[layout: Layout](output: LayoutTensor[ftype, layout, _]) -> Int:
     var largest_value: sftype = FloatLiteral[].negative_infinity
     var pos: Int = 0
-    comptime for i in range(layout.size()): # TODO: does this need to be comptime
+    comptime for i in range(layout.size()):
         var value = rebind[sftype](output[i])
         if value > largest_value:
             largest_value = value
@@ -88,7 +88,7 @@ def crossEntropyLoss[
 ](
     preds: LayoutTensor[ftype, Layout.row_major(count), MutAnyOrigin],
     label: Int,
-    ) -> Float32: # TODO: why is this Float32
+    ) -> Float32:
     var max_val: sftype = rebind[sftype](preds[0])
 
     comptime for i in range(1, count):
@@ -436,7 +436,13 @@ def maxPoolBackward[
         ftype, Layout.row_major(num_channels, out_feat_size, out_feat_size), _
     ],
 ):
-    # TODO: some asserts on shapes would be good
+    # Clean pooling: floor-div len drops trailing rows if not divisible. Write index is provably
+    # in-bounds ((out-1)*len + len-1 < out*len <= in), so these guard ignored rows / garbage calls.
+    # Precondition: caller must pre-zero `inerror` — backward only scatters into the argmax cells.
+    comptime assert out_feat_size > 0, "maxPoolBackward: out_feat_size must be > 0"
+    comptime assert (
+        in_feat_size % out_feat_size == 0
+    ), "maxPoolBackward: in_feat_size must be divisible by out_feat_size"
     comptime len0 = inerror.shape[1]() // outerror.shape[1]()
     comptime len1 = inerror.shape[2]() // outerror.shape[2]()
 

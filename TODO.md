@@ -423,7 +423,10 @@ Check items off as they are completed.
     from param inference completely. Do this if a future refactor touches the conv backward path anyway.
 
 - [ ] **`CPUBumpArenaAllocator.alloc`: consider returning `Span` instead of raw pointer** (`cpu/arena.mojo:39`)
-  - Would make ownership and bounds clearer at call sites.
+  - Would make ownership and bounds clearer at call sites. NOT low-hanging: `alloc` returns
+    `UnsafePointer[T, MutUntrackedOrigin]`; a `Span` return adds an origin param that colors every
+    caller (feature arenas in `cpu/ops.mojo`, `cpu/model.mojo`) doing pointer math / `LayoutTensor`
+    construction off the result. Likely one of the larger refactors, not a quick swap. Defer.
 
 - [x] **`accumulateFromOther` / `_randHelper`: direct LayoutTensor math — UPSTREAM, WON'T FIX** (`cpu/model.mojo`)
   - Both keep a hand-rolled `vectorize[nelts]` workaround instead of direct elementwise LayoutTensor
@@ -452,17 +455,20 @@ Check items off as they are completed.
 - [ ] **`predict`: make `feat` an explicit `Optional[Feature]` and combine the two paths** (`cpu/model.mojo:321`)
   - One predict that takes/builds the feature arena instead of two near-duplicate methods.
 
-- [ ] **`crossEntropyLoss` returns `Float32` not `sftype` — confirm intent** (`cpu/ops.mojo:90`)
-  - Marker: "why is this Float32". Decide: keep fixed fp32 loss accumulation (numerics) or follow `ftype`.
-
-- [ ] **`argMax`: does the loop need to be `comptime for`?** (`cpu/ops.mojo:44`)
-  - Cheap to test runtime `for` — comptime unroll over `layout.size()` may bloat with no payoff here.
+- [x] **`crossEntropyLoss` returns `Float32` not `sftype` — confirm intent** (`cpu/ops.mojo:90`)
+  - RESOLVED: intentional. Loss is a *reporting metric*, not part of model compute (backward uses
+    `softmax - onehot` directly, never flows through this). Accumulators (`max_val`, `exp_sum`) stay
+    `sftype` so the sum widens if `ftype`→fp64; only the final report truncates to `Float32`.
+    Report-narrow / accumulate-wide is the right shape. Comment updated to say so.
 
 - [ ] **`convoluteBackward`: rebind helper for slicing, or eliminate rebinds entirely** (`cpu/ops.mojo:175`)
   - The per-slice `rebind[...]` calls are noisy; factor a helper or restructure layouts to drop them.
 
-- [ ] **`maxPoolBackward`: add shape asserts** (`cpu/ops.mojo:438`)
-  - `comptime assert` the in/out feat-size divisibility (`len0`/`len1`) instead of trusting callers.
+- [x] **`maxPoolBackward`: add shape asserts** (`cpu/ops.mojo:438`)
+  - RESOLVED: `comptime assert in_feat_size % out_feat_size == 0` (clean pooling — floor-div `len`
+    silently drops trailing rows otherwise) + `out_feat_size > 0`. Write index is provably in-bounds
+    (`(out-1)*len + (len-1) < out*len <= in`), so this guards *ignored rows / garbage calls*, not OOB.
+    Also noted the scatter precondition: caller must pre-zero `inerror` (backward only writes argmax cells).
 
 - [ ] **Benchmark "branchless" maxpool vs a normal one** (`cpu/ops.mojo:450`, `cpu/ops.mojo:462`)
   - Two markers: verify the branchless `maxPoolBackward` inner loop is actually faster, and A/B the
