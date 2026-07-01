@@ -131,6 +131,35 @@ def loadTarget(features: Feature, errors: Feature, label: Int) -> None:
     softMax(features.output, errors.output, label)
 
 
+# The rebind is unavoidable: `.slice[...]` yields a computed (offset/stride) layout type, not the
+# nominal `Layout.row_major(...)` the conv helpers want. Centralize it here so call sites read as one
+# line. (channelSlice: (C,H,W)[c] -> (H,W); kernelSlice: (IC,OC,K,K)[x,y] -> (K,K).)
+@always_inline("nodebug")
+def channelSlice[
+    C: Int, H: Int, W: Int
+](
+    t: LayoutTensor[ftype, Layout.row_major(C, H, W), MutAnyOrigin], c: Int
+) -> LayoutTensor[ftype, Layout.row_major(H, W), MutAnyOrigin]:
+    return rebind[LayoutTensor[ftype, Layout.row_major(H, W), MutAnyOrigin]](
+        t.slice[Slice(0, H), Slice(0, W), IndexList[2](1, 2)](IndexList[1](c))
+    )
+
+
+@always_inline("nodebug")
+def kernelSlice[
+    IC: Int, OC: Int, K: Int
+](
+    t: LayoutTensor[ftype, Layout.row_major(IC, OC, K, K), MutAnyOrigin],
+    x: Int,
+    y: Int,
+) -> LayoutTensor[ftype, Layout.row_major(K, K), MutAnyOrigin]:
+    return rebind[LayoutTensor[ftype, Layout.row_major(K, K), MutAnyOrigin]](
+        t.slice[Slice(0, K), Slice(0, K), IndexList[2](2, 3)](
+            IndexList[2](x, y)
+        )
+    )
+
+
 # NOTE: the 3 call sites must pass `kernel_size=LENGTH_KERNEL` explicitly — it will NOT infer.
 # Mojo binds parameters left-to-right with NO deferred unification. `input` binds in_chan/feat_size;
 # the very next arg `outerror` has layout (out_chan, feat_size-kernel_size+1, ...), which the compiler
@@ -173,46 +202,11 @@ def convoluteBackward[
 ):
     comptime out_feat_size = feat_size - kernel_size + 1
 
-    # TODO: rebind helper for slicing or see if we can remove rebinds entirely
     comptime for x in range(in_chan):
         comptime for y in range(out_chan):
-            var inerror_slice = rebind[
-                LayoutTensor[
-                    ftype, Layout.row_major(feat_size, feat_size), MutAnyOrigin
-                ]
-            ](
-                inerror.slice[
-                    Slice(0, feat_size), Slice(0, feat_size), IndexList[2](1, 2)
-                ](IndexList[1](x))
-            )
-
-            var weight_slice = rebind[
-                LayoutTensor[
-                    ftype,
-                    Layout.row_major(kernel_size, kernel_size),
-                    MutAnyOrigin,
-                ]
-            ](
-                weight.slice[
-                    Slice(0, kernel_size),
-                    Slice(0, kernel_size),
-                    IndexList[2](2, 3),
-                ](IndexList[2](x, y))
-            )
-
-            var outerror_slice = rebind[
-                LayoutTensor[
-                    ftype,
-                    Layout.row_major(out_feat_size, out_feat_size),
-                    MutAnyOrigin,
-                ]
-            ](
-                outerror.slice[
-                    Slice(0, out_feat_size),
-                    Slice(0, out_feat_size),
-                    IndexList[2](1, 2),
-                ](IndexList[1](y))
-            )
+            var inerror_slice = channelSlice(inerror, x)
+            var weight_slice = kernelSlice(weight, x, y)
+            var outerror_slice = channelSlice(outerror, y)
             convoluteFull(weight_slice, outerror_slice, inerror_slice)
 
     act_fn.backward(input, inerror, inerror)
@@ -225,44 +219,9 @@ def convoluteBackward[
     comptime for x in range(in_chan):
         comptime for y in range(out_chan):
             # input[x], wd[x][y], outerror[y]
-            var input_slice = rebind[
-                LayoutTensor[
-                    ftype, Layout.row_major(feat_size, feat_size), MutAnyOrigin
-                ]
-            ](
-                input.slice[
-                    Slice(0, feat_size), Slice(0, feat_size), IndexList[2](1, 2)
-                ](IndexList[1](x))
-            )
-
-            var wdeltas_slice = rebind[
-                LayoutTensor[
-                    ftype,
-                    Layout.row_major(kernel_size, kernel_size),
-                    MutAnyOrigin,
-                ]
-            ](
-                wdeltas.slice[
-                    Slice(0, kernel_size),
-                    Slice(0, kernel_size),
-                    IndexList[2](2, 3),
-                ](IndexList[2](x, y))
-            )
-
-            var outerror_slice = rebind[
-                LayoutTensor[
-                    ftype,
-                    Layout.row_major(out_feat_size, out_feat_size),
-                    MutAnyOrigin,
-                ]
-            ](
-                outerror.slice[
-                    Slice(0, out_feat_size),
-                    Slice(0, out_feat_size),
-                    IndexList[2](1, 2),
-                ](IndexList[1](y))
-            )
-
+            var input_slice = channelSlice(input, x)
+            var wdeltas_slice = kernelSlice(wdeltas, x, y)
+            var outerror_slice = channelSlice(outerror, y)
             convoluteValid(outerror_slice, input_slice, wdeltas_slice)
 
 
