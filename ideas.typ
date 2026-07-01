@@ -600,3 +600,20 @@ This shows a number of features: shared memory, block primitives, natural indexi
 // still being nightly), what you'd do differently (SoA from day one, [OC][IC] layout, batched CPU),
 // where you think the stack is going, and genuine excitement about Modular. Don't underwrite it —
 // pull from the "what I passed on" list too. Maps to Post 6.
+
+// NEW ASIDE [want]: = Swappable Allocators (CPU + GPU) — one trait, drop-in, no branching.
+// Both sides expose a uniform allocator trait (CPUAllocator / GPUAllocator = alloc + free_all +
+// zero + wipe + a uniform ctor), so the WHOLE pipeline is generic over the allocator with ZERO
+// per-impl branching. Flip -D CPU_SYSTEM_ALLOC / -D GPU_SYSTEM_ALLOC (selected in constants.mojo
+// right next to act_fn) to A/B the bump arena against a plain system allocator.
+// Story beats:
+//   (1) the trait design that makes it drop-in — the System allocator takes an IGNORED capacity_bytes
+//       purely to keep one ctor shape, and tracks per-alloc sizes so it can implement zero()/wipe().
+//   (2) DeviceSession[Allocator] / CPUSession[Allocator] parameterized on it (default = bump arena),
+//       so existing call sites don't change; reflect[Allocator].base_name() prints which one ran.
+//   (3) HONEST benchmark — the payoff beat. On INFERENCE the swap is NOISE (compute-bound; the
+//       once-allocated feature arena's per-iter zero() is negligible vs the conv/matmul), same as the
+//       GPU session allocator that only sizes weights at setup. So the arena's real win lives elsewhere
+//       (training's per-batch wipe+realloc, or the ~20% CPU figure that still needs re-verifying) — a
+//       clean "measure before you claim; know WHERE the allocator is on the hot path" lesson.
+// Ties into the Ops/Memory post and the existing GPU-arena-benchmark TODO.
