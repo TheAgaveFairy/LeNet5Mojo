@@ -199,36 +199,6 @@ def maxPool2Kernel[
     feats[img_idx].layer4[chan, row, col] = temp
 
 
-def maxPool1Kernel[
-    batch_size: Int
-](
-    lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
-) -> None:
-    """
-    Runs as block_dim = (LF2, LF2), grid_dim = (batch_size, num_channels).
-    One thread per output (was one per *input* with 75% idling after a shared
-    staging load — no reuse in 2x2 non-overlapping pooling, so global reads win).
-    """
-    var img_idx = block_idx.x  # range(batch_size)
-    var chan = block_idx.y  # range(LAYER2)
-    var row = thread_idx.y  # range(LENGTH_FEATURE2)
-    var col = thread_idx.x  # range(LENGTH_FEATURE2)
-
-    var tr = row * 2
-    var tc = col * 2
-    var temp: sftype = rebind[sftype](
-        max(
-            feats[img_idx].layer1[chan, tr, tc],
-            feats[img_idx].layer1[chan, tr + 1, tc],
-        )
-    )
-    temp = max(
-        temp, rebind[sftype](feats[img_idx].layer1[chan, tr + 1, tc + 1])
-    )
-    temp = max(temp, rebind[sftype](feats[img_idx].layer1[chan, tr, tc + 1]))
-    feats[img_idx].layer2[chan, row, col] = temp
-
-
 def conv3FusedKernel[
     batch_size: Int
 ](
@@ -341,33 +311,34 @@ def conv2FusedKernel[
     )
 
 
-def conv1FusedKernel[
+def conv1PoolFusedKernel[
     batch_size: Int
 ](
     lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
 ) -> None:
-    """
+    """Conv1 + activation + 2x2 maxpool fused: input → layer2, layer1 never
+    touches global memory (its buffer is now dead in the GPU path).
+
     Grid Dim = (batch_size)
-    Block Dim = (LENGTH_FEATURE1, LENGTH_FEATURE1) = 28 x 28
-    One block per image, one thread per output pixel. Cooperatively stages
-    everything the block reuses into shared memory: all INPUT*LAYER1 5x5
-    weight kernels (150 floats), the padded 32x32 input (strided loads, 784
-    threads cover 1024 pixels), and the LAYER1 biases. After one barrier,
-    each thread computes all LAYER1=6 output channels for its (row, col) —
-    6 x 25 fully unrolled MACs against shared — and writes activated results
-    to layer1. Shared staging pays off here (unlike the pools) because every
-    input pixel is reused by up to 25 neighboring threads x 6 channels.
+    Block Dim = (LENGTH_FEATURE2, LENGTH_FEATURE2) = 14 x 14
+    One block per image, one thread per POOLED output pixel. Stages the same
+    shared data as the old conv1 (150 weight floats, padded 32x32 input, biases;
+    196 threads stride-load 1024 pixels). Each thread then computes the four
+    conv outputs of its 2x2 pool window in registers (6 oc x 4 px x 25 MACs
+    against shared) and writes the max. Pooling is applied post-activation to
+    stay bit-exact with the CPU path (act_fn isn't guaranteed monotonic — GELU).
     """
     # Single-channel only: the input staging + MAC loop below assume one input
     # channel (MNIST grayscale). Fail at compile time rather than silently
     # producing wrong results if INPUT is ever bumped for a multi-channel set.
     comptime assert INPUT == 1, (
-        "conv1FusedKernel hardcodes INPUT==1 (single channel); multi-channel"
-        " input not implemented"
+        "conv1PoolFusedKernel hardcodes INPUT==1 (single channel);"
+        " multi-channel input not implemented"
     )
+    comptime TPB = LENGTH_FEATURE2 * LENGTH_FEATURE2  # 196
     var img_idx = block_idx.x
-    var row = thread_idx.y
-    var col = thread_idx.x
+    var row = thread_idx.y  # pooled output row, range(LENGTH_FEATURE2)
+    var col = thread_idx.x  # pooled output col
     var flat_idx = row * block_dim.x + col
 
     var local_kernels = LayoutTensor[
@@ -394,7 +365,7 @@ def conv1FusedKernel[
         var r = tid // LENGTH_FEATURE0
         var c = tid % LENGTH_FEATURE0
         local_image[0, r, c] = feats[img_idx].input[0, r, c]
-        tid += LENGTH_FEATURE1 * LENGTH_FEATURE1
+        tid += TPB
 
     var local_biases = LayoutTensor[
         ftype,
@@ -402,24 +373,31 @@ def conv1FusedKernel[
         MutAnyOrigin,
         address_space=AddressSpace.SHARED,
     ].stack_allocation()
-    if row == 0 and col < LAYER1:
-        local_biases[col] = lenet.bias0_1[col]
+    if flat_idx < LAYER1:
+        local_biases[flat_idx] = lenet.bias0_1[flat_idx]
 
     barrier()
 
     comptime for oc in range(LAYER1):
-        var result: sftype = 0
-        comptime for ic in range(INPUT):
-            comptime for i in range(LENGTH_KERNEL):
-                comptime for j in range(LENGTH_KERNEL):
-                    var in_row = row + i
-                    var in_col = col + j
-                    result += rebind[sftype](
-                        local_image[ic, in_row, in_col]
-                    ) * rebind[sftype](local_kernels[ic, oc, i, j])
-        feats[img_idx].layer1[oc, row, col] = act_fn.simdForward(
-            result + local_biases[oc]
-        )
+        var best = sftype.MIN
+        comptime for pr in range(2):
+            comptime for pc in range(2):
+                var result: sftype = 0
+                comptime for ic in range(INPUT):
+                    comptime for i in range(LENGTH_KERNEL):
+                        comptime for j in range(LENGTH_KERNEL):
+                            var in_row = row * 2 + pr + i
+                            var in_col = col * 2 + pc + j
+                            result += rebind[sftype](
+                                local_image[ic, in_row, in_col]
+                            ) * rebind[sftype](local_kernels[ic, oc, i, j])
+                best = max(
+                    best,
+                    act_fn.simdForward(
+                        result + rebind[sftype](local_biases[oc])
+                    ),
+                )
+        feats[img_idx].layer2[oc, row, col] = best
 
 
 def printerGPU[
@@ -524,10 +502,9 @@ struct CompiledKernels[batch_size: Int](Movable):
         ]()
     )
     var conv1: type_of(
-        DeviceContext().compile_function[conv1FusedKernel[Self.batch_size]]()
-    )
-    var pool1: type_of(
-        DeviceContext().compile_function[maxPool1Kernel[Self.batch_size]]()
+        DeviceContext().compile_function[
+            conv1PoolFusedKernel[Self.batch_size]
+        ]()
     )
     var conv2: type_of(
         DeviceContext().compile_function[conv2FusedKernel[Self.batch_size]]()
@@ -546,8 +523,9 @@ struct CompiledKernels[batch_size: Int](Movable):
         self.norm = ctx.compile_function[
             normalizeInputsKernel[Self.batch_size]
         ]()
-        self.conv1 = ctx.compile_function[conv1FusedKernel[Self.batch_size]]()
-        self.pool1 = ctx.compile_function[maxPool1Kernel[Self.batch_size]]()
+        self.conv1 = ctx.compile_function[
+            conv1PoolFusedKernel[Self.batch_size]
+        ]()
         self.conv2 = ctx.compile_function[conv2FusedKernel[Self.batch_size]]()
         self.pool2 = ctx.compile_function[maxPool2Kernel[Self.batch_size]]()
         self.conv3 = ctx.compile_function[conv3FusedKernel[Self.batch_size]]()
@@ -723,13 +701,6 @@ struct StreamSlot[batch_size: Int](Movable):
             model,
             self.features_ptr,
             grid_dim=(Self.batch_size),
-            block_dim=(LENGTH_FEATURE1, LENGTH_FEATURE1),
-        )
-        self.ctx.enqueue_function(
-            kernels.pool1,
-            model,
-            self.features_ptr,
-            grid_dim=(Self.batch_size, LAYER1),
             block_dim=(LENGTH_FEATURE2, LENGTH_FEATURE2),
         )
         self.ctx.enqueue_function(

@@ -103,6 +103,61 @@ Check items off as they are completed.
 
 ## GPU Pipeline
 
+### Kernel audit 2026-07-02 (vs nsys baseline, results/kernel_baseline_2026-07-02.md)
+
+Ranked by share-of-kernel-time x fixability. No correctness bugs found (barriers,
+epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out).
+
+- [ ] **conv2 thread-axis remap — uncoalesced everything** (`accel/ops.mojo:290`) [29.6% share]
+  - block=(chan=4, col=10, row=10) puts `local_chan` on thread_idx.x, so consecutive warp
+    lanes differ by chan. Consequences: (1) `flat_idx = x*dim.y*dim.z + y*dim.z + z` makes the
+    local_image staging loop (`:317-325`) read global with lanes 100 elements apart — 32-way
+    uncoalesced; (2) output write `layer3[global_chan, row, col]` (`:339`) scatters lanes
+    stride-100. Fix: put col on thread_idx.x (block=(10,10,4) with col=x, row=y, chan=z) and
+    flatten `flat_idx = (z*dim.y + y)*dim.x + x`. Top kernel at 59.5 us median — likely the
+    single biggest cheap win.
+  - Secondary: each of the 4 chan-section blocks re-stages the same 1176-float layer2 image
+    (4x redundant global traffic). After the remap, sweep DIV_CHANS_CONV2=2 (block=800 thr,
+    ~9.5 KB shared) to halve restaging.
+
+- [ ] **conv3 weight transpose for coalescing** (`accel/ops.mojo:260`) [27.6% share]
+  - Inner MAC reads `weight4_5[ic, oc, kw, kh]` with lanes varying oc → stride-25 global
+    reads, 400 loads/thread, 192 KB/block all uncoalesced (weights too big for shared).
+    Transpose device copy to [ic, kw, kh, oc] (oc contiguous → lanes consecutive) at
+    loadCPUWeights time; kernel indexing change only. Cheap Tier-A½ before the Tier B GEMM.
+  - Pairs with existing Tier A pad item (120→128 threads, `:751` area).
+
+- [ ] **Fuse pool1 into conv1 epilogue** (`accel/ops.mojo:202`) [12.7% share]
+  - maxPool1 costs MORE than conv1 (22.6 vs 19.2 us median) for 4 loads + 1 store/thread:
+    launch overhead + 196-thread blocks (6.1 warps) + stride-2 uncoalesced reads. conv1
+    already has all of layer1 in registers/shared at write time — pool in the epilogue
+    (28x28 threads compute, 14x14 subset writes pooled layer2), delete the kernel + the
+    layer1 global roundtrip. Same pattern later for pool2 into conv2 [4.4% share].
+
+- [ ] **Pooling: 2x2 window hardcoded; parameterize window + op** (`accel/ops.mojo` fused conv1
+  kernel `range(2)` loops + `row*2`; `maxPool2Kernel` `tr = row*2`; CPU pools derive the window
+  from in/out sizes but are only exercised at 2x2)
+  - Make window a comptime param, and while there: comptime pool-op selector (max | avg) —
+    avg is ~free in the fused conv1 kernel (sum the 4 activations, *0.25) and is the
+    historically-correct LeNet-5 choice (original used avg pool with learned coefficients).
+
+- [ ] **normalize: one fused reduction + reciprocal** (`accel/ops.mojo:93`) [6.2% share]
+  - Two sequential block.sum calls (each with internal barriers) → pack (pix, pix^2) into
+    one SIMD[ftype,2] block.sum if supported, else warp-level two-phase. Replace per-thread
+    `(pix-mean)/std` divide with `* inv_std` computed once by thread 0.
+  - Numerical note: variance = E[x^2]-E[x]^2 in fp32 over 784 uint8^2 values flirts with
+    mantissa limits (sq sums to ~5e7 > 2^24); fine at 96% accuracy today, revisit if
+    accuracy debugging ever points here.
+
+- [ ] **matMul block.sum kernel** (`accel/ops.mojo:122`) [9.7% share] — superseded by the
+  in-flight GPU GEMM work (tests/gemm.mojo skeleton). If it survives: weight5_6[thread, oc]
+  reads are stride-10; transpose to [oc, thread] coalesces.
+
+- [ ] **Misc**: dead `lenet` param on both pool kernels; maxPool2 has the same chan-on-x
+  scatter (low stakes at 4.4%); partial-warp blocks (784=24.5w conv1, 196=6.1w pool1,
+  120=3.75w conv3) — conv3 pad already a TODO, others matter less than the items above.
+
+
 - [x] **Ping-pong streaming: overlap H2D copy with compute** (`accel/ops.mojo`, `main.mojo`)
   - Already implemented via `batchedForwardMultiStream` with configurable `NUM_GPU_STREAMS`.
 
