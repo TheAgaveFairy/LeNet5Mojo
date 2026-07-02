@@ -1,3 +1,5 @@
+"""GPU per-image activation buffers and their kernel-side views."""
+
 from layout import LayoutTensor
 from cpu.arena import ArenaSizable
 from origin_util import untrack

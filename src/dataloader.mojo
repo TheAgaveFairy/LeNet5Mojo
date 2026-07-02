@@ -1,3 +1,5 @@
+"""MNIST loading: `MNISTDataRepository` and the `MNISTDataView` batch view."""
+
 import std.os as os
 from std.pathlib import Path
 from std.memory import memcpy
@@ -14,7 +16,7 @@ from constants import DEFAULT_SEED
 struct MNISTDataView[
     is_mutable: Bool,
     //,
-    origin: Origin[mut = is_mutable],
+    origin: Origin[mut=is_mutable],
 ](Sized, TrivialRegisterPassable):
     var raw_pixels: Span[UInt8, Self.origin]
     var raw_labels: Span[UInt8, Self.origin]
@@ -160,7 +162,9 @@ struct MNISTDataRepository:
             with open(image_file, "r") as data_file:
                 with open(label_file, "r") as label_handle:
                     _ = data_file.seek(16, os.SEEK_SET)  # skip IDX image header
-                    _ = label_handle.seek(8, os.SEEK_SET)  # skip IDX label header
+                    _ = label_handle.seek(
+                        8, os.SEEK_SET
+                    )  # skip IDX label header
                     for c in range(count):
                         var data_list = data_file.read_bytes(size)  # List[Byte]
                         var temp = label_handle.read_bytes(1)
@@ -173,7 +177,9 @@ struct MNISTDataRepository:
             raise Error(t"Error with input MNIST {split} binary files: {e}.")
 
     # TODO: consider combining into one method for test and train and use arg to pick
-    def getTrainBatch(self, start: Int, end: Int) -> MNISTDataView[origin=origin_of(self)]:
+    def getTrainBatch(
+        self, start: Int, end: Int
+    ) -> MNISTDataView[origin=origin_of(self)]:
         """Get a view / span / slice from the arena directly as raw Bytes."""
         if end <= start or end > Self.COUNT_TRAIN:
             print(
@@ -187,11 +193,15 @@ struct MNISTDataRepository:
         var l_ptr = rebind[UnsafePointer[UInt8, origin_of(self)]](
             self._train_labels_arena.buffer + start
         )
-        var pixels_span = Span(ptr=p_ptr, length=(end - start) * image_size_in_bytes)
+        var pixels_span = Span(
+            ptr=p_ptr, length=(end - start) * image_size_in_bytes
+        )
         var labels_span = Span(ptr=l_ptr, length=(end - start))
         return MNISTDataView(pixels_span, labels_span)
 
-    def getTestBatch(self, start: Int, end: Int) -> MNISTDataView[origin=origin_of(self)]:
+    def getTestBatch(
+        self, start: Int, end: Int
+    ) -> MNISTDataView[origin=origin_of(self)]:
         """Get a view / span / slice from the arena directly as raw Bytes."""
         if end <= start or end > Self.COUNT_TEST:
             print(
@@ -205,7 +215,9 @@ struct MNISTDataRepository:
         var l_ptr = rebind[UnsafePointer[UInt8, origin_of(self)]](
             self._test_labels_arena.buffer + start
         )
-        var pixels_span = Span(ptr=p_ptr, length=(end - start) * image_size_in_bytes)
+        var pixels_span = Span(
+            ptr=p_ptr, length=(end - start) * image_size_in_bytes
+        )
         var labels_span = Span(ptr=l_ptr, length=(end - start))
         return MNISTDataView(pixels_span, labels_span)
 

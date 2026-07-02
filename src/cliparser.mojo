@@ -1,3 +1,5 @@
+"""A small declarative CLI parser (standalone demo; the app uses `cli`)."""
+
 from std.sys import argv, stderr, exit
 
 

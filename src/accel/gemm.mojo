@@ -23,8 +23,9 @@ from accel.model import LeNet5GPU
 from accel.feature import FeatureGPU, FeatureGPUBuffers
 from origin_util import untrack, untrack_imm
 
+
 def gemm3[
-        batch_size: Int
+    batch_size: Int
 ](
     lenet: LeNet5GPU,
     feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin],
@@ -38,7 +39,7 @@ def gemm3[
     var img_idx = block_idx.x
     var r = thread_idx.y
     var c = thread_idx.x
-    
+
 
 def matMulFusedKernel[
     batch_size: Int
@@ -86,4 +87,3 @@ def matMulFusedKernel[
 
     if thread == 0:
         guesses[img_idx] = best_idx
-

@@ -1,3 +1,5 @@
+"""CSV logging of training epochs and inference runs via field reflection."""
+
 from std.subprocess import run  # var current = run("date")
 import std.os as os
 from std.reflection import reflect

@@ -1,3 +1,5 @@
+"""GPU model storage: `LeNet5GPU`, its device buffers, and `DeviceSession`."""
+
 from layout import LayoutTensor
 
 from std.gpu.host import DeviceContext, DeviceBuffer

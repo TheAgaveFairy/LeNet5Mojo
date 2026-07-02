@@ -1,3 +1,5 @@
+"""GPU forward-pass kernels and the batched multi-stream inference pipeline."""
+
 from layout import Layout, LayoutTensor
 from std.math import abs, sqrt, max
 from std.bit import next_power_of_two  # prev_power_of_two

@@ -1,3 +1,5 @@
+"""CPU forward/backward kernels and the parallel train/test drivers."""
+
 from layout import LayoutTensor, Layout
 from std.math import exp, sqrt, log
 from std.algorithm.functional import vectorize

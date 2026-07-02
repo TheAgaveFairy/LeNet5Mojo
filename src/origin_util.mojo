@@ -1,3 +1,5 @@
+"""Helpers for erasing LayoutTensor origins to untracked for struct storage."""
+
 from layout import Layout, LayoutTensor
 
 

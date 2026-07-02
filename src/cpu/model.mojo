@@ -1,3 +1,5 @@
+"""CPU `LeNet5` weights and `Feature` activation buffers, with save/load."""
+
 from layout import Layout, LayoutTensor
 from std.math import sqrt, exp, log
 from std.random import random_float64, rand

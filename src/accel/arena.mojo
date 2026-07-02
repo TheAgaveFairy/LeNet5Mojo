@@ -1,3 +1,5 @@
+"""GPU allocators: a device bump arena and a system-allocator fallback."""
+
 from layout import Layout, LayoutTensor
 
 from std.gpu import thread_idx

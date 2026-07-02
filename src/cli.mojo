@@ -1,3 +1,5 @@
+"""Runtime CLI arguments and `--help` text for the model binary."""
+
 from std.sys import argv, stderr
 
 from constants import NUM_GPU_STREAMS, GPU_STREAM_BATCH_SIZE, DEFAULT_SEED

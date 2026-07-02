@@ -1,3 +1,5 @@
+"""Entry point: CPU train/test and the batched GPU inference pipeline."""
+
 from std.subprocess import run as subProcessRun
 from std.random import seed
 from std.sys.info import num_logical_cores

@@ -1,3 +1,5 @@
+"""The `Image` type: raw MNIST pixels with on-demand normalization."""
+
 from layout import Layout, LayoutTensor
 from std.math import sqrt
 from std.memory import memcpy

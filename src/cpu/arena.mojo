@@ -1,3 +1,5 @@
+"""CPU allocators: a bump arena and a system-allocator fallback."""
+
 from layout import Layout, LayoutTensor
 
 # from attention import Weights, ModelParams
