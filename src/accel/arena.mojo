@@ -18,6 +18,9 @@ comptime TILE_SIZE = ROWS * COLS
 
 
 trait GPUAllocator(ImplicitlyDeletable, Movable):
+    """Uniform device-allocator interface — mirrors CPU `CPUAllocator` (System ignores capacity).
+    """
+
     def __init__(out self, ctx: DeviceContext, capacity_bytes: Int) raises:
         ...
 
@@ -59,6 +62,8 @@ struct GPUBumpArenaAllocator(GPUAllocator):
         self.offset = take.offset
 
     def alloc[dtype: DType](mut self, count: Int) raises -> DeviceBuffer[dtype]:
+        """Bump-allocate `count` items of `dtype` as a typed sub-buffer, padding for alignment.
+        """
         var elem_size = size_of[Scalar[dtype]]()
         var alignment = align_of[Scalar[dtype]]()
         var aligned_offset = (self.offset + alignment - 1) & ~(alignment - 1)
@@ -85,6 +90,7 @@ struct GPUBumpArenaAllocator(GPUAllocator):
         self.offset = 0
 
     def base_address(self) -> Int:
+        """Slab's device pointer as an integer (for offset checks in tests)."""
         return Int(self.buffer.unsafe_ptr())
 
 
@@ -107,6 +113,8 @@ struct GPUSystemAllocator(GPUAllocator):
         self._allocations = take._allocations^
 
     def alloc[dtype: DType](mut self, count: Int) raises -> DeviceBuffer[dtype]:
+        """Create an independent `DeviceBuffer` of `count` items of `dtype` and track it.
+        """
         var elem_size = size_of[Scalar[dtype]]()
         var raw = self._ctx.enqueue_create_buffer[DType.uint8](
             count * elem_size

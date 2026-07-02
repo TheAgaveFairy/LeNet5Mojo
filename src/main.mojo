@@ -52,6 +52,10 @@ comptime N_PASSES = defines.get_defined_int["N_PASSES", 10]()
 
 
 def main() raises:
+    """Entry point. `--bench-only` loads a saved model and benchmarks CPU + GPU
+    inference; otherwise trains on CPU, saves, reloads, tests, then runs the GPU
+    pipeline.
+    """
     var cli = CliArgs.parse()
     if cli.help:
         printHelp()
@@ -66,7 +70,8 @@ def main() raises:
 
     var data_repo = MNISTDataRepository()
 
-    if cli.bench_only: # cli.bench_only
+    if cli.bench_only:
+        # load a previously trained model and benchmark CPU + GPU inference only
         var model_path = String("models/deleteme.test")
         if not os.path.exists(model_path):
             print("cannot load model: file not found:", model_path, file=stderr)
@@ -89,7 +94,9 @@ def main() raises:
             modelCPU, data_repo.test_data, bench_logger
         )
         var testing_ms = infer_res.elapsed_ns // 1_000_000
-        var cpu_fps = UInt(infer_res.count) * 1_000_000_000 // infer_res.elapsed_ns
+        var cpu_fps = (
+            UInt(infer_res.count) * 1_000_000_000 // infer_res.elapsed_ns
+        )
         var accuracy_pct = infer_res.correct * 100 // infer_res.count
         print(
             t"alloc=bench, act_fn={act_name}, threads={threads},"
@@ -100,6 +107,7 @@ def main() raises:
         runGPUTest(modelCPU, data_repo, run_id, num_streams)
         benchmark.keep(data_repo)
     else:
+        # full run: init weights, train + test on CPU, save, then reload and GPU-test
         comptime cpu_batch_size = 300
         comptime train_name = "models/deleteme.test"
         seed(cli.seed)
@@ -123,7 +131,7 @@ def main() raises:
             print(e, file=stderr)
 
         # load the model saved above and test it independently
-        comptime model_name = train_name#"models/deleteme.test"
+        comptime model_name = train_name  # "models/deleteme.test"
         print("Loading and testing a saved model: '" + model_name + "'")
         var modelCPU = LeNet5()
         modelCPU.loadFromFile[ftype](model_name)
@@ -132,17 +140,20 @@ def main() raises:
         print("\t", saved_res.elapsed_ns // 1_000_000, "ms")
 
         runGPUTest(modelCPU, data_repo, run_id, num_streams)
-        #benchmark.keep(data_repo)
+        # benchmark.keep(data_repo)
 
 
 @fieldwise_init
 struct TimingStats(Copyable, Movable):
+    """Median, min, and max of a set of timed passes."""
+
     var median_ns: UInt
     var min_ns: UInt
     var max_ns: UInt
 
 
 def _timing_stats(mut times: List[UInt]) -> TimingStats:
+    """Sort `times` in place and reduce to median/min/max."""
     sort(Span(times))  # default ascending sort (UInt is Comparable)
     var n = len(times)
     var median = (times[n // 2] + times[(n - 1) // 2]) // 2
@@ -151,11 +162,15 @@ def _timing_stats(mut times: List[UInt]) -> TimingStats:
 
 @fieldwise_init
 struct TrainingSummary(Copyable, Movable):
+    """Wall-clock time of one training run."""
+
     var elapsed_ns: UInt
 
 
 @fieldwise_init
 struct InferenceSummary(Copyable, Movable):
+    """Accuracy and wall-clock time of one inference run."""
+
     var correct: Int
     var count: Int
     var elapsed_ns: UInt
@@ -169,6 +184,9 @@ def runTrain(
     parallel: Bool = True,
     batch_size: Int = 300,
 ) -> TrainingSummary:
+    """Train `model` over one epoch of `data`, timed. `parallel` selects the
+    multi-threaded path.
+    """
     var start_time = perf_counter_ns()
     if parallel:
         trainingParallel(model, data, batch_size, logger)
@@ -184,6 +202,8 @@ def runTest(
     *,
     parallel: Bool = True,
 ) -> InferenceSummary:
+    """Run `model` over `data` once, timed, logging the result if `logger` is given.
+    """
     var start_time = perf_counter_ns()
     var correct: Int
     if parallel:
@@ -208,6 +228,9 @@ def benchCPUInference(
     *,
     parallel: Bool = True,
 ) raises -> InferenceSummary:
+    """Benchmark CPU inference: `N_WARMUP` warmup passes, then `N_PASSES` timed,
+    reported as median/min/max. Accuracy is taken from the first timed pass.
+    """
     for _ in range(N_WARMUP):
         var warmup = runTest(model, data, parallel=parallel)
         benchmark.keep(warmup)
@@ -243,6 +266,9 @@ def trainAndTest(
     parallel: Bool = True,
     batch_size: Int = 300,
 ) raises:
+    """Train then benchmark `model` on CPU, logging both under run-tagged filenames
+    and printing a one-line summary. `alloc` labels the allocator in effect.
+    """
     var act_name = materialize[act_fn_name]()
     var threads = 1 if not parallel else num_logical_cores()
     var infer_name = t"mode=infer_alloc={alloc}_thread={threads}_bs={batch_size}_act={act_name}_run={run_id}"
@@ -292,6 +318,10 @@ def runGPUTest(
     run_id: String,
     num_streams: Int = NUM_GPU_STREAMS,
 ) raises:
+    """Upload `model`'s weights, compile the kernels, and benchmark the batched
+    multi-stream GPU pipeline over the test set (warmup + timed passes, median
+    reported). The partial trailing batch is dropped.
+    """
     comptime batch_size = GPU_STREAM_BATCH_SIZE
     with DeviceContext() as ctx:
         comptime alloc_name = reflect[GPU_ALLOCATOR].base_name()

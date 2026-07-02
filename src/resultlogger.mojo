@@ -10,6 +10,8 @@ from constants import act_fn
 # below instead of kept as a DType (which reflects as lowercase "float32"). Adding
 # a CSV column is now just adding a struct field; toCSV/getHeaders never change.
 def reflectHeaders[T: AnyType]() -> String:
+    """Comma-joined field names of `T` — the CSV header for any log-entry struct.
+    """
     comptime names = reflect[T].field_names()
     var line = String("")
     comptime for i in range(reflect[T].field_count()):
@@ -20,20 +22,27 @@ def reflectHeaders[T: AnyType]() -> String:
 
 
 def reflectCSV[T: AnyType](ref s: T) -> String:
+    """Comma-joined field values of `s` — one CSV row. Every field must be `Writable`.
+    """
     var line = String("")
     comptime for i in range(reflect[T].field_count()):
         if i > 0:
             line += ","
         ref fr = reflect[T].field_ref[i](s)
         comptime assert conforms_to(type_of(fr), Writable), (
-            "reflectCSV: every field of " + reflect[T].name() + " must be Writable"
+            "reflectCSV: every field of "
+            + reflect[T].name()
+            + " must be Writable"
         )
         line += String(trait_downcast[Writable](fr))
     return line^
 
 
 @fieldwise_init
-struct LogFormat(Copyable, Movable, ImplicitlyCopyable):
+struct LogFormat(Copyable, ImplicitlyCopyable, Movable):
+    """Enum-style output format tag. `CSV` is implemented; `JSON` is reserved.
+    """
+
     var value: Int  # enum esque
 
     comptime CSV = LogFormat(0)
@@ -47,6 +56,8 @@ struct LogFormat(Copyable, Movable, ImplicitlyCopyable):
 
 
 trait LogEntry:
+    """A row that can serialize itself and supply its own header."""
+
     def toCSV(self) -> String:
         ...
 
@@ -58,6 +69,9 @@ trait LogEntry:
 
 
 struct InferenceResult(LogEntry):
+    """One inference run: device, timing, accuracy, and the config it ran under.
+    """
+
     var timestamp: String
     var device: String
     var elapsed_ns: UInt  # perf_counter_ns() -> UInt
@@ -102,6 +116,8 @@ struct InferenceResult(LogEntry):
 
 
 struct TrainingResult(LogEntry):
+    """One training epoch: device, timing, accuracy, loss, and learning rate."""
+
     var timestamp: String
     var device: String
     var epoch: Int
@@ -149,6 +165,8 @@ struct TrainingResult(LogEntry):
 
 
 trait MyLogger:
+    """Sink for training-epoch and inference-run records."""
+
     def logInferenceResult(
         self,
         device: String,
@@ -178,7 +196,10 @@ trait MyLogger:
 comptime LeNet5Logger = MyLogger & Copyable
 
 
-struct ResultLogger(LeNet5Logger, ImplicitlyCopyable):
+struct ResultLogger(ImplicitlyCopyable, LeNet5Logger):
+    """Appends records to one file, writing the header first if the file is new.
+    """
+
     var output_path: String
     var format_type: LogFormat
 
@@ -233,6 +254,8 @@ struct ResultLogger(LeNet5Logger, ImplicitlyCopyable):
         self._writeResult(result)
 
     def _writeResult[T: LogEntry](self, result: T) raises -> None:
+        """Append `result` as a row, prepending the header when the file is created.
+        """
         var content = String("")
         if not os.path.exists(self.output_path):
             if self.format_type == materialize[LogFormat.CSV]():
@@ -248,7 +271,10 @@ struct ResultLogger(LeNet5Logger, ImplicitlyCopyable):
 
 
 @fieldwise_init
-struct MultiFileLogger(LeNet5Logger, ImplicitlyCopyable):
+struct MultiFileLogger(ImplicitlyCopyable, LeNet5Logger):
+    """Routes inference and training records to separate files under `base_path`.
+    """
+
     var base_path: String
     var format_type: LogFormat
     var inference_logger: ResultLogger

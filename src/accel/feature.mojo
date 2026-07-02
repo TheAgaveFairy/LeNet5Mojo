@@ -17,7 +17,7 @@ from image import Image
 from accel.arena import GPUBumpArenaAllocator
 
 
-struct FeatureGPUBuffers(Movable, ArenaSizable):
+struct FeatureGPUBuffers(ArenaSizable, Movable):
     """CPU-side — holds DeviceBuffer handles for host ops (map_to_host, loadInput, etc.).
     Owns the arena sub-buffer refs; FeatureGPU's LayoutTensors point into these.
     Arena must outlive both this struct and any FeatureGPU built from it.
@@ -51,9 +51,7 @@ struct FeatureGPUBuffers(Movable, ArenaSizable):
         Arena already zero-fills on creation; no enqueue_fill needed here.
         """
         self.allocator_owns_memory = True
-        self.input = arena.alloc[ftype](
-            comptime (FeatureLayouts.input.size())
-        )
+        self.input = arena.alloc[ftype](comptime (FeatureLayouts.input.size()))
         self.layer1 = arena.alloc[ftype](
             comptime (FeatureLayouts.layer1.size())
         )
@@ -74,6 +72,9 @@ struct FeatureGPUBuffers(Movable, ArenaSizable):
         )
 
     def __init__(out self, ctx: DeviceContext) raises:
+        """Standalone variant: allocate each layer buffer directly from `ctx` and
+        zero-fill, bypassing the arena.
+        """
         self.allocator_owns_memory = False
         self.input = ctx.enqueue_create_buffer[ftype](
             comptime (FeatureLayouts.input.size())
@@ -105,7 +106,9 @@ struct FeatureGPUBuffers(Movable, ArenaSizable):
         self.output.enqueue_fill(0.0)
 
     # left for debugging
-    @deprecated("This synchronizes on every call. There are much better patterns.")
+    @deprecated(
+        "This synchronizes on every call. There are much better patterns."
+    )
     def loadInput(mut self, image: Image) -> None:
         try:
             with self.input.map_to_host() as load_me:
@@ -144,6 +147,8 @@ struct FeatureGPU(Copyable, DevicePassable, Movable):
         encoder.encode(self, target)
 
     def __init__(out self, bufs: FeatureGPUBuffers):
+        """Wire LayoutTensor views over `bufs`' device buffers — no allocation or GPU work.
+        """
         var b_input = bufs.input
         var b_layer1 = bufs.layer1
         var b_layer2 = bufs.layer2
@@ -152,9 +157,21 @@ struct FeatureGPU(Copyable, DevicePassable, Movable):
         var b_layer5 = bufs.layer5
         var b_output = bufs.output
         self.input = untrack(LayoutTensor[ftype, FeatureLayouts.input](b_input))
-        self.layer1 = untrack(LayoutTensor[ftype, FeatureLayouts.layer1](b_layer1))
-        self.layer2 = untrack(LayoutTensor[ftype, FeatureLayouts.layer2](b_layer2))
-        self.layer3 = untrack(LayoutTensor[ftype, FeatureLayouts.layer3](b_layer3))
-        self.layer4 = untrack(LayoutTensor[ftype, FeatureLayouts.layer4](b_layer4))
-        self.layer5 = untrack(LayoutTensor[ftype, FeatureLayouts.layer5](b_layer5))
-        self.output = untrack(LayoutTensor[ftype, FeatureLayouts.output](b_output))
+        self.layer1 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer1](b_layer1)
+        )
+        self.layer2 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer2](b_layer2)
+        )
+        self.layer3 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer3](b_layer3)
+        )
+        self.layer4 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer4](b_layer4)
+        )
+        self.layer5 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer5](b_layer5)
+        )
+        self.output = untrack(
+            LayoutTensor[ftype, FeatureLayouts.output](b_output)
+        )

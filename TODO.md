@@ -503,6 +503,8 @@ Check items off as they are completed.
   - FIXME at :364 — `Scalar.from_bytes(buffer, big_endian=...)` errored, fell back to default; investigate
     or file upstream (see Upstream section). TODO at :433 — make the manual `is_big_endian()` swap a
     function parameter / arg check instead of comptime-only.
+  - Once round-trip endian support actually works, update the `_writeTensor` docstring
+    (`cpu/model.mojo`) — it currently flags the feature as incomplete.
 
 ### New markers (added 2026-06-30 pen-and-paper audit)
 
