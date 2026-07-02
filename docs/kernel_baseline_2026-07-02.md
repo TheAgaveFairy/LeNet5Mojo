@@ -19,6 +19,21 @@ Max/stddev columns are inflated by multi-stream contention (maxes 0.6–1.0 ms);
 ignore them for kernel-vs-kernel comparisons. memcpy: H2D 4.4 µs avg ×615,
 D2H 1.4 µs ×601.
 
+## Post-fusion + remap snapshot (2026-07-02 PM, quiet machine)
+
+| kernel           | time % | med (µs) | min (µs) |
+|------------------|--------|----------|----------|
+| conv2Fused       | 39.0   | 68.2     | 53.6     |
+| conv3Fused       | 33.8   | 66.9     | 24.7     |
+| conv1PoolFused   | 8.6    | 11.2     | 8.8      |
+| normalizeInputs  | 8.2    | 14.3     | 7.6      |
+| matMulFused      | 7.4    | 9.9      | 5.9      |
+| maxPool2         | 3.0    | 3.7      | 2.6      |
+
+E2e quiet-machine reference: 1.24M fps (bs=100, s=5). Fusion +18% interleaved;
+conv2 remap + pool2 remap e2e-flat (conv2 kernel unchanged — cache absorbed the
+scatter; pool2 -20% but 3% share). DIV_CHANS_CONV2=2: no (min regressed).
+
 ## End-to-end (main --bench-only, median of 10 passes, 10k test images)
 
 - Config grid bs ∈ {50,100,200,500,1000} × streams ∈ {3,4,5,6,8}: best cells
@@ -45,3 +60,10 @@ PyTorch. The rules below are about *signal quality per question*, not priority.
    disable TF32 in torch/JAX or state it).
 3. Sweep stream count at runtime (`--num-streams`), batch size needs
    `-D GPU_STREAM_BATCH_SIZE` rebuild.
+4. **A/B claims: interleave both binaries in one session.** Post-hoc lesson:
+   the morning e2e numbers above (676-926k, +/-16%) were environmentally
+   depressed (concurrent dev work on the box). Same code on a quiet machine:
+   1.05M fps at +/-0.7%. The pool-fusion delta measured against the stale
+   baseline looked like +35%; interleaved A/B said +18% (1.050M -> 1.239M).
+5. **Rep spread is the machine-quietness check**: +/-<1% = trustworthy run;
+   +/->10% = something else is using the box, discard and re-run.

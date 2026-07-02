@@ -108,7 +108,12 @@ Check items off as they are completed.
 Ranked by share-of-kernel-time x fixability. No correctness bugs found (barriers,
 epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out).
 
-- [ ] **conv2 thread-axis remap — uncoalesced everything** (`accel/ops.mojo:290`) [29.6% share]
+- [x] **conv2 thread-axis remap — uncoalesced everything** (`accel/ops.mojo:290`) [29.6% share]
+  - DONE 2026-07-02, and the coalescing theory LOST: conv2 median/min flat (68/54us) — the
+    4.7KB staged image sat in L1/L2, cache absorbed the scatter. maxPool2 got -20%. Kept
+    anyway (convention: x = contiguous dim). DIV_CHANS_CONV2=2 also tried: median flat, min
+    regressed 10% (residency). conv2's real cost is elsewhere — next: `pixi run ncuprofile_gpu`
+    stall analysis, or wait for the SoA/batched restructure to change the kernel shape entirely.
   - block=(chan=4, col=10, row=10) puts `local_chan` on thread_idx.x, so consecutive warp
     lanes differ by chan. Consequences: (1) `flat_idx = x*dim.y*dim.z + y*dim.z + z` makes the
     local_image staging loop (`:317-325`) read global with lanes 100 elements apart — 32-way

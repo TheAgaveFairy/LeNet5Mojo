@@ -174,14 +174,16 @@ def maxPool2Kernel[
     lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
 ) -> None:
     """
-    Runs as block_dim = (LAYER4, LF4, LF4) = 16 * 5 * 5 = 400, grid_dim = (batch_size).
+    Runs as block_dim = (LF4, LF4, LAYER4) = 5 * 5 * 16 = 400, grid_dim = (batch_size).
     One thread per output. 2x2 non-overlapping pool has no data reuse, so inputs
     are read straight from global — shared staging was pure overhead.
+    col on thread_idx.x: lanes column-consecutive (stride-2 reads, stride-1
+    writes) instead of chan-consecutive (stride-100 scatter).
     """
     var img_idx = block_idx.x
-    var row = thread_idx.z  # range(LENGTH_FEATURE4)
-    var col = thread_idx.y  # range(LENGTH_FEATURE4)
-    var chan = thread_idx.x  # range(LAYER4)
+    var row = thread_idx.y  # range(LENGTH_FEATURE4)
+    var col = thread_idx.x  # range(LENGTH_FEATURE4)
+    var chan = thread_idx.z  # range(LAYER4)
 
     var tr = row * 2
     var tc = col * 2
@@ -244,7 +246,10 @@ def conv2FusedKernel[
     """Conv2 + activation, one thread per output pixel, output channels split into
     `div_chans_conv2` sections. Stages the kernels and input tile into shared memory.
     Grid Dim = (batch_size, channel_divisions).
-    Block Dim = (LAYER3 // div_chans, LENGTH_FEATURE3, LENGTH_FEATURE3).
+    Block Dim = (LENGTH_FEATURE3, LENGTH_FEATURE3, LAYER3 // div_chans).
+    col on thread_idx.x so warp lanes are column-consecutive: coalesced image
+    staging + output writes, broadcast kernel-weight reads (chan on x scattered
+    all three, stride-100 lanes).
     """
     comptime CHANS_TO_HANDLE = LAYER3 // div_chans_conv2
     comptime assert LAYER3 % div_chans_conv2 == 0, "conv2 chan div ! %=0"
@@ -252,16 +257,14 @@ def conv2FusedKernel[
 
     var img_idx = block_idx.x
     var chans_section = block_idx.y
-    var local_chan = thread_idx.x
-    var col = thread_idx.y
-    var row = thread_idx.z
+    var col = thread_idx.x
+    var row = thread_idx.y
+    var local_chan = thread_idx.z
     var offset = chans_section * CHANS_TO_HANDLE
     var global_chan = local_chan + offset
     var flat_idx = (
-        thread_idx.x * block_dim.y * block_dim.z
-        + thread_idx.y * block_dim.z
-        + thread_idx.z
-    )
+        thread_idx.z * block_dim.y + thread_idx.y
+    ) * block_dim.x + thread_idx.x
 
     var local_kernels = LayoutTensor[
         ftype,
@@ -709,9 +712,9 @@ struct StreamSlot[batch_size: Int](Movable):
             self.features_ptr,
             grid_dim=(Self.batch_size, div_chans_conv2),
             block_dim=(
+                LENGTH_FEATURE3,
+                LENGTH_FEATURE3,
                 LAYER3 // div_chans_conv2,
-                LENGTH_FEATURE3,
-                LENGTH_FEATURE3,
             ),
         )
         self.ctx.enqueue_function(
@@ -719,7 +722,7 @@ struct StreamSlot[batch_size: Int](Movable):
             model,
             self.features_ptr,
             grid_dim=(Self.batch_size),
-            block_dim=(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4),
+            block_dim=(LENGTH_FEATURE4, LENGTH_FEATURE4, LAYER4),
         )
         self.ctx.enqueue_function(
             kernels.conv3,
