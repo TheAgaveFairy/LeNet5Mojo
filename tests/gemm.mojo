@@ -90,6 +90,8 @@ def tiledCPU[
     comptime N = b.shape[1]()
 
     comptime assert bias_layout.size() == M, "bias must be (M,)"
+    # zero-padded tiles mean no ragged SIMD tail — divisibility is all we need
+    comptime assert TILE_SIZE % nelts == 0, "TILE_SIZE must be a multiple of nelts"
 
     comptime tile_layout = Layout.row_major(TILE_SIZE, TILE_SIZE)
     comptime BM = ceildiv(M, TILE_SIZE)
@@ -133,13 +135,16 @@ def tiledCPU[
 
                 # can combine those two packs into the same n^2 control flow or make into a fn()
 
-                # "matmul", naive here (can SIMD etc later)
+                # SIMD dot-product microkernel: both tile rows unit-stride
+                # (tb transposed), FMA accumulate, one horizontal reduce per output
                 for ti in range(TILE_SIZE):
                     for tj in range(TILE_SIZE):
-                        var accum = sftype(0.0)
-                        for tk in range(TILE_SIZE):
-                            accum += rebind[sftype](ta[ti, tk] * tb[tj, tk]) # b-tile is transposed
-                        tc[ti, tj] += accum
+                        var accum = SIMD[ftype, nelts](0.0)
+                        comptime for tk in range(0, TILE_SIZE, nelts):
+                            var x = ta.ptr.load[width=nelts](ti * TILE_SIZE + tk)
+                            var y = tb.ptr.load[width=nelts](tj * TILE_SIZE + tk)
+                            accum = x.fma(y, accum)
+                        tc[ti, tj] += accum.reduce_add()
 
             # store tc into global c output (bias + optional act epilogue here)
             var global_m = bm * TILE_SIZE
