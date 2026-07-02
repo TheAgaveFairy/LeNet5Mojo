@@ -70,7 +70,7 @@ def naiveCPU[
             for k in range(K):
                 accum += rebind[sftype](a[i, k] * b[k, j])
             comptime if epilogue_act:
-                accum = act_fn.simdForward[ftype, 1](accum)
+                accum = act_fn.simdForward(accum)
             c[i, j] = accum
 
 def tiledCPU[
@@ -155,7 +155,7 @@ def tiledCPU[
                     if global_m + ti < M and global_n + tj < N:
                         var v = rebind[sftype](tc[ti, tj]) + rebind[sftype](bias[global_m + ti])
                         comptime if epilogue_act:
-                            v = act_fn.simdForward[ftype, 1](v)
+                            v = act_fn.simdForward(v)
                         c[global_m + ti, global_n + tj] = v
 
     ta.ptr.free()
@@ -198,7 +198,7 @@ def gemmGPUKernel[
         for k in range(K):
             accum += rebind[sftype](a[row, k] * b[k, col])
         comptime if epilogue_act:
-            accum = act_fn.simdForward[ftype, 1](accum)
+            accum = act_fn.simdForward(accum)
         c[row, col] = accum
 
 
@@ -328,7 +328,7 @@ def verify[M: Int, K: Int, N: Int, epilogue_act: Bool = False]() raises:
         for j in range(N):
             var v = rebind[sftype](c_ref[i, j]) + rebind[sftype](bias[i])
             comptime if epilogue_act:
-                v = act_fn.simdForward[ftype, 1](v)
+                v = act_fn.simdForward(v)
             c_ref[i, j] = v
 
     naiveCPU[epilogue_act=epilogue_act](a, b, c_out, bias)
