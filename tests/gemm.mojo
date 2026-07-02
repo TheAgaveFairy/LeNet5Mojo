@@ -18,7 +18,8 @@ from std.gpu.host import (
     HostBuffer,
     DeviceFunction,
 )
-from std.gpu import thread_idx, block_idx, block_dim, barrier
+from std.gpu import thread_idx, block_idx, block_dim, barrier, global_idx
+from std.sys import has_accelerator
 from std.gpu.primitives import block
 from std.gpu.memory import AddressSpace
 
@@ -160,6 +161,123 @@ def tiledCPU[
     ta.ptr.free()
     tb.ptr.free()
     tc.ptr.free()
+
+# --- GPU ------------------------------------------------------------------
+# Same contract as the CPU fns: a(M,K) @ b(K,N) + bias(M,) = c(M,N), optional
+# fused act. Kernel body + launch dims are the work items; everything around
+# them (buffers, verify, bench) is wired.
+
+# TODO(paul): tune; placeholder square block for the naive kernel
+comptime GPU_BLOCK = 16
+
+def gemmGPUKernel[
+    a_layout: Layout,
+    b_layout: Layout,
+    c_layout: Layout,
+    bias_layout: Layout,
+    epilogue_act: Bool = False,
+](
+    a: LayoutTensor[ftype, a_layout, ImmutUntrackedOrigin],
+    b: LayoutTensor[ftype, b_layout, ImmutUntrackedOrigin],
+    c: LayoutTensor[ftype, c_layout, MutUntrackedOrigin],
+    bias: LayoutTensor[ftype, bias_layout, ImmutUntrackedOrigin],
+):
+    # PLACEHOLDER KERNEL: one thread per c element, naive K loop straight from
+    # global memory. Correct but slow — replace with shared-memory tiles
+    # (stack_allocation[.., AddressSpace.SHARED] + barrier()), keep the epilogue.
+    comptime M = a.shape[0]()
+    comptime K = a.shape[1]()
+    comptime N = b.shape[1]()
+    comptime assert b.shape[0]() == K, "bad shapes (a or b)"
+    comptime assert bias_layout.size() == M, "bias must be (M,)"
+
+    var row = global_idx.y
+    var col = global_idx.x
+    if row < M and col < N:
+        var accum = rebind[sftype](bias[row])
+        for k in range(K):
+            accum += rebind[sftype](a[row, k] * b[k, col])
+        comptime if epilogue_act:
+            accum = act_fn.simdForward[ftype, 1](accum)
+        c[row, col] = accum
+
+
+def gemmGPU[
+    a_layout: Layout,
+    b_layout: Layout,
+    c_layout: Layout,
+    bias_layout: Layout,
+    epilogue_act: Bool = False,
+](
+    ctx: DeviceContext,
+    a: LayoutTensor[ftype, a_layout, ImmutUntrackedOrigin],
+    b: LayoutTensor[ftype, b_layout, ImmutUntrackedOrigin],
+    c: LayoutTensor[ftype, c_layout, MutUntrackedOrigin],
+    bias: LayoutTensor[ftype, bias_layout, ImmutUntrackedOrigin],
+) raises:
+    comptime M = a.shape[0]()
+    comptime N = b.shape[1]()
+    comptime kernel = gemmGPUKernel[
+        a_layout, b_layout, c_layout, bias_layout, epilogue_act
+    ]
+    ctx.enqueue_function[kernel](
+        a, b, c, bias,
+        # TODO(paul): grid/block strategy is yours — this just covers c 1:1
+        grid_dim=(ceildiv(N, GPU_BLOCK), ceildiv(M, GPU_BLOCK)),
+        block_dim=(GPU_BLOCK, GPU_BLOCK),
+    )
+
+
+def verifyGPU[
+    M: Int, K: Int, N: Int, epilogue_act: Bool = False
+](ctx: DeviceContext) raises:
+    comptime al = Layout.row_major(M, K)
+    comptime bl = Layout.row_major(K, N)
+    comptime cl = Layout.row_major(M, N)
+    comptime biasl = Layout.row_major(M)
+
+    # host inputs + CPU reference (naiveCPU is itself gated vs linalg in verify())
+    var a = Tens[al](alloc[sftype](M * K))
+    var b = Tens[bl](alloc[sftype](K * N))
+    var bias = Tens[biasl](alloc[sftype](M))
+    var c_ref = Tens[cl](alloc[sftype](M * N))
+    fillVaried(a.ptr, M * K)
+    fillVaried(b.ptr, K * N)
+    fillVaried(bias.ptr, M)
+    naiveCPU[epilogue_act=epilogue_act](a, b, c_ref, bias)
+
+    # device mirrors
+    var a_buf = ctx.enqueue_create_buffer[ftype](M * K)
+    var b_buf = ctx.enqueue_create_buffer[ftype](K * N)
+    var c_buf = ctx.enqueue_create_buffer[ftype](M * N)
+    var bias_buf = ctx.enqueue_create_buffer[ftype](M)
+    a_buf.enqueue_copy_from(a.ptr)
+    b_buf.enqueue_copy_from(b.ptr)
+    bias_buf.enqueue_copy_from(bias.ptr)
+    c_buf.enqueue_fill(0.0)
+
+    var a_d = untrack_imm(LayoutTensor[ftype, al](a_buf))
+    var b_d = untrack_imm(LayoutTensor[ftype, bl](b_buf))
+    var c_d = untrack(LayoutTensor[ftype, cl](c_buf))
+    var bias_d = untrack_imm(LayoutTensor[ftype, biasl](bias_buf))
+
+    gemmGPU[epilogue_act=epilogue_act](ctx, a_d, b_d, c_d, bias_d)
+    ctx.synchronize()
+
+    var gpu_diff = sftype(0.0)
+    with c_buf.map_to_host() as host:
+        for idx in range(M * N):
+            gpu_diff = max(gpu_diff, abs(host[idx] - c_ref.ptr[idx]))
+
+    a.ptr.free()
+    b.ptr.free()
+    bias.ptr.free()
+    c_ref.ptr.free()
+
+    comptime tol = sftype(1e-4)
+    print(t"verify GPU {M}x{K}x{N} act={epilogue_act}: diff {gpu_diff}")
+    if gpu_diff > tol:
+        raise Error("GPU GEMM verification failed vs naiveCPU")
 
 # --- benchmarking -------------------------------------------------------------
 #   pixi run mojo -I src tests/gemm.mojo
@@ -307,6 +425,66 @@ def benchGemms[M: Int, K: Int, N: Int](mut bench: Bench) raises:
     bench.bench_function[bench_linalg](BenchId("linalg_" + suffix), measures=measures.copy())
 
 
+# GPU counterpart: hand-written kernel vs linalg.matmul on-device. Buffers set
+# up once per size; iter_custom times only the enqueued kernel (proper GPU sync).
+def benchGemmsGPU[M: Int, K: Int, N: Int](mut bench: Bench, ctx: DeviceContext) raises:
+    comptime al = Layout.row_major(M, K)
+    comptime bl = Layout.row_major(K, N)
+    comptime cl = Layout.row_major(M, N)
+    comptime biasl = Layout.row_major(M)
+    comptime flops = 2 * M * N * K
+    var suffix = String(M) + "x" + String(K) + "x" + String(N)
+
+    var a_host = Tens[al](alloc[sftype](M * K))
+    var b_host = Tens[bl](alloc[sftype](K * N))
+    var bias_host = Tens[biasl](alloc[sftype](M))
+    fillVaried(a_host.ptr, M * K)
+    fillVaried(b_host.ptr, K * N)
+    fillVaried(bias_host.ptr, M)
+
+    var a_buf = ctx.enqueue_create_buffer[ftype](M * K)
+    var b_buf = ctx.enqueue_create_buffer[ftype](K * N)
+    var c_buf = ctx.enqueue_create_buffer[ftype](M * N)
+    var bias_buf = ctx.enqueue_create_buffer[ftype](M)
+    a_buf.enqueue_copy_from(a_host.ptr)
+    b_buf.enqueue_copy_from(b_host.ptr)
+    bias_buf.enqueue_copy_from(bias_host.ptr)
+    c_buf.enqueue_fill(0.0)
+    ctx.synchronize()
+    a_host.ptr.free()
+    b_host.ptr.free()
+    bias_host.ptr.free()
+
+    var a_d = untrack_imm(LayoutTensor[ftype, al](a_buf))
+    var b_d = untrack_imm(LayoutTensor[ftype, bl](b_buf))
+    var c_d = untrack(LayoutTensor[ftype, cl](c_buf))
+    var bias_d = untrack_imm(LayoutTensor[ftype, biasl](bias_buf))
+
+    @parameter
+    def bench_gpu(mut b: Bencher) raises:
+        @always_inline
+        def launch(lctx: DeviceContext) raises {read}:
+            gemmGPU(lctx, a_d, b_d, c_d, bias_d)
+
+        b.iter_custom(launch, ctx)
+
+    @parameter
+    def bench_linalg_gpu(mut b: Bencher) raises:
+        @always_inline
+        def launch(lctx: DeviceContext) raises {read}:
+            # dispatch is the comptime `target`, NOT the ctx arg — ctx alone
+            # runs the CPU path and aborts on a GPU DeviceContext
+            matmul[transpose_b=False, target="gpu"](
+                lt_to_tt(c_d), lt_to_tt(a_d), lt_to_tt(b_d), lctx
+            )
+
+        b.iter_custom(launch, ctx)
+
+    var measures = [ThroughputMeasure(BenchMetric.flops, flops)]
+    bench.bench_function[bench_gpu](BenchId("gpu_" + suffix), measures=measures.copy())
+    bench.bench_function[bench_linalg_gpu](BenchId("linalg_gpu_" + suffix), measures=measures.copy())
+
+
 def main() raises:
     # correctness first: aligned size, ragged size (tile edge padding), act epilogue
     verify[32, 32, 32]()
@@ -319,4 +497,14 @@ def main() raises:
     benchGemms[256, 256, 256](bench)
     # LeNet-ish im2col shape: conv2 weights (16, 6*5*5) @ cols (150, batch*10*10)
     benchGemms[16, 150, 1600](bench)
+
+    comptime if has_accelerator():
+        var ctx = DeviceContext()
+        verifyGPU[32, 32, 32](ctx)
+        verifyGPU[33, 50, 17](ctx)
+        verifyGPU[33, 50, 17, epilogue_act=True](ctx)
+        benchGemmsGPU[128, 128, 128](bench, ctx)
+        benchGemmsGPU[256, 256, 256](bench, ctx)
+        benchGemmsGPU[16, 150, 1600](bench, ctx)
+
     bench.dump_report()
