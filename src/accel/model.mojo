@@ -1,3 +1,5 @@
+"""GPU model storage: `LeNet5GPU`, its device buffers, and `DeviceSession`."""
+
 from layout import LayoutTensor
 
 from std.gpu.host import DeviceContext, DeviceBuffer
@@ -25,11 +27,13 @@ struct DeviceSession[Allocator: GPUAllocator]():
     var alloc: Self.Allocator
 
     def __init__(out self, ctx: DeviceContext) raises:
+        """Build the allocator, buffers, and model together from `ctx`."""
         self.alloc = Self.Allocator(ctx, LeNet5GPU.sizeInBytes())  # default
         self.bufs = LeNet5GPUBuffers(self.alloc)
         self.model = LeNet5GPU(self.bufs)
 
     def __init__(out self, var arena: Self.Allocator) raises:
+        """Adopt a pre-built allocator, deriving buffers and model from it."""
         self.bufs = LeNet5GPUBuffers(arena)
         self.model = LeNet5GPU(self.bufs)
         self.alloc = arena^
@@ -50,6 +54,7 @@ struct LeNet5GPUBuffers(ArenaSizable):
     var b56_storage: DeviceBuffer[ftype]
 
     def __init__(out self, mut arena: Some[GPUAllocator]) raises:
+        """Sub-allocate every weight and bias buffer from `arena`."""
         self.allocator_owns_memory = True
         self.w01_storage = arena.alloc[ftype](
             comptime (WeightLayouts.w01.size())
@@ -63,20 +68,14 @@ struct LeNet5GPUBuffers(ArenaSizable):
         self.w56_storage = arena.alloc[ftype](
             comptime (WeightLayouts.w56.size())
         )
-        self.b01_storage = arena.alloc[ftype](
-            comptime (BiasLayouts.b01.size())
-        )
-        self.b23_storage = arena.alloc[ftype](
-            comptime (BiasLayouts.b23.size())
-        )
-        self.b45_storage = arena.alloc[ftype](
-            comptime (BiasLayouts.b45.size())
-        )
-        self.b56_storage = arena.alloc[ftype](
-            comptime (BiasLayouts.b56.size())
-        )
+        self.b01_storage = arena.alloc[ftype](comptime (BiasLayouts.b01.size()))
+        self.b23_storage = arena.alloc[ftype](comptime (BiasLayouts.b23.size()))
+        self.b45_storage = arena.alloc[ftype](comptime (BiasLayouts.b45.size()))
+        self.b56_storage = arena.alloc[ftype](comptime (BiasLayouts.b56.size()))
 
     def __init__(out self, ctx: DeviceContext) raises:
+        """Standalone variant: allocate every buffer directly from `ctx`, then zero them.
+        """
         self.allocator_owns_memory = False
         self.w01_storage = ctx.enqueue_create_buffer[ftype](
             comptime (WeightLayouts.w01.size())
@@ -107,11 +106,11 @@ struct LeNet5GPUBuffers(ArenaSizable):
 
     @staticmethod
     def sizeInBytes() -> Int:
-        return (
-            LeNet5GPU.sizeInBytes()
-        )
+        return LeNet5GPU.sizeInBytes()
 
     def loadCPUWeights(mut self, cpu_model: LeNet5) raises:
+        """Copy a trained CPU model's weights and biases up into the device buffers.
+        """
         self.w01_storage.enqueue_copy_from(cpu_model.weight0_1.ptr)
         self.w23_storage.enqueue_copy_from(cpu_model.weight2_3.ptr)
         self.w45_storage.enqueue_copy_from(cpu_model.weight4_5.ptr)
@@ -122,6 +121,7 @@ struct LeNet5GPUBuffers(ArenaSizable):
         self.b56_storage.enqueue_copy_from(cpu_model.bias5_6.ptr)
 
     def zero(mut self, *, sync_ctx: Optional[DeviceContext]) raises:
+        """Zero every buffer; blocks until done when `sync_ctx` is given."""
         self.w01_storage.enqueue_fill(0.0)
         self.w23_storage.enqueue_fill(0.0)
         self.w45_storage.enqueue_fill(0.0)
@@ -134,7 +134,7 @@ struct LeNet5GPUBuffers(ArenaSizable):
             sync_ctx.value().synchronize()
 
 
-struct LeNet5GPU(DevicePassable, TrivialRegisterPassable, ArenaSizable):
+struct LeNet5GPU(ArenaSizable, DevicePassable, TrivialRegisterPassable):
     """
     Same as the CPU version, but storage is on the GPU.
     LayoutTensors only — DeviceBuffers live in LeNet5GPUBuffers.

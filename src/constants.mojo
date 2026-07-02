@@ -1,3 +1,5 @@
+"""Architecture dimensions, dtype, and compile-time activation/allocator selection."""
+
 from std.sys import simd_width_of
 import std.sys.defines as defines
 from std.utils.type_functions import ConditionalType
@@ -115,8 +117,12 @@ struct FeatureLayouts:
 
 struct WeightLayouts:
     comptime w01 = Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)
-    comptime w23 = Layout.row_major(LAYER2, LAYER3, LENGTH_KERNEL, LENGTH_KERNEL)
-    comptime w45 = Layout.row_major(LAYER4, LAYER5, LENGTH_KERNEL, LENGTH_KERNEL)
+    comptime w23 = Layout.row_major(
+        LAYER2, LAYER3, LENGTH_KERNEL, LENGTH_KERNEL
+    )
+    comptime w45 = Layout.row_major(
+        LAYER4, LAYER5, LENGTH_KERNEL, LENGTH_KERNEL
+    )
     comptime w56 = Layout.row_major(
         LAYER5 * LENGTH_FEATURE5 * LENGTH_FEATURE5, OUTPUT
     )

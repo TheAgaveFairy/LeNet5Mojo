@@ -1,3 +1,5 @@
+"""Runtime CLI arguments and `--help` text for the model binary."""
+
 from std.sys import argv, stderr
 
 from constants import NUM_GPU_STREAMS, GPU_STREAM_BATCH_SIZE, DEFAULT_SEED
@@ -5,6 +7,11 @@ from constants import NUM_GPU_STREAMS, GPU_STREAM_BATCH_SIZE, DEFAULT_SEED
 
 @fieldwise_init
 struct CliArgs(Copyable, Movable):
+    """Runtime knobs parsed from argv — the flags that vary across a benchmark
+    sweep without re-keying the JIT cache. Compile-time `-D` flags live in
+    `constants`; see `printHelp`.
+    """
+
     var num_streams: Int
     var bench_only: Bool
     var help: Bool
@@ -42,7 +49,9 @@ struct CliArgs(Copyable, Movable):
                 try:
                     v = atol(args[i + 1])
                 except:
-                    print("--num-streams: not an int:", args[i + 1], file=stderr)
+                    print(
+                        "--num-streams: not an int:", args[i + 1], file=stderr
+                    )
                     raise Error("num_streams not an int")
                 if v < 1 or v > 10:
                     print("--num-streams must be 1..10, got", v, file=stderr)
@@ -62,20 +71,53 @@ def printHelp():
     print("LeNet5Mojo")
     print()
     print("runtime args (no recompile):")
-    print(t"  --num-streams N   GPU concurrent streams, 1..10 (default {NUM_GPU_STREAMS})")
+    print(
+        t"  --num-streams N   GPU concurrent streams, 1..10 (default"
+        t" {NUM_GPU_STREAMS})"
+    )
     print("  --bench-only      load saved model, skip training, bench only")
-    print(t"  --seed N          RNG seed for weight init/shuffle (default {DEFAULT_SEED})")
+    print(
+        t"  --seed N          RNG seed for weight init/shuffle (default"
+        t" {DEFAULT_SEED})"
+    )
     print("  --help            this message")
     print()
     print("comptime -D flags (each new value recompiles):")
-    print("  -D ALPHA=N                 learning rate * 1000, 1..1000 (default 500)")
-    print("  -D <ACT>                   bare activation flag: GELU|GELUTanh|GELUFast|Sigmoid|Tanh (default ReLU)")
-    print(t"  -D GPU_STREAM_BATCH_SIZE=N images per stream batch (default {GPU_STREAM_BATCH_SIZE})")
-    print("  -D NUM_GPU_STREAMS=N        compile-time stream default (prefer --num-streams)")
-    print("  -D DIV_CHANS_CONV2=N        conv2 channel divisor, factor of 16 (default 4)")
-    print("  -D DIV_CHANS_CONV3=N        conv3 channel divisor, factor of 120 (default 8)")
-    print("  -D N_WARMUP=N / -D N_PASSES=N   bench warmup / timed passes (default 3 / 10)")
+    print(
+        "  -D ALPHA=N                 learning rate * 1000, 1..1000 (default"
+        " 500)"
+    )
+    print(
+        "  -D <ACT>                   bare activation flag:"
+        " GELU|GELUTanh|GELUFast|Sigmoid|Tanh (default ReLU)"
+    )
+    print(
+        t"  -D GPU_STREAM_BATCH_SIZE=N images per stream batch (default"
+        t" {GPU_STREAM_BATCH_SIZE})"
+    )
+    print(
+        "  -D NUM_GPU_STREAMS=N        compile-time stream default (prefer"
+        " --num-streams)"
+    )
+    print(
+        "  -D DIV_CHANS_CONV2=N        conv2 channel divisor, factor of 16"
+        " (default 4)"
+    )
+    print(
+        "  -D DIV_CHANS_CONV3=N        conv3 channel divisor, factor of 120"
+        " (default 8)"
+    )
+    print(
+        "  -D N_WARMUP=N / -D N_PASSES=N   bench warmup / timed passes (default"
+        " 3 / 10)"
+    )
     print("  -D DISPLAY                 enable display output")
-    print("  -D CPU_SYSTEM_ALLOC        CPU inference uses the system allocator instead of the bump arena (benchmarking)")
-    print("  -D GPU_SYSTEM_ALLOC        GPU inference uses the system allocator instead of the bump arena (benchmarking)")
+    print(
+        "  -D CPU_SYSTEM_ALLOC        CPU inference uses the system allocator"
+        " instead of the bump arena (benchmarking)"
+    )
+    print(
+        "  -D GPU_SYSTEM_ALLOC        GPU inference uses the system allocator"
+        " instead of the bump arena (benchmarking)"
+    )
     print("  see constants.mojo for full list")

@@ -1,3 +1,5 @@
+"""The `Image` type: raw MNIST pixels with on-demand normalization."""
+
 from layout import Layout, LayoutTensor
 from std.math import sqrt
 from std.memory import memcpy
@@ -18,14 +20,15 @@ from origin_util import untrack
 
 
 struct Image(ImplicitlyCopyable):
-    """
-    We need the images normalized and possibly padded from raw UInt8.
+    """A raw `UInt8` MNIST image plus its label. Normalization and padding into the
+    network's `ftype` input are deferred to `normalized` — the target device isn't
+    known at load time.
     """
 
     # explicit channel dim [C, H, W] — matches the [C, H, W] feature/weight
     # convention. C = INPUT (1 today); .size() is unchanged so all byte math holds.
     comptime PixelLayout = Layout.row_major(INPUT, IMAGE_SIZE, IMAGE_SIZE)
-    comptime PixelStorage = InlineArray[ # TODO: remove this
+    comptime PixelStorage = InlineArray[  # TODO: remove this
         UInt8, Self.PixelLayout.size()
     ]  # raw bytes
     comptime PixelTensor = LayoutTensor[
@@ -43,10 +46,17 @@ struct Image(ImplicitlyCopyable):
     var label: UInt8  # digits [0, 9] MNIST, could store as "Int"
 
     # TODO: test and use
-    def __init__[o: Origin](out self, hosted_pixels: Span[UInt8, o], label: UInt8) raises:
+    def __init__[
+        o: Origin
+    ](out self, hosted_pixels: Span[UInt8, o], label: UInt8) raises:
+        """View an existing host span as pixels — no copy; caller owns the bytes.
+        """
         comptime layout_size = Self.PixelLayout.size()
         if len(hosted_pixels) != layout_size:
-            raise Error(t"Span[Byte] for Image has unexpected len: {len(hosted_pixels)}.")
+            raise Error(
+                t"Span[Byte] for Image has unexpected len:"
+                t" {len(hosted_pixels)}."
+            )
         if label > 9:
             raise Error(t"Error with image label: {label}.")
         self.label = label
@@ -57,6 +67,8 @@ struct Image(ImplicitlyCopyable):
     def __init__(
         out self, raw: List[Byte], label: UInt8, mut arena: Arena
     ) raises:
+        """Copy `raw` into arena-owned storage; raises on wrong length or bad label.
+        """
         comptime layout_size = Self.PixelLayout.size()
         if len(raw) != layout_size:
             raise Error(t"List[Byte] for Image has unexpected len: {len(raw)}.")
@@ -67,12 +79,14 @@ struct Image(ImplicitlyCopyable):
             LayoutTensor[DType.uint8, Self.PixelLayout](
                 arena.alloc[UInt8](layout_size)
             )
-        ) 
+        )
         memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
 
     def __init__(
         out self, raw: Self.PixelStorage, label: UInt8, mut arena: Arena
     ):  # Some[CPUAllocator]):
+        """Copy a fixed-size `PixelStorage` into arena-owned storage (non-raising).
+        """
         comptime layout_size = Self.PixelLayout.size()
 
         if label > 9:
@@ -88,6 +102,10 @@ struct Image(ImplicitlyCopyable):
         # no longer normalizing at init because we don't know the end device and that's a separate task
 
     def normalized[padded: Bool = True](self: Self, tensor: Self.DataTensor):
+        """Standardize the pixels (per-image zero mean, unit std) into `tensor`.
+        With `padded`, writes into the interior at a `PADDING` offset, leaving the
+        border zero.
+        """
         var sum: UInt64 = 0
         var std_sum: UInt64 = 0
 
@@ -113,13 +131,17 @@ struct Image(ImplicitlyCopyable):
             for c in range(IMAGE_SIZE):
                 var idx = r * IMAGE_SIZE + c
                 var curr = Float64(Int(self.pixels.ptr[idx]))
-                tensor[0, r + off, c + off] = ((curr - mean) / std).cast[ftype]()
+                tensor[0, r + off, c + off] = ((curr - mean) / std).cast[
+                    ftype
+                ]()
 
     @deprecated("Use non-static self.normalized(output_tensor).")
     @staticmethod
     def _normalize[
         padded: Bool = True
     ](raw: Self.PixelStorage, tensor: Self.DataTensor):
+        """Static predecessor of `normalized`, taking raw pixels instead of `self`.
+        """
         var sum: UInt64 = 0
         var std_sum: UInt64 = 0
 
@@ -145,4 +167,6 @@ struct Image(ImplicitlyCopyable):
             for c in range(IMAGE_SIZE):
                 var idx = r * IMAGE_SIZE + c
                 var curr = Float64(Int(raw[idx]))
-                tensor[0, r + off, c + off] = ((curr - mean) / std).cast[ftype]()
+                tensor[0, r + off, c + off] = ((curr - mean) / std).cast[
+                    ftype
+                ]()

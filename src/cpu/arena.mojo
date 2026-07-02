@@ -1,3 +1,5 @@
+"""CPU allocators: a bump arena and a system-allocator fallback."""
+
 from layout import Layout, LayoutTensor
 
 # from attention import Weights, ModelParams
@@ -23,7 +25,8 @@ trait ArenaSizable:
 
 
 trait CPUAllocator(ImplicitlyDeletable, Movable):
-    """Uniform allocator interface — mirrors GPU `GPUAllocator` (System ignores capacity)."""
+    """Uniform allocator interface — mirrors GPU `GPUAllocator` (System ignores capacity).
+    """
 
     def __init__(out self, capacity_bytes: Int):
         # Bump: allocate the slab. System: ignore (sizes per alloc()).
@@ -99,6 +102,7 @@ struct CPUBumpArenaAllocator(CPUAllocator):
         self.offset = 0
 
     def zero(mut self):
+        """Zero the whole slab; offset and live allocations are untouched."""
         memset_zero(self.buffer, self.capacity)
 
 
@@ -124,6 +128,8 @@ struct CPUSystemAllocator(CPUAllocator):
     def alloc[
         T: AnyType
     ](mut self, count: Int = 1) -> UnsafePointer[T, MutUntrackedOrigin]:
+        """Allocate `count` items of `T`, tracking the pointer for later bulk free.
+        """
         var ptr = alloc[T](count)
         self._allocations.append(
             rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](

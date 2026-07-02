@@ -45,7 +45,7 @@ The 84-unit penultimate layer and some skip connections from the original LeCun 
 ├── main.mojo              # Entry point: CPU train + test, GPU inference, logging
 ├── constants.mojo         # Architecture dims, dtype, compile-time activation selection
 ├── activation_fn.mojo     # ActivationFunction trait + ReLU, GELU, GELUTanh, GELUFast, Sigmoid, Tanh
-├── dataloader.mojo        # MNISTDataRepository, MNISTBatch (SoA arena view)
+├── dataloader.mojo        # MNISTDataRepository, MNISTDataView (SoA arena view)
 ├── image.mojo             # Image struct: raw UInt8 pixels + per-image normalization
 ├── resultlogger.mojo      # CSV logging for training epochs and inference results
 ├── cpu/
@@ -80,12 +80,12 @@ All operations are hand-rolled in Mojo. No PyTorch, TensorFlow, JAX, or BLAS.
 The activation function is selected at **compile time** via a `-D` flag — zero runtime cost, no virtual dispatch:
 
 ```bash
-mojo main.mojo               # ReLU (default)
-mojo -D GELU main.mojo       # Exact GELU (erf-based)
-mojo -D GELUTanh main.mojo   # GELU tanh approximation
-mojo -D GELUFast main.mojo   # Fast GELU (sigmoid-based, ~Swish)
-mojo -D Sigmoid main.mojo    # Sigmoid
-mojo -D Tanh main.mojo       # Tanh
+mojo src/main.mojo               # ReLU (default)
+mojo -D GELU src/main.mojo       # Exact GELU (erf-based)
+mojo -D GELUTanh src/main.mojo   # GELU tanh approximation
+mojo -D GELUFast src/main.mojo   # Fast GELU (sigmoid-based, ~Swish)
+mojo -D Sigmoid src/main.mojo    # Sigmoid
+mojo -D Tanh src/main.mojo       # Tanh
 ```
 
 Each activation implements `forward`, `backward`, `simdForward`, and `simdBackward`. CPU operations use the layout-level SIMD-vectorized versions; GPU kernels call `simdForward` directly per-element in shared memory.
@@ -124,7 +124,7 @@ Kernels use `LayoutTensor` for type-safe indexing and `comptime for` for inner-l
 
 ### Model Serialization
 
-`LeNet5.saveToFile` / `loadFromFile` write weights as raw binary with big-endian byte-swapping. `loadFromFile[filetype]` supports loading weights saved in a different float precision than the current runtime model (e.g. load `float64` weights into a `float32` model).
+`LeNet5.saveToFile` / `loadFromFile` write weights as raw binary. `loadFromFile[filetype]` supports loading weights saved in a different float precision than the current runtime model (e.g. load `float64` weights into a `float32` model). Big-endian support is partial — the write side byte-swaps but the load side doesn't yet, so the round-trip isn't wired up (hosts are little-endian in practice).
 
 ## Getting Started
 
@@ -145,20 +145,20 @@ pixi shell
 ### Running
 
 ```bash
-# Train on CPU, then run GPU inference (ReLU, alpha=0.5, batch_size=50)
-mojo main.mojo
+# Train on CPU, then run GPU inference (ReLU, alpha=0.5)
+mojo src/main.mojo
 
 # Compile-time options
-mojo -D GELU -D ALPHA=300 main.mojo      # GELU activation, alpha=0.3
-mojo -D BATCH_SIZE=100 main.mojo         # GPU inference batch size 100
-mojo -D DISPLAY main.mojo               # Show training progress bars
+mojo -D GELU -D ALPHA=300 src/main.mojo             # GELU activation, alpha=0.3
+mojo -D GPU_STREAM_BATCH_SIZE=100 src/main.mojo     # GPU per-stream batch size
+mojo -D DISPLAY src/main.mojo                       # Show training progress bars
 
 # Build an optimized binary
-pixi run build && ./main
+pixi run buildmain && ./src/main
 
 # Run arena unit tests
-pixi run test-cpu-arena
-pixi run test-gpu-arena
+mojo -I src src/cpu/arena.mojo
+mojo -I src src/accel/arena.mojo
 
 # Format all source
 pixi run formatall
@@ -197,7 +197,7 @@ The CPU path (`parallelize` + SIMD, hand-rolled) reaches **~27k img/s** — hone
 ## Current Limitations
 
 - GPU **training** not implemented — inference only
-- Batch size must divide the dataset evenly; remainder images are currently dropped (default `bs=50` divides both 10k and 60k). Arbitrary batch sizes need tail-padding (planned).
+- Batch size must divide the dataset evenly; remainder images are currently dropped (the default GPU stream batch of 100 divides the 10k test set). Arbitrary batch sizes need tail-padding (planned).
 - Stream count (`--num-streams`) is hand-tuned per batch size to hit peak — no auto-default yet
 - CPU inference throughput trails vendor-optimized CPU backends (ONNX Runtime / MLAS)
 - Only `fp32` / `fp64` paths exercised; `fp16` / `bf16` untested

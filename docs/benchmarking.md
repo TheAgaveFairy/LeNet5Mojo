@@ -60,7 +60,8 @@ code until a future feature makes it variable.
 Hold everything constant except the variable under test:
 
 - `batch_size = 50` — divides 10,000 and 60,000 → full dataset coverage, no
-  dropped tail.
+  dropped tail. (Differs from the shipped default of 100; set `-D
+  GPU_STREAM_BATCH_SIZE=50` for these runs.)
 - Run **both** `--num-streams 5` (tuned default) **and** `--num-streams 1`
   (fair single-stream — the honesty number vs single-stream libraries). Report
   both; never quote only the tuned one.

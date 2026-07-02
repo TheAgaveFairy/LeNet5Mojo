@@ -1,3 +1,5 @@
+"""The `ActivationFunction` trait and its implementations (ReLU, GELU family, Sigmoid, Tanh)."""
+
 from std.algorithm.functional import vectorize
 from layout import Layout, LayoutTensor
 from std.math import tanh, exp, sqrt, erf, log, pi, tau
@@ -7,6 +9,11 @@ from constants import ftype, sftype, nelts
 
 # comptime activation_fn = fn(sftype) -> sftype # if was scalar
 trait ActivationFunction:
+    """The compile-time-swappable activation interface. A conformer supplies the
+    SIMD `simdForward`/`simdBackward` kernels; `forward`/`backward` map them over a
+    tensor and default to a plain elementwise pass.
+    """
+
     @staticmethod
     @always_inline("nodebug")
     def forward[layout: Layout](x: LayoutTensor[ftype, layout, MutAnyOrigin]):
@@ -58,6 +65,10 @@ trait ActivationFunction:
 
 
 struct ReLU(ActivationFunction):
+    """
+    ReLU(x) = max(0, x)
+    """
+
     @staticmethod
     @always_inline("nodebug")
     def backward[

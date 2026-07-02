@@ -1,3 +1,5 @@
+"""GPU forward-pass kernels and the batched multi-stream inference pipeline."""
+
 from layout import Layout, LayoutTensor
 from std.math import abs, sqrt, max
 from std.bit import next_power_of_two  # prev_power_of_two
@@ -269,7 +271,8 @@ def conv2FusedKernel[
 ](
     lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
 ) -> None:
-    """
+    """Conv2 + activation, one thread per output pixel, output channels split into
+    `div_chans_conv2` sections. Stages the kernels and input tile into shared memory.
     Grid Dim = (batch_size, channel_divisions).
     Block Dim = (LAYER3 // div_chans, LENGTH_FEATURE3, LENGTH_FEATURE3).
     """
@@ -552,6 +555,12 @@ struct CompiledKernels[batch_size: Int](Movable):
 
 
 struct StreamSlot[batch_size: Int](Movable):
+    """One stream's worth of resources for the pipelined multi-stream run: its own
+    `DeviceContext` (stream), device arena, per-image feature buffers, and the
+    pinned/device input, output, and guess buffers. Allocated once and reused
+    across batches so streams overlap.
+    """
+
     var ctx: DeviceContext
     var device_arena: GPUBumpArenaAllocator
     var device_buffers: UnsafePointer[FeatureGPUBuffers, MutUntrackedOrigin]
@@ -576,6 +585,9 @@ struct StreamSlot[batch_size: Int](Movable):
     ]
 
     def __init__(out self) raises:
+        """Allocate this slot's stream, arena, feature buffers, and I/O buffers, then
+        seed `device_features` with the `FeatureGPU` views. Syncs once at the end.
+        """
         comptime img_sz = IMAGE_SIZE * IMAGE_SIZE
         self.ctx = DeviceContext()
         self.device_arena = GPUBumpArenaAllocator(
@@ -684,6 +696,10 @@ struct StreamSlot[batch_size: Int](Movable):
         kernels: CompiledKernels[Self.batch_size],
         model: LeNet5GPU,
     ) raises:
+        """Enqueue the full forward pipeline on this slot's stream
+        (normalize → conv1 → pool1 → conv2 → pool2 → conv3 → matmul), then stage the
+        argmax guesses D2H. Async — call `getResults` to sync and read them.
+        """
         # flat [N, H, W] upload transport (C=1 folded out). Could be [N, 1, H, W]
         # for full [C,H,W] parity with Image/features, but it's a raw staging
         # buffer and normalizeInputsKernel already writes the channel into

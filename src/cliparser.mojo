@@ -1,6 +1,15 @@
+"""A small declarative CLI parser (standalone demo; the app uses `cli`)."""
+
 from std.sys import argv, stderr, exit
 
+
 struct ArgParser[hard_exit_mode: Bool = True]():
+    """Declarative CLI parser: every `get()` reads a flag and registers its help
+    line in one call. Unknown args are caught at destruction; `hard_exit_mode`
+    decides whether that — and parse failures — exit the process or fall back to
+    the supplied default.
+    """
+
     var help_strs: List[String]
     var print_help: Bool
     var args: List[String]
@@ -10,7 +19,7 @@ struct ArgParser[hard_exit_mode: Bool = True]():
         self.help_strs = List[String]()
         self.print_help = False
         self.args = List[String]()
-        self.consumed = type_of(self.consumed)() # List[String] but sillier
+        self.consumed = type_of(self.consumed)()  # List[String] but sillier
         var raw = argv()
         for i in range(1, len(raw)):  # skip argv[0] (program name)
             var a = String(raw[i])
@@ -21,7 +30,11 @@ struct ArgParser[hard_exit_mode: Bool = True]():
     def _find(
         mut self, tag: String, default_str: String, desc: String
     ) -> Optional[String]:
-        self.help_strs.append(String(t"{tag} [default {default_str}]; Usage: {desc}"))
+        """Register `tag`'s help line and return the value following it, if present.
+        """
+        self.help_strs.append(
+            String(t"{tag} [default {default_str}]; Usage: {desc}")
+        )
         for i in range(len(self.args)):
             if self.args[i] == tag and i + 1 < len(self.args):
                 self.consumed.append(tag)
@@ -30,13 +43,17 @@ struct ArgParser[hard_exit_mode: Bool = True]():
         return None
 
     def _fail(self, tag: String, e: String, default: Some[Writable]):
+        """Report a bad value for `tag`: exit under `hard_exit_mode`, else warn and keep `default`.
+        """
         comptime if self.hard_exit_mode:
-            print(tag, e, "EXITING.", file = stderr)
+            print(tag, e, "EXITING.", file=stderr)
             exit(2)
         else:
             print(t"{tag} failed: {e}. using: {default}", file=stderr)
 
     def get(mut self, tag: String, default: Int, desc: String) -> Int:
+        """Read `tag` as the type of `default`, returning `default` when absent or unparseable.
+        """
         var found = self._find(tag, String(default), desc)
         if found:
             try:
@@ -61,6 +78,8 @@ struct ArgParser[hard_exit_mode: Bool = True]():
         return default
 
     def get(mut self, tag: String, default: Bool, desc: String) -> Bool:
+        """Accepts `true/1/yes` and `false/0/no` (case-insensitive); anything else fails.
+        """
         var found = self._find(tag, String(default), desc)
         if found:
             var v = found.value().lower()
@@ -72,13 +91,18 @@ struct ArgParser[hard_exit_mode: Bool = True]():
         return default
 
     def __del__(deinit self):
+        """Reject any unconsumed args, then print help if `-h`/`--help` was seen.
+
+        Mojo's ASAP destruction runs this right after the last `get()`, so
+        validation needs no explicit `finalize()` call — it fires on scope exit.
+        """
         for arg in self.args:
             if arg not in self.consumed:
                 comptime if self.hard_exit_mode:
-                    print(arg, "not valid. EXITING.", file = stderr)
+                    print(arg, "not valid. EXITING.", file=stderr)
                     exit(2)
                 else:
-                    print(arg, "not valid.", file = stderr)
+                    print(arg, "not valid.", file=stderr)
 
         if self.print_help:
             print("How to use:")

@@ -1,3 +1,5 @@
+"""CPU `LeNet5` weights and `Feature` activation buffers, with save/load."""
+
 from layout import Layout, LayoutTensor
 from std.math import sqrt, exp, log
 from std.random import random_float64, rand
@@ -20,7 +22,11 @@ from cpu.ops import (
     maxPoolBackward,
     argMax,
 )
-from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena, ArenaSizable
+from cpu.arena import (
+    CPUAllocator,
+    CPUBumpArenaAllocator as CPUArena,
+    ArenaSizable,
+)
 from activation_fn import ActivationFunction
 from constants import (
     ftype,
@@ -53,7 +59,7 @@ from constants import (
 )
 
 
-struct LeNet5(Movable, ArenaSizable):
+struct LeNet5(ArenaSizable, Movable):
     """
     The LeNet5 model. In the actual LeCun et al implementation, there is some
     notable sparsity in final layers that is not in this version, as well as
@@ -95,33 +101,52 @@ struct LeNet5(Movable, ArenaSizable):
         return (weights + biases) * size_of[ftype]()
 
     def __init__(out self):
+        """Self-owned heap allocation, zero-filled; freed in `__del__`. Use the
+        arena overload to sub-allocate from a caller-owned slab instead.
+        """
         self.allocator_owns_memory = False
         # weights
-        self.weight0_1 = untrack(LayoutTensor[ftype, WeightLayouts.w01](
-            alloc[sftype](comptime (WeightLayouts.w01.size()))
-        )).fill(0.0)
-        self.weight2_3 = untrack(LayoutTensor[ftype, WeightLayouts.w23](
-            alloc[sftype](comptime (WeightLayouts.w23.size()))
-        )).fill(0.0)
-        self.weight4_5 = untrack(LayoutTensor[ftype, WeightLayouts.w45](
-            alloc[sftype](comptime (WeightLayouts.w45.size()))
-        )).fill(0.0)
-        self.weight5_6 = untrack(LayoutTensor[ftype, WeightLayouts.w56](
-            alloc[sftype](comptime (WeightLayouts.w56.size()))
-        )).fill(0.0)
+        self.weight0_1 = untrack(
+            LayoutTensor[ftype, WeightLayouts.w01](
+                alloc[sftype](comptime (WeightLayouts.w01.size()))
+            )
+        ).fill(0.0)
+        self.weight2_3 = untrack(
+            LayoutTensor[ftype, WeightLayouts.w23](
+                alloc[sftype](comptime (WeightLayouts.w23.size()))
+            )
+        ).fill(0.0)
+        self.weight4_5 = untrack(
+            LayoutTensor[ftype, WeightLayouts.w45](
+                alloc[sftype](comptime (WeightLayouts.w45.size()))
+            )
+        ).fill(0.0)
+        self.weight5_6 = untrack(
+            LayoutTensor[ftype, WeightLayouts.w56](
+                alloc[sftype](comptime (WeightLayouts.w56.size()))
+            )
+        ).fill(0.0)
         # biases
-        self.bias0_1 = untrack(LayoutTensor[ftype, BiasLayouts.b01](
-            alloc[sftype](comptime (BiasLayouts.b01.size()))
-        )).fill(0.0)
-        self.bias2_3 = untrack(LayoutTensor[ftype, BiasLayouts.b23](
-            alloc[sftype](comptime (BiasLayouts.b23.size()))
-        )).fill(0.0)
-        self.bias4_5 = untrack(LayoutTensor[ftype, BiasLayouts.b45](
-            alloc[sftype](comptime (BiasLayouts.b45.size()))
-        )).fill(0.0)
-        self.bias5_6 = untrack(LayoutTensor[ftype, BiasLayouts.b56](
-            alloc[sftype](comptime (BiasLayouts.b56.size()))
-        )).fill(0.0)
+        self.bias0_1 = untrack(
+            LayoutTensor[ftype, BiasLayouts.b01](
+                alloc[sftype](comptime (BiasLayouts.b01.size()))
+            )
+        ).fill(0.0)
+        self.bias2_3 = untrack(
+            LayoutTensor[ftype, BiasLayouts.b23](
+                alloc[sftype](comptime (BiasLayouts.b23.size()))
+            )
+        ).fill(0.0)
+        self.bias4_5 = untrack(
+            LayoutTensor[ftype, BiasLayouts.b45](
+                alloc[sftype](comptime (BiasLayouts.b45.size()))
+            )
+        ).fill(0.0)
+        self.bias5_6 = untrack(
+            LayoutTensor[ftype, BiasLayouts.b56](
+                alloc[sftype](comptime (BiasLayouts.b56.size()))
+            )
+        ).fill(0.0)
 
     def __init__(out self, mut arena: Some[CPUAllocator]):  # raises
         """
@@ -131,33 +156,51 @@ struct LeNet5(Movable, ArenaSizable):
         """
         self.allocator_owns_memory = True
         # weights
-        self.weight0_1 = untrack(LayoutTensor[ftype, WeightLayouts.w01](
-            arena.alloc[sftype](comptime (WeightLayouts.w01.size()))
-        )).fill(0.0)
-        self.weight2_3 = untrack(LayoutTensor[ftype, WeightLayouts.w23](
-            arena.alloc[sftype](comptime (WeightLayouts.w23.size()))
-        )).fill(0.0)
-        self.weight4_5 = untrack(LayoutTensor[ftype, WeightLayouts.w45](
-            arena.alloc[sftype](comptime (WeightLayouts.w45.size()))
-        )).fill(0.0)
-        self.weight5_6 = untrack(LayoutTensor[ftype, WeightLayouts.w56](
-            arena.alloc[sftype](comptime (WeightLayouts.w56.size()))
-        )).fill(0.0)
+        self.weight0_1 = untrack(
+            LayoutTensor[ftype, WeightLayouts.w01](
+                arena.alloc[sftype](comptime (WeightLayouts.w01.size()))
+            )
+        ).fill(0.0)
+        self.weight2_3 = untrack(
+            LayoutTensor[ftype, WeightLayouts.w23](
+                arena.alloc[sftype](comptime (WeightLayouts.w23.size()))
+            )
+        ).fill(0.0)
+        self.weight4_5 = untrack(
+            LayoutTensor[ftype, WeightLayouts.w45](
+                arena.alloc[sftype](comptime (WeightLayouts.w45.size()))
+            )
+        ).fill(0.0)
+        self.weight5_6 = untrack(
+            LayoutTensor[ftype, WeightLayouts.w56](
+                arena.alloc[sftype](comptime (WeightLayouts.w56.size()))
+            )
+        ).fill(0.0)
         # biases
-        self.bias0_1 = untrack(LayoutTensor[ftype, BiasLayouts.b01](
-            arena.alloc[sftype](comptime (BiasLayouts.b01.size()))
-        )).fill(0.0)
-        self.bias2_3 = untrack(LayoutTensor[ftype, BiasLayouts.b23](
-            arena.alloc[sftype](comptime (BiasLayouts.b23.size()))
-        )).fill(0.0)
-        self.bias4_5 = untrack(LayoutTensor[ftype, BiasLayouts.b45](
-            arena.alloc[sftype](comptime (BiasLayouts.b45.size()))
-        )).fill(0.0)
-        self.bias5_6 = untrack(LayoutTensor[ftype, BiasLayouts.b56](
-            arena.alloc[sftype](comptime (BiasLayouts.b56.size()))
-        )).fill(0.0)
+        self.bias0_1 = untrack(
+            LayoutTensor[ftype, BiasLayouts.b01](
+                arena.alloc[sftype](comptime (BiasLayouts.b01.size()))
+            )
+        ).fill(0.0)
+        self.bias2_3 = untrack(
+            LayoutTensor[ftype, BiasLayouts.b23](
+                arena.alloc[sftype](comptime (BiasLayouts.b23.size()))
+            )
+        ).fill(0.0)
+        self.bias4_5 = untrack(
+            LayoutTensor[ftype, BiasLayouts.b45](
+                arena.alloc[sftype](comptime (BiasLayouts.b45.size()))
+            )
+        ).fill(0.0)
+        self.bias5_6 = untrack(
+            LayoutTensor[ftype, BiasLayouts.b56](
+                arena.alloc[sftype](comptime (BiasLayouts.b56.size()))
+            )
+        ).fill(0.0)
 
     def zero(mut self):
+        """Reset all weights and biases to zero, reusing the existing storage.
+        """
         _ = self.weight0_1.fill(0.0)
         _ = self.weight2_3.fill(0.0)
         _ = self.weight4_5.fill(0.0)
@@ -168,6 +211,8 @@ struct LeNet5(Movable, ArenaSizable):
         _ = self.bias5_6.fill(0.0)
 
     def __init__(out self, *, deinit existing: Self):
+        """Move: transfer the tensor views and ownership flag; no reallocation.
+        """
         print("model move")
         self.allocator_owns_memory = existing.allocator_owns_memory
         self.weight0_1 = existing.weight0_1
@@ -180,6 +225,9 @@ struct LeNet5(Movable, ArenaSizable):
         self.bias5_6 = existing.bias5_6
 
     def __del__(deinit self):
+        """Free the tensors only when self allocated them; arena-backed views are
+        owned by the arena.
+        """
         if not self.allocator_owns_memory:
             self.weight0_1.ptr.free()
             self.weight2_3.ptr.free()
@@ -198,6 +246,7 @@ struct LeNet5(Movable, ArenaSizable):
         other: LayoutTensor[ftype, x, _],
         lr: sftype,
     ):
+        """SIMD `accum += other * lr` over one tensor."""
         comptime N = x.size()
         _ = """
         # this is the "simple" way to do this
@@ -219,9 +268,9 @@ struct LeNet5(Movable, ArenaSizable):
     def accumulateFromOther(
         mut self, other: Self, lr: sftype
     ):  # TODO: needs compiler / stdlib fix
-        """
-        For taking in errors / deltas during backward pass with learning rate.
-        self.weight0_1 += other.weight0_1 * lr # EXPLODES COMPILE TIMES
+        """Accumulate `other` into every weight and bias: `self += other * lr`.
+        Routed through `_accumHelper` — the natural `self.weight += other.weight * lr`
+        explodes compile times.
         """
         Self._accumHelper(self.weight0_1, other.weight0_1, lr)
         Self._accumHelper(self.weight2_3, other.weight2_3, lr)
@@ -237,6 +286,9 @@ struct LeNet5(Movable, ArenaSizable):
     def _randHelper[
         layout: Layout, o: MutOrigin
     ](mut tensor: LayoutTensor[ftype, layout, o], scale: sftype):
+        """Fill `tensor` with uniform noise scaled by `sqrt(6 / scale)` — the
+        fan-based (Xavier-style) init from the paper.
+        """
         comptime N = tensor.layout.size()
         var data = Span(ptr=tensor.ptr, length=comptime (N))
         rand(data, min=-1.0, max=1.0)  # uniform distribution
@@ -267,6 +319,8 @@ struct LeNet5(Movable, ArenaSizable):
         Self._randHelper(self.weight5_6, (LAYER5 + OUTPUT))
 
     def forward(self, features: Feature):
+        """Full forward pass, filling every layer of `features` up to `output`.
+        """
         convoluteForward(
             self.weight0_1, self.bias0_1, features.input, features.layer1
         )
@@ -283,6 +337,10 @@ struct LeNet5(Movable, ArenaSizable):
         )
 
     def backward(self, deltas: LeNet5, errors: Feature, features: Feature):
+        """Full backward pass: propagate `errors` from output to input and
+        accumulate per-parameter gradients into `deltas`. Expects `errors.output`
+        pre-seeded by `loadTarget`.
+        """
         matmulBackward(
             features.layer5,
             errors.layer5,
@@ -320,6 +378,7 @@ struct LeNet5(Movable, ArenaSizable):
 
     # TODO: make feat explicit Optional[Feature] and combine these two
     def predict(self, image: Image) -> Int:
+        """Predicted class for `image`, allocating a throwaway feature arena."""
         var feat_arena = CPUArena(Feature.sizeInBytes())
         var feat = Feature(feat_arena)
         feat.loadInput(image)
@@ -327,6 +386,7 @@ struct LeNet5(Movable, ArenaSizable):
         return argMax(feat.output)
 
     def predict(self, feat: Feature, image: Image) -> Int:
+        """Predicted class for `image`, reusing a caller-owned `feat` buffer."""
         feat.loadInput(image)
         self.forward(feat)
         return argMax(feat.output)
@@ -373,9 +433,7 @@ struct LeNet5(Movable, ArenaSizable):
         The 'filetype' parameter is designating the floating point type of the
         saved binary file. This doesn't need to match constants.ftype.
         """
-        comptime bytes_per_file_weight = size_of[
-            filetype
-        ]()
+        comptime bytes_per_file_weight = size_of[filetype]()
 
         try:
             with open(filename, "r") as model_file:
@@ -424,20 +482,26 @@ struct LeNet5(Movable, ArenaSizable):
     ](
         tensor: LayoutTensor[ftype, layout, MutAnyOrigin], mut f: FileHandle
     ) raises:
+        """Append `tensor`'s raw `ftype` bytes to `f`. Swaps to big-endian on
+        big-endian hosts, but the load path doesn't yet honor this — round-trip
+        endian support is incomplete (see TODO.md).
+        """
         comptime fbs = size_of[ftype]()  # float byte size
         var ptr_bytes = tensor.ptr.bitcast[UInt8]()
         var ptr_len = comptime (layout.size()) * fbs
         var temp_buf = alloc[UInt8](ptr_len)
         var bytes_span = Span(ptr=temp_buf, length=ptr_len)
         memcpy(src=ptr_bytes, dest=temp_buf, count=ptr_len)
-        comptime if is_big_endian(): # TODO: maybe make this a function parameter / arg check
+        comptime if is_big_endian():  # TODO: maybe make this a function parameter / arg check
             for i in range(0, ptr_len, fbs):
                 comptime for j in range(fbs // 2):
                     swap(temp_buf[i + j], temp_buf[i + (fbs - 1) - j])
         f.write_all(bytes_span)
 
     def saveToFile(mut self, filename: Path) raises:
-        """Alternatively, could write an Arena to file, etc."""
+        """Write all weights then biases as raw `ftype` bytes to `filename`, in the
+        order `loadFromFile` reads them back.
+        """
         with open(filename, "w") as f:
             Self._writeTensor(self.weight0_1, f)
             Self._writeTensor(self.weight2_3, f)
@@ -449,9 +513,9 @@ struct LeNet5(Movable, ArenaSizable):
             Self._writeTensor(self.bias5_6, f)
 
 
-struct Feature(Movable, ArenaSizable):
-    """
-    These buffers hold intermediate results.
+struct Feature(ArenaSizable, Movable):
+    """Per-pass activation buffers, one tensor per layer. Reused as both the
+    forward activations and the backward error maps.
     """
 
     var input: LayoutTensor[ftype, FeatureLayouts.input, MutUntrackedOrigin]
@@ -479,55 +543,84 @@ struct Feature(Movable, ArenaSizable):
         """
         Needs to start as all zeros.
         """
-        self.input = untrack(LayoutTensor[ftype, FeatureLayouts.input](
-            alloc[sftype](comptime (FeatureLayouts.input.size()))
-        )).fill(0.0)
-        self.layer1 = untrack(LayoutTensor[ftype, FeatureLayouts.layer1](
-            alloc[sftype](comptime (FeatureLayouts.layer1.size()))
-        )).fill(0.0)
-        self.layer2 = untrack(LayoutTensor[ftype, FeatureLayouts.layer2](
-            alloc[sftype](comptime (FeatureLayouts.layer2.size()))
-        )).fill(0.0)
-        self.layer3 = untrack(LayoutTensor[ftype, FeatureLayouts.layer3](
-            alloc[sftype](comptime (FeatureLayouts.layer3.size()))
-        )).fill(0.0)
-        self.layer4 = untrack(LayoutTensor[ftype, FeatureLayouts.layer4](
-            alloc[sftype](comptime (FeatureLayouts.layer4.size()))
-        )).fill(0.0)
-        self.layer5 = untrack(LayoutTensor[ftype, FeatureLayouts.layer5](
-            alloc[sftype](comptime (FeatureLayouts.layer5.size()))
-        )).fill(0.0)
-        self.output = untrack(LayoutTensor[ftype, FeatureLayouts.output](
-            alloc[sftype](comptime (FeatureLayouts.output.size()))
-        )).fill(0.0)
+        self.input = untrack(
+            LayoutTensor[ftype, FeatureLayouts.input](
+                alloc[sftype](comptime (FeatureLayouts.input.size()))
+            )
+        ).fill(0.0)
+        self.layer1 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer1](
+                alloc[sftype](comptime (FeatureLayouts.layer1.size()))
+            )
+        ).fill(0.0)
+        self.layer2 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer2](
+                alloc[sftype](comptime (FeatureLayouts.layer2.size()))
+            )
+        ).fill(0.0)
+        self.layer3 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer3](
+                alloc[sftype](comptime (FeatureLayouts.layer3.size()))
+            )
+        ).fill(0.0)
+        self.layer4 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer4](
+                alloc[sftype](comptime (FeatureLayouts.layer4.size()))
+            )
+        ).fill(0.0)
+        self.layer5 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer5](
+                alloc[sftype](comptime (FeatureLayouts.layer5.size()))
+            )
+        ).fill(0.0)
+        self.output = untrack(
+            LayoutTensor[ftype, FeatureLayouts.output](
+                alloc[sftype](comptime (FeatureLayouts.output.size()))
+            )
+        ).fill(0.0)
 
     def __init__(out self, mut arena: Some[CPUAllocator]):
         """
         Needs to start as all zeros.
         """
-        self.input = untrack(LayoutTensor[ftype, FeatureLayouts.input](
-            arena.alloc[sftype](comptime (FeatureLayouts.input.size()))
-        )).fill(0.0)
-        self.layer1 = untrack(LayoutTensor[ftype, FeatureLayouts.layer1](
-            arena.alloc[sftype](comptime (FeatureLayouts.layer1.size()))
-        )).fill(0.0)
-        self.layer2 = untrack(LayoutTensor[ftype, FeatureLayouts.layer2](
-            arena.alloc[sftype](comptime (FeatureLayouts.layer2.size()))
-        )).fill(0.0)
-        self.layer3 = untrack(LayoutTensor[ftype, FeatureLayouts.layer3](
-            arena.alloc[sftype](comptime (FeatureLayouts.layer3.size()))
-        )).fill(0.0)
-        self.layer4 = untrack(LayoutTensor[ftype, FeatureLayouts.layer4](
-            arena.alloc[sftype](comptime (FeatureLayouts.layer4.size()))
-        )).fill(0.0)
-        self.layer5 = untrack(LayoutTensor[ftype, FeatureLayouts.layer5](
-            arena.alloc[sftype](comptime (FeatureLayouts.layer5.size()))
-        )).fill(0.0)
-        self.output = untrack(LayoutTensor[ftype, FeatureLayouts.output](
-            arena.alloc[sftype](comptime (FeatureLayouts.output.size()))
-        )).fill(0.0)
+        self.input = untrack(
+            LayoutTensor[ftype, FeatureLayouts.input](
+                arena.alloc[sftype](comptime (FeatureLayouts.input.size()))
+            )
+        ).fill(0.0)
+        self.layer1 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer1](
+                arena.alloc[sftype](comptime (FeatureLayouts.layer1.size()))
+            )
+        ).fill(0.0)
+        self.layer2 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer2](
+                arena.alloc[sftype](comptime (FeatureLayouts.layer2.size()))
+            )
+        ).fill(0.0)
+        self.layer3 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer3](
+                arena.alloc[sftype](comptime (FeatureLayouts.layer3.size()))
+            )
+        ).fill(0.0)
+        self.layer4 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer4](
+                arena.alloc[sftype](comptime (FeatureLayouts.layer4.size()))
+            )
+        ).fill(0.0)
+        self.layer5 = untrack(
+            LayoutTensor[ftype, FeatureLayouts.layer5](
+                arena.alloc[sftype](comptime (FeatureLayouts.layer5.size()))
+            )
+        ).fill(0.0)
+        self.output = untrack(
+            LayoutTensor[ftype, FeatureLayouts.output](
+                arena.alloc[sftype](comptime (FeatureLayouts.output.size()))
+            )
+        ).fill(0.0)
 
     def loadInput(self, image: Image):
+        """Normalize `image` directly into the `input` buffer."""
         var normed_tensor = untrack(
             LayoutTensor[ftype, Image.DataLayout](self.input.ptr)
         )

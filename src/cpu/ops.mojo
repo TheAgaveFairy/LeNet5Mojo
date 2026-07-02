@@ -1,3 +1,5 @@
+"""CPU forward/backward kernels and the parallel train/test drivers."""
+
 from layout import LayoutTensor, Layout
 from std.math import exp, sqrt, log
 from std.algorithm.functional import vectorize
@@ -28,6 +30,7 @@ from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena
 
 
 def showProgress(progress: Int, total: Int) -> None:
+    """Redraw a fixed-width text progress bar in place."""
     comptime bar_width = 50
     var ratio = Float32(progress) / Float32(total)
     var filled = Int(Float32(bar_width) * ratio)
@@ -40,6 +43,7 @@ def showProgress(progress: Int, total: Int) -> None:
 
 
 def argMax[layout: Layout](output: LayoutTensor[ftype, layout, _]) -> Int:
+    """Flat index of the largest element."""
     var largest_value: sftype = FloatLiteral[].negative_infinity
     var pos: Int = 0
     comptime for i in range(layout.size()):
@@ -53,9 +57,9 @@ def argMax[layout: Layout](output: LayoutTensor[ftype, layout, _]) -> Int:
 def crossEntropyLossSIMD[
     layout: Layout
 ](preds: LayoutTensor[ftype, layout, _], label: Int) -> Float32:
-    """
-    Input is treated as if it is always a 1d 'vector'.
-    SIMD vectorized.
+    """Cross-entropy loss of `preds` against the true `label`, via a
+    numerically-stable log-sum-exp. `preds` is treated as a flat vector;
+    SIMD-vectorized.
     """
     var global_max: sftype = preds.ptr[0]
 
@@ -88,7 +92,8 @@ def crossEntropyLoss[
 ](
     preds: LayoutTensor[ftype, Layout.row_major(count), MutAnyOrigin],
     label: Int,
-    ) -> Float32:
+) -> Float32:
+    """Comptime-unrolled scalar counterpart of `crossEntropyLossSIMD`."""
     var max_val: sftype = rebind[sftype](preds[0])
 
     comptime for i in range(1, count):
@@ -113,6 +118,9 @@ def softMax[
     loss: LayoutTensor[ftype, Layout.row_major(count), MutAnyOrigin],
     label: Int,
 ):
+    """Softmax of `input` written to `loss`, then folded in place into the
+    output-layer error for `label` — the gradient that seeds backprop.
+    """
     var inner: sftype = 0.0
     for i in range(count):
         var res: sftype = 0.0
@@ -128,6 +136,7 @@ def softMax[
 
 
 def loadTarget(features: Feature, errors: Feature, label: Int) -> None:
+    """Seed `errors.output` with the output-layer gradient for `label`."""
     softMax(features.output, errors.output, label)
 
 
@@ -140,6 +149,7 @@ def channelSlice[
 ](
     t: LayoutTensor[ftype, Layout.row_major(C, H, W), MutAnyOrigin], c: Int
 ) -> LayoutTensor[ftype, Layout.row_major(H, W), MutAnyOrigin]:
+    """Channel `c` of a `(C, H, W)` tensor as a nominal `(H, W)` view."""
     return rebind[LayoutTensor[ftype, Layout.row_major(H, W), MutAnyOrigin]](
         t.slice[Slice(0, H), Slice(0, W), IndexList[2](1, 2)](IndexList[1](c))
     )
@@ -153,6 +163,8 @@ def kernelSlice[
     x: Int,
     y: Int,
 ) -> LayoutTensor[ftype, Layout.row_major(K, K), MutAnyOrigin]:
+    """Kernel `(x, y)` of an `(IC, OC, K, K)` tensor as a nominal `(K, K)` view.
+    """
     return rebind[LayoutTensor[ftype, Layout.row_major(K, K), MutAnyOrigin]](
         t.slice[Slice(0, K), Slice(0, K), IndexList[2](2, 3)](
             IndexList[2](x, y)
@@ -200,6 +212,10 @@ def convoluteBackward[
     ],
     bdeltas: LayoutTensor[ftype, Layout.row_major(out_chan), MutAnyOrigin],
 ):
+    """Backprop through a conv layer: full-convolve `outerror` with `weight` into
+    `inerror`, apply the activation backward, then accumulate bias and weight
+    gradients (`bdeltas`, `wdeltas`).
+    """
     comptime out_feat_size = feat_size - kernel_size + 1
 
     comptime for x in range(in_chan):
@@ -238,6 +254,9 @@ def convoluteValid[
         MutAnyOrigin,
     ],  # (out_size, out_size) == (feat - kern + 1, feat - kern + 1)
 ) -> None:
+    """Valid (shrinking) 2D correlation: accumulates `image * kernel` into
+    `result`, which is `kernel_size - 1` smaller per side.
+    """
     comptime assert (
         kernel.shape[0]() == kernel.shape[1]()
     ), "Kernel shape incorrect."
@@ -275,6 +294,9 @@ def convoluteFull[
     ],
     result: LayoutTensor[ftype, r_layout, MutAnyOrigin],  # (feat, feat)
 ) -> None:
+    """Full (expanding) 2D convolution: scatters `image * kernel` into `result`,
+    which is `kernel_size - 1` larger per side. Adjoint of `convoluteValid`.
+    """
     comptime assert (
         kernel.shape[0]() == kernel.shape[1]()
     ), "Kernel shape incorrect."
@@ -322,6 +344,9 @@ def convoluteForward[
         MutAnyOrigin,
     ],
 ) -> None:
+    """Forward conv layer: valid-convolve each input/output channel pair, add the
+    per-channel `bias`, then apply the activation in place.
+    """
     comptime out_feat_size = feat_size - kernel_size + 1
 
     comptime for x in range(kernels.shape[0]()):  # number of input channels
@@ -395,10 +420,15 @@ def maxPoolBackward[
         ftype, Layout.row_major(num_channels, out_feat_size, out_feat_size), _
     ],
 ):
+    """Backprop through max-pool: route each `outerror` cell to the argmax input
+    of its window. Caller must pre-zero `inerror` (see below).
+    """
     # Clean pooling: floor-div len drops trailing rows if not divisible. Write index is provably
     # in-bounds ((out-1)*len + len-1 < out*len <= in), so these guard ignored rows / garbage calls.
     # Precondition: caller must pre-zero `inerror` — backward only scatters into the argmax cells.
-    comptime assert out_feat_size > 0, "maxPoolBackward: out_feat_size must be > 0"
+    comptime assert (
+        out_feat_size > 0
+    ), "maxPoolBackward: out_feat_size must be > 0"
     comptime assert (
         in_feat_size % out_feat_size == 0
     ), "maxPoolBackward: in_feat_size must be divisible by out_feat_size"
@@ -423,6 +453,7 @@ def maxPoolBackward[
 
                 inerror[i, o0 * len0 + x0, o1 * len1 + x1] = outerror[i, o0, o1]
 
+
 # TODO: also compare this "branchless" to a "normal" maxpool
 def maxPoolForward[
     num_channels: Int, in_feat_size: Int, out_feat_size: Int
@@ -436,6 +467,7 @@ def maxPoolForward[
         MutAnyOrigin,
     ],
 ):
+    """Max-pool: each output cell is the max over its non-overlapping window."""
     comptime lenx = input.shape[1]() // output.shape[1]()
     comptime leny = input.shape[2]() // output.shape[2]()
 
@@ -479,6 +511,10 @@ def matmulBackward[
     ],
     bdeltas: LayoutTensor[ftype, Layout.row_major(output_size), MutAnyOrigin],
 ) -> None:
+    """Backprop through the final fully-connected layer: scatter `outerror` through
+    `weight` into `inerror`, apply the activation backward, then accumulate bias and
+    weight gradients. The flat weight rows index the `(chan, feat, feat)` input.
+    """
     comptime total_feats = feat_size * feat_size
 
     comptime for x in range(weight.shape[0]()):
@@ -502,6 +538,7 @@ def matmulBackward[
             var ie_k = rem % feat_size  # feat_size
             wdeltas[x, y] += input[ie_i, ie_j, ie_k] * outerror[y]
 
+
 # TODO: this is not production grade, i have one somewhere to copy over...
 def matmulForward[
     num_chan: Int,
@@ -519,6 +556,8 @@ def matmulForward[
     ],
     bias: LayoutTensor[ftype, Layout.row_major(output_size), _],
 ) -> None:
+    """Forward fully-connected layer: `output = weightᵀ · flatten(input) + bias`.
+    """
     # input is (layer5, feat5, feat5), weight is (layer5 * feat5 * feat5, output), output is (output)
     # feature_length5 is equal to the value 1
     comptime for x in range(weight.shape[0]()):
@@ -538,6 +577,10 @@ def matmulForward[
 def trainBatchParallel(
     mut model: LeNet5, inputs: Span[mut=False, Image, _]
 ) -> Tuple[Int, Float32]:
+    """Train one batch across threads: per-image forward/loss/backward into
+    per-image gradient models, sum them, and apply the `ALPHA/batch_size`-scaled
+    update to `model`. Returns `(correct, avg_loss)`.
+    """
     var batch_size = len(inputs)
 
     var buffer_arena = CPUArena(LeNet5.sizeInBytes())
@@ -606,6 +649,9 @@ def trainBatchParallel(
 def trainBatch(
     mut model: LeNet5, inputs: Span[mut=False, Image, _]
 ) -> Tuple[Int, Float32]:
+    """Single-threaded `trainBatchParallel`: reuses one feature/error/delta arena
+    per image, wiping between them. Returns `(correct, avg_loss)`.
+    """
     var batch_size = len(inputs)
     var correct = 0
     var total_loss: Float32 = 0.0
@@ -662,6 +708,9 @@ def trainingParallel(
     batch_size: Int,
     logger: Optional[MultiFileLogger] = None,
 ):
+    """One epoch over `data` in `batch_size` chunks via `trainBatchParallel`,
+    logging per-batch timing and accuracy.
+    """
     if DISPLAY:
         print("Training: Multi-Threaded")
     var total_size = len(data)
@@ -679,7 +728,14 @@ def trainingParallel(
         if logger:
             try:
                 logger.value().logTrainingEpoch(
-                    "CPU", i, elapsed, results_tuple[0], total_size, results_tuple[1], ALPHA, ftype
+                    "CPU",
+                    i,
+                    elapsed,
+                    results_tuple[0],
+                    total_size,
+                    results_tuple[1],
+                    ALPHA,
+                    ftype,
                 )
             except e:
                 print("logging error during CPU training:", e)
@@ -691,6 +747,7 @@ def training(
     batch_size: Int,
     logger: Optional[MultiFileLogger] = None,
 ):
+    """Single-threaded `trainingParallel`, using `trainBatch` per chunk."""
     if DISPLAY:
         print("Training: Single-Threaded")
     var total_size = len(data)
@@ -707,13 +764,21 @@ def training(
         if logger:
             try:
                 logger.value().logTrainingEpoch(
-                    "CPU", i, elapsed, results_tuple[0], total_size, results_tuple[1], ALPHA, ftype
+                    "CPU",
+                    i,
+                    elapsed,
+                    results_tuple[0],
+                    total_size,
+                    results_tuple[1],
+                    ALPHA,
+                    ftype,
                 )
             except e:
                 print("logging error during CPU training:", e)
 
 
 def testing(model: LeNet5, data: List[Image]) -> Int:
+    """Single-threaded inference over `data`; returns the number correct."""
     var correct = 0
     var feat_arena = CPU_ALLOCATOR(Feature.sizeInBytes())
     var feat = Feature(feat_arena)
@@ -729,6 +794,9 @@ def testing(model: LeNet5, data: List[Image]) -> Int:
 def testingParallel(
     model: LeNet5, data: List[Image], batch_size: Int = 50
 ) -> Int:
+    """Multi-threaded inference in `batch_size` chunks, plus a serial tail for the
+    remainder; returns the number correct.
+    """
     var correct = 0
     var feat_arena = CPU_ALLOCATOR(Feature.sizeInBytes() * batch_size)
     var feats = alloc[Feature](batch_size)
