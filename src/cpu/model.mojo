@@ -17,6 +17,7 @@ from cpu.ops import (
     convoluteForward,
     maxPoolForward,
     matmulForward,
+    matmulForwardFC,
     matmulBackward,
     convoluteBackward,
     maxPoolBackward,
@@ -332,8 +333,8 @@ struct LeNet5(ArenaSizable, Movable):
         convoluteForward(
             self.weight4_5, self.bias4_5, features.layer4, features.layer5
         )
-        matmulForward(
-            features.layer5, features.output, self.weight5_6, self.bias5_6
+        matmulForwardFC(
+            self.weight5_6, features.layer5, features.output, self.bias5_6
         )
 
     def backward(self, deltas: LeNet5, errors: Feature, features: Feature):

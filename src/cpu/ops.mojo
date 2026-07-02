@@ -1,7 +1,7 @@
 """CPU forward/backward kernels and the parallel train/test drivers."""
 
 from layout import LayoutTensor, Layout
-from std.math import exp, sqrt, log
+from std.math import exp, sqrt, log, ceildiv
 from std.algorithm.functional import vectorize
 from std.algorithm import parallelize
 from std.utils.index import IndexList
@@ -19,11 +19,17 @@ from constants import (
     sftype,
     nelts,
     act_fn,
+    CPU_TILE_SIZE,
     LENGTH_KERNEL,
     PADDED_SIZE,
     ALPHA,
     DISPLAY,
     CPU_ALLOCATOR,
+    LAYER5,
+    OUTPUT,
+    FeatureLayouts,
+    WeightLayouts,
+    BiasLayouts,
 )
 from image import Image
 from cpu.arena import CPUAllocator, CPUBumpArenaAllocator as CPUArena
@@ -538,40 +544,123 @@ def matmulBackward[
             var ie_k = rem % feat_size  # feat_size
             wdeltas[x, y] += input[ie_i, ie_j, ie_k] * outerror[y]
 
-
-# TODO: this is not production grade, i have one somewhere to copy over...
-def matmulForward[
-    num_chan: Int,
-    feat_size: Int,
-    output_size: Int,
+def matmulForward[ # tiled single-threaded GEMM
+    a_layout: Layout,
+    b_layout: Layout,
+    c_layout: Layout,
+    bias_layout: Layout,
+    epilogue_act: Bool = False,
+    TILE_SIZE: Int = CPU_TILE_SIZE,
 ](
-    input: LayoutTensor[
-        ftype, Layout.row_major(num_chan, feat_size, feat_size), _
-    ],
-    output: LayoutTensor[ftype, Layout.row_major(output_size), MutAnyOrigin],
-    weight: LayoutTensor[
-        ftype,
-        Layout.row_major(num_chan * feat_size * feat_size, output_size),
-        _,
-    ],
-    bias: LayoutTensor[ftype, Layout.row_major(output_size), _],
+    input: LayoutTensor[ftype, a_layout, _], # a 
+    weights: LayoutTensor[ftype, b_layout, _], # b
+    output: LayoutTensor[ftype, c_layout, MutUntrackedOrigin], # c
+    bias: LayoutTensor[ftype, bias_layout, _],
 ) -> None:
-    """Forward fully-connected layer: `output = weightᵀ · flatten(input) + bias`.
-    """
-    # input is (layer5, feat5, feat5), weight is (layer5 * feat5 * feat5, output), output is (output)
-    # feature_length5 is equal to the value 1
-    comptime for x in range(weight.shape[0]()):
-        for y in range(weight.shape[1]()):
-            for f in range(feat_size):
-                output[y] += input[x, f, f] * weight[x, y]
+    # a(M, K) @ b(K, N) + bias(M,) = c(M, N), act_fn epilogue optional
+    comptime M = input.shape[0]()
+    comptime K = input.shape[1]()
+    comptime N = weights.shape[1]()
 
-    comptime for i in range(output.shape[0]()):
-        output[i] += bias[i]
-        # output[i] = output[i] if output[i] > 0 else 0
-    # act_fn.forward(output)
-    # TODO: look into if this is good or bad
-    # TODO: parameterize to enable/ disable, fuse into loop above?
-    # FIXME: just a louder reminder
+    comptime assert bias_layout.size() == M, "bias must be (M,)"
+    # zero-padded tiles mean no ragged SIMD tail — divisibility is all we need
+    comptime assert TILE_SIZE % nelts == 0, "TILE_SIZE must be a multiple of nelts"
+
+    comptime tile_layout = Layout.row_major(TILE_SIZE, TILE_SIZE)
+    comptime BM = ceildiv(M, TILE_SIZE)
+    comptime BN = ceildiv(N, TILE_SIZE)
+    comptime BK = ceildiv(K, TILE_SIZE)
+
+    # prep tiles
+    var ta = LayoutTensor[ftype, tile_layout, MutUntrackedOrigin].stack_allocation()
+    var tb = LayoutTensor[ftype, tile_layout, MutUntrackedOrigin].stack_allocation()
+    var tc = LayoutTensor[ftype, tile_layout, MutUntrackedOrigin].stack_allocation()
+
+    for bm in range(BM):
+        for bn in range(BN):
+            # super important to zero this
+            _ = tc.fill(0.0)
+            for bk in range(BK):
+
+                # pack tile a
+                var global_m = bm * TILE_SIZE
+                for i in range(TILE_SIZE):
+                    var global_k = bk * TILE_SIZE
+                    for j in range(TILE_SIZE):
+                        if global_m >= M or global_k >= K:
+                            ta[i, j] = 0.0
+                        else:
+                            ta[i, j] = input[global_m, global_k]
+                        global_k += 1
+                    global_m += 1
+
+                # pack tile b
+                var global_k = bk * TILE_SIZE
+                for i in range(TILE_SIZE):
+                    var global_n = bn * TILE_SIZE
+                    for j in range(TILE_SIZE):
+                        if global_k >= K or global_n >= N:
+                            tb[j, i] = 0.0
+                        else:
+                            tb[j, i] = weights[global_k, global_n] # transpose
+                        global_n += 1
+                    global_k += 1
+
+                # can combine those two packs into the same n^2 control flow or make into a fn()
+
+                # SIMD dot-product microkernel: both tile rows unit-stride
+                # (tb transposed), FMA accumulate, one horizontal reduce per output
+                for ti in range(TILE_SIZE):
+                    for tj in range(TILE_SIZE):
+                        var accum = SIMD[ftype, nelts](0.0)
+                        comptime for tk in range(0, TILE_SIZE, nelts):
+                            var x = ta.ptr.load[width=nelts](ti * TILE_SIZE + tk)
+                            var y = tb.ptr.load[width=nelts](tj * TILE_SIZE + tk)
+                            accum = x.fma(y, accum)
+                        tc[ti, tj] += accum.reduce_add()
+
+            # store tc into global c output (bias + optional act epilogue here)
+            var global_m = bm * TILE_SIZE
+            var global_n = bn * TILE_SIZE
+            for ti in range(TILE_SIZE):
+                for tj in range(TILE_SIZE):
+                    if global_m + ti < M and global_n + tj < N:
+                        var v = rebind[sftype](tc[ti, tj]) + rebind[sftype](bias[global_m + ti])
+                        comptime if epilogue_act:
+                            v = act_fn.simdForward(v)
+                        output[global_m + ti, global_n + tj] = v
+
+
+def matmulForwardFC[
+    epilogue_act: Bool = False
+](
+    weights: LayoutTensor[ftype, WeightLayouts.w56, MutUntrackedOrigin],
+    input: LayoutTensor[ftype, FeatureLayouts.layer5, MutUntrackedOrigin],
+    output: LayoutTensor[ftype, FeatureLayouts.output, MutUntrackedOrigin],
+    bias: LayoutTensor[ftype, BiasLayouts.b56, MutUntrackedOrigin],
+) -> None:
+    """FC layer via the tiled GEMM: y(10,1) = W^T(10,120) @ x(120,1) + b(10).
+
+    `.transpose()` / `.reshape()` are stride VIEWS — no data movement. Safe
+    because matmulForward packs tiles through layout-aware indexing, never raw
+    ptr loads on a/b; a raw-pointer fast path on the inputs would break this
+    silently. The [oc, ic] weight reorder makes the transpose a no-op (TODO.md).
+    """
+    comptime a_t = WeightLayouts.w56.transpose()
+    comptime b_2d = Layout.row_major(LAYER5, 1)
+    comptime c_2d = Layout.row_major(OUTPUT, 1)
+    matmulForward[epilogue_act=epilogue_act](
+        rebind[LayoutTensor[ftype, a_t, MutUntrackedOrigin]](
+            weights.transpose()
+        ),
+        rebind[LayoutTensor[ftype, b_2d, MutUntrackedOrigin]](
+            input.reshape[b_2d]()
+        ),
+        rebind[LayoutTensor[ftype, c_2d, MutUntrackedOrigin]](
+            output.reshape[c_2d]()
+        ),
+        bias,
+    )
 
 
 def trainBatchParallel(

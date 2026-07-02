@@ -47,6 +47,8 @@ comptime ftype = DType.float32  # if defines.is_defined["float64"]() else DType.
 comptime sftype = Scalar[ftype]
 comptime nelts = simd_width_of[ftype]()
 
+comptime CPU_TILE_SIZE = defines.get_defined_int["CPU_TILE_SIZE", nelts]()
+
 comptime GPU_STREAM_BATCH_SIZE = defines.get_defined_int[
     "GPU_STREAM_BATCH_SIZE", 100
 ]()
