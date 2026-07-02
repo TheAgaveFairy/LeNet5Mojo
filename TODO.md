@@ -87,6 +87,11 @@ Check items off as they are completed.
     the `*Layouts` structs) for now.
 
 - [ ] **Parameterize + fuse the `act_fn` epilogue (CPU + GPU)** (`accel/ops.mojo:158`, `cpu/ops.mojo:418`, `cpu/ops.mojo:582`)
+  - PROGRESS 2026-07-02: knob prototyped in `tests/gemm.mojo` — `epilogue_act: Bool = False` comptime
+    param on `naiveCPU`/`tiledCPU`, bias + `act_fn.simdForward[ftype, 1]` fused into the store loop,
+    verified against `linalg.matmul` (bias/act folded into the reference). Remaining: port the pattern
+    into `cpu/ops.mojo` (`matmulForward`, `convoluteForward`) and the GPU kernels once the winning
+    GEMM lands.
   - Three markers, one theme: make the post-op activation a compile-time knob (enable/disable) and fuse
     it into the preceding accumulation loop instead of a separate `act_fn.forward` pass — `matMulFusedKernel`
     (GPU, raw-logits epilogue), `convoluteForward` (fuse `simdForward()` into the bias add loop), and
@@ -247,11 +252,14 @@ Check items off as they are completed.
   - 120 threads = 3.75 warps; the partial warp wastes a scheduler slot. Cheap experiment: launch 128,
     guard `oc < LAYER5` (or give the 8 spare threads shared-load duty).
 
-- [ ] **FC matmul as a real GPU GEMM** (`accel/gemm.mojo` — new WIP file)
-  - New untracked scaffold: `gemm3` kernel stub + a copy of `matMulFusedKernel`. Goal is a tiled GEMM
-    for the final FC layer (`LAYER5`×`OUTPUT`) instead of the per-block reduction. Separate from conv3
-    Tier B. Marker `# TODO: dram to local call possible` (`accel/gemm.mojo:68`). NOTE: file is untracked
-    (`git add` when ready).
+- [ ] **FC matmul as a real GPU GEMM** (was `accel/gemm.mojo`; playground now `tests/gemm.mojo`)
+  - File moved to `tests/gemm.mojo` (tracked) and reworked as the CPU GEMM playground: `naiveCPU`,
+    `tiledCPU` (TILE_SIZE via `-D`, default `nelts`), bias + optional act epilogue, verify gate +
+    Bench harness vs `linalg.matmul` (`pixi run benchgemm`). Numbers 2026-07-02: tiled ~8.5 GFLOPS
+    vs naive ~2.9 at 256³; linalg (multithreaded) 118–510. Next: SIMD inner loop, then a GPU tiled
+    GEMM for the final FC layer (`LAYER5`×`OUTPUT`) instead of the per-block reduction. CPU
+    multithreading likely skipped — inference already runs one thread per image, a threaded matmul
+    would fight that scheduling.
 
 - [ ] **GPU signature/cleanup nits** (`accel/ops.mojo`)
   - Pre-existing uncatalogued markers: take `Span`s in the conv kernels (`:232`); make `stream_slots` a

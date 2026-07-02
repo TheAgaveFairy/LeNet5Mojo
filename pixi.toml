@@ -10,6 +10,7 @@ formatall = "mojo format src/*.mojo src/cpu/*.mojo src/accel/*.mojo tests/*.mojo
 buildall = { cmd = "bash scripts/build_all.sh", cwd = "." }
 doit = {cmd = "mojo src/main.mojo", cwd = "."}
 bench = {cmd = "mojo src/main.mojo --bench-only", cwd = "."}
+benchgemm = { cmd = "mojo -I src tests/gemm.mojo", cwd = "." } # -D TILE_SIZE=n to sweep
 sanitize = { cmd = "mojo build -g2 -O1 --sanitize=address -Xlinker -lm src/main.mojo && ./main"}
 cdebug = { cmd = "mojo build -g2 -O1 --debug-info-language=C -Xlinker -lm src/main.mojo"}
 buildmain = { cmd = "mojo build -Xlinker -lm main.mojo", cwd = "src" }
