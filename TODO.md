@@ -5,6 +5,45 @@ Check items off as they are completed.
 
 ---
 
+## Roadmap (agreed 2026-07-02, post conv3/FC GEMM wiring)
+
+Context: conv3 + FC now run `gemmFusedKernel` (commit d9242c9): conv3 1.83x, kernel
+time -19%, stream knee moved to 12, best e2e bs=100 s=12 ≈ 1.37-1.42M fps — at the
+recorded onnxrt-tensorrt ceiling (1.41M) in CNNTesting. conv2 (43%) is the #1 kernel,
+and per its ncu audit the cheap conv2 wins are mined out — its next win is structural.
+
+- **Phase 1 — SoA feature buffers** (the keystone; see the batched-layout item below).
+  One `[batch_size, C, H, W]` tensor per layer instead of per-image `FeatureGPU` AoS.
+  Kernels keep their grids, indexing goes `feats[img].layerN[...]` → `layerN[img, ...]`
+  (mechanical, bisectable, accuracy-gated). Riders that fold in: kernels take
+  weight/bias/feature tensors directly (the 2026-07-01 fields-not-holder decision —
+  SoA rewrites every signature anyway and removes the param-ceiling reason for
+  pointer-passing); dead `FeatureGPU.output` dies; `StreamSlot.__init__` loses the
+  per-image seeding dance; conv3/FC GEMM strided views become dense (expect some
+  conv3 gemm improvement for free — scattered a-rows was a known suspect).
+- **Phase 2 — conv2 as batched GEMM** (needs Phase 1; deliberately parked until then,
+  partly to let the tile-indexing ideas marinate). Path of least resistance agreed:
+  (a) *materialized* im2col — a simple index-shuffle kernel builds A(N·100, 150),
+  then the existing unchanged gemmFusedKernel runs on it (+ a `w23g` transposed
+  weight copy, same recipe as w45g); (b) go *implicit* (decode indices in the tile
+  loader, never materialize) ONLY if the profile shows the im2col traffic hurting.
+  Register tiling is tracked separately below — in-the-weeds, skipped for now.
+- **Phase 3 — weight layout swap `[oc, ic, kh, kw]` / FC `[out, in]`** (PyTorch
+  convention), timed with the PyTorch-parity suite. By then it's GPU-perf-neutral
+  (GEMMs use transposed device copies regardless); value = parity tests, CPU
+  locality, dropping a convention copied from the reference impl for no benefit.
+  Saved-model bytes change: archival models are tagged `.icoc.` (models/README.md);
+  `CNNTesting/bench_numpy.py` parses the .dat layout directly and must move in the
+  same change.
+- **Parallel honesty track** (deadline-shaped: library comparison is soon; these are
+  small host-side items that change the *story* more than kernels do): resident/
+  compute-only mode, pre-normalized fp32 input mode, normalization parity, auto
+  num-streams heuristic (TARGET_EFF is now ~1200 on the 3070, not 500), pad-the-tail.
+  Also: re-run the CNNTesting harness with `--num-streams 12` — recorded mojo rows
+  peak at 1.236M (s=6) and today's numbers are ~15% above that.
+
+---
+
 ## Architecture / Design
 
 - [ ] **Refactor `batchedForward` to take one pre-sliced batch** (`accel/ops.mojo`)
@@ -51,11 +90,16 @@ Check items off as they are completed.
   - If CPU profiling shows packing cost, migrate CPU ops to consume `raw_pixels`/`raw_labels` spans
     directly. `Image` becomes a lightweight view into the arena rather than an owned struct.
 
-- [ ] **(Long-term) Batched feature layout — SoA across images, not AoS `FeatureGPU` per image** (`accel/feature.mojo`, `accel/ops.mojo`)
+- [ ] **Batched feature layout — SoA across images, not AoS `FeatureGPU` per image** (`accel/feature.mojo`, `accel/ops.mojo`) — **ROADMAP PHASE 1, NEXT UP** (was "long-term"; promoted 2026-07-02)
   - Today every kernel is `grid=(batch_size, ...)` with one image's small feature tensors per block
     (`feats[img].layerN`). A batched `[N, C, H, W]` tensor per layer would let conv2/conv3 become real
     GEMMs over the whole eff_batch (better coalescing, fewer/larger launches). This is the natural
     generalization of conv3 Tier B — note it here so Tier B is designed with batched layouts in mind.
+  - 2026-07-02 status: conv3 Tier B landed AROUND the AoS layout using strided views
+    (`GemmLayer4Layout` etc. — slab-stride rows). SoA makes those views dense (kills the
+    known scattered-a-rows perf suspect), unlocks conv2-as-GEMM (Phase 2), deletes the
+    FEAT_STRIDE hack, the dead `output` buffer, and the per-image StreamSlot seeding.
+    Plan details in the Roadmap section at the top.
 
 - [ ] **GPU ops should take weight/bias FIELDS directly, not the `lenet` holder** (`accel/ops.mojo`, `accel/model.mojo`, `main.mojo`)
   - DECISION 2026-07-01: pass each kernel only the tensors it uses (e.g. `matMulFused(weight5_6, bias5_6,
@@ -128,12 +172,12 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     (4x redundant global traffic). After the remap, sweep DIV_CHANS_CONV2=2 (block=800 thr,
     ~9.5 KB shared) to halve restaging.
 
-- [ ] **conv3 weight transpose for coalescing** (`accel/ops.mojo:260`) [27.6% share]
-  - Inner MAC reads `weight4_5[ic, oc, kw, kh]` with lanes varying oc → stride-25 global
-    reads, 400 loads/thread, 192 KB/block all uncoalesced (weights too big for shared).
-    Transpose device copy to [ic, kw, kh, oc] (oc contiguous → lanes consecutive) at
-    loadCPUWeights time; kernel indexing change only. Cheap Tier-A½ before the Tier B GEMM.
-  - Pairs with existing Tier A pad item (120→128 threads, `:751` area).
+- [x] **conv3 weight transpose for coalescing** (`accel/ops.mojo:260`) [27.6% share] — DONE 2026-07-02
+  - Landed as `w45g` inside the GEMM wiring (d9242c9): transposed device copy
+    `(ic,oc,kw,kh) → row-major (ic·kw·kh, oc)` written at `loadCPUWeights` via `map_to_host`
+    (syncs on exit — no staging lifetime). It's byte-identical to this item's
+    `[ic, kw, kh, oc]` proposal, consumed as GEMM `b` rather than by the old kernel.
+    The Tier A pad item below is mooted (old conv3 kernel replaced entirely).
 
 - [ ] **Fuse pool1 into conv1 epilogue** (`accel/ops.mojo:202`) [12.7% share]
   - maxPool1 costs MORE than conv1 (22.6 vs 19.2 us median) for 4 loads + 1 store/thread:
@@ -157,13 +201,38 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     mantissa limits (sq sums to ~5e7 > 2^24); fine at 96% accuracy today, revisit if
     accuracy debugging ever points here.
 
-- [ ] **matMul block.sum kernel** (`accel/ops.mojo:122`) [9.7% share] — superseded by the
-  in-flight GPU GEMM work (tests/gemm.mojo skeleton). If it survives: weight5_6[thread, oc]
-  reads are stride-10; transpose to [oc, thread] coalesces.
+- [x] **matMul block.sum kernel** (`accel/ops.mojo:122`) [9.7% share] — DONE 2026-07-02
+  - Superseded as predicted: FC now runs gemmFusedKernel + standalone argMaxKernel.
+    HONEST RESULT: a wash (10.6+2.0us vs 10.4 fused) — N=10 leaves 6/16 dead tile
+    columns, batch 100 → 7 blocks. Kept for uniformity + it inherits future gemm
+    upgrades. Old kernel renamed `matMulBlockSumKernel` (@deprecated) for one-line
+    swap-back. The stride-10 weight5_6 note is mooted: in GEMM orientation lanes
+    walk oc which is already unit-stride.
 
 - [ ] **Misc**: dead `lenet` param on both pool kernels; maxPool2 has the same chan-on-x
   scatter (low stakes at 4.4%); partial-warp blocks (784=24.5w conv1, 196=6.1w pool1,
   120=3.75w conv3) — conv3 pad already a TODO, others matter less than the items above.
+
+- [ ] **Explicit `.fma()` audit** (repo-wide) — added 2026-07-02
+  - `gemmFusedKernel`'s inner loop now uses `a_val.fma(b_val, accum)` explicitly (A/B'd:
+    same fps — the compiler was already fusing, so this is *documentation of intent* +
+    a guarantee where fast-math reassociation isn't allowed, not free perf). Sweep the
+    rest: conv1/conv2 MAC loops, normalize, CPU `convolute*`/`matmulForward` inner loops
+    (tiledCPU in tests/gemm.mojo already does it). Expect ~zero perf change; value is
+    explicitness + immunity to codegen regressions.
+
+- [ ] **Register tiling for gemmFusedKernel — INVESTIGATE LATER, deliberately skipped for now** — added 2026-07-02
+  - Each thread computes a T×T block of c instead of one element: 2T shared loads fuel T²
+    FMAs (today: 2 loads per 1 FMA; 2x2 → 1:1; 4x4 → 1:2). Attacks the shared-bandwidth
+    ceiling that caps the gemm at ~256 GFLOPS wired (vs 640 on the dense bench shape).
+    EXPECTED GAIN: ~1.5-2x on the gemm kernels themselves (conv3 37.5us → ~20-25us),
+    ≈10-15% off total kernel time at current shares, and — given stream packing converts
+    kernel savings to fps at the knee — roughly **+5-10% e2e**. Cost: 16+ registers/thread
+    of accumulators (occupancy tradeoff — conv2's ncu showed the 38-reg cap biting), and
+    the block/grid/tile geometry reshuffle is most of the diff. Develop in tests/gemm.mojo
+    where the bench harness scores each variant. Parked: in-the-weeds tuning while the
+    structural work (Phase 1 SoA, Phase 2 conv2-GEMM) is the priority; it also pays MORE
+    after Phase 2 (two GEMM consumers instead of one).
 
 
 - [x] **Ping-pong streaming: overlap H2D copy with compute** (`accel/ops.mojo`, `main.mojo`)
@@ -194,13 +263,14 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     Only real lever = register tiling / thread coarsening (Tier-B-class rewrite, medium effort,
     low ROI now). DEPRIORITIZED. Full read: ignoreme/ncu_conv2_notes.md.
 
-- [ ] **(LAST PRIORITY) conv3 Tier B — tiled GEMM for single-stream occupancy** (`accel/ops.mojo`)
-  - Tier A works but under-occupies (ncu: 8.8% occupancy, 0.11 waves/SM — 50 blocks of 120
-    threads can't fill the GPU). It leans on stream concurrency to hit peak throughput.
-  - Tier B = real tiled GEMM mapping batch×M onto MANY warp-multiple blocks, so one launch fills
-    the GPU on its own (high single-stream throughput, less reliance on 5+ streams). See the
-    GEMM design notes / `ignoreme/conv3_tierA_writeup.md` §4 caveat + §7.
-  - Explicitly deferred: do this ONLY after conv2 is understood and the rest of this list is done.
+- [x] **(LAST PRIORITY) conv3 Tier B — tiled GEMM for single-stream occupancy** (`accel/ops.mojo`) — DONE 2026-07-02
+  - Landed (d9242c9): `gemmFusedKernel`, batch as M over strided feature-arena views,
+    w45g weights, bias-per-col + act epilogue, masked cp.async tile staging. nsys:
+    conv3 68.8 → 37.5us med (1.83x), total kernel time -19%, accuracy exact. Stream
+    knee moved 5 → 12 (more packable kernels), best e2e 1.37-1.42M fps @ bs=100 s=12.
+    Remaining headroom tracked in the register-tiling item below + Phase 1 SoA
+    (dense a-rows). Design/gotcha notes: tests/gemm.mojo (kept as reference copy),
+    docs/origin_migration.md, kernel comments.
 
 - [ ] **Full image coverage for ANY batch size (pad the tail)** (`accel/ops.mojo`, `main.mojo`)
   - Today eff_batch must divide the dataset or the remainder images are dropped (e.g. bs=75 →
@@ -315,7 +385,9 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
   - 120 threads = 3.75 warps; the partial warp wastes a scheduler slot. Cheap experiment: launch 128,
     guard `oc < LAYER5` (or give the 8 spare threads shared-load duty).
 
-- [ ] **FC matmul as a real GPU GEMM** (was `accel/gemm.mojo`; playground now `tests/gemm.mojo`)
+- [x] **FC matmul as a real GPU GEMM** — DONE 2026-07-02 (d9242c9; see the matMul block.sum
+  item above for the honest wash verdict). Playground history below kept for the record.
+  (was `accel/gemm.mojo`; playground now `tests/gemm.mojo`)
   - File moved to `tests/gemm.mojo` (tracked) and reworked as the CPU GEMM playground: `naiveCPU`,
     `tiledCPU` (TILE_SIZE via `-D`, default `nelts`), bias + optional act epilogue, verify gate +
     Bench harness vs `linalg.matmul` (`pixi run benchgemm`). Numbers 2026-07-02: tiled ~8.5 GFLOPS
@@ -374,7 +446,14 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
   - Note: a `DeviceContext` host-callback (cudaLaunchHostFunc-style) is NOT the tool here — that orders
     host work *within* a stream; the prep just needs to move to `__init__`, before the timed loop.
 
-- [ ] **Sweep NUM_GPU_STREAMS past 5; re-tune the default (currently 3)** (`scripts/grid_search_gpu.sh`, `constants.mojo`)
+- [x] **Sweep NUM_GPU_STREAMS past 5; re-tune the default (currently 3)** (`scripts/grid_search_gpu.sh`, `constants.mojo`)
+  - RE-SWEPT 2026-07-02 after the conv3/FC GEMM landed: knee moved again, 5 → **12**
+    (bs=100: 1.42M fps @ s=12 vs 1.30M @ s=8 vs 1.20M @ s=5; s=16 flat). Same mechanism
+    as the 8jun finding — lighter kernels leave idle SMs for more streams to pack.
+    Default now 12; `--num-streams` cap raised to MAX_GPU_STREAMS=16 (was hardcoded 1..10).
+    Tile-aligned batches (96/112/128) did NOT beat ragged bs=100. Caveat from the earlier
+    entry stands: absolute fps wobbles ±10% across sessions even clock-locked — only
+    same-window A/B deltas are real.
   - After the Tier A conv3 rewrite, a single launch only fills ~9% of the GPU (ncu: 8.8% occupancy,
     0.11 waves/SM). That idle headroom is why more streams now help where they capped at ~3 before
     (block.sum conv3 filled the GPU per launch at 93% occ). 8jun grid search: small batch + s=5 wins

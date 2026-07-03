@@ -478,6 +478,16 @@ I do wish I'd made one big change: I'm typically allocating these as an array of
 // NOTE [needs more explanation]: missing the payoff — WHY SoA is faster. On GPU, SoA makes adjacent
 // threads read adjacent addresses (memory coalescing); on CPU it keeps a layer's data contiguous for
 // SIMD and cache. One sentence on coalescing makes this whole section land.
+// TODO (study item 2026-07-02): go back through the conv3 weight transpose (w45g in
+// accel/model.mojo loadCPUWeights) and really understand the coalescing story, ESPECIALLY
+// coalescing itself: why (ic, oc, kw, kh) can't be a 2D matrix view (the k-walk mixes strides
+// 3000/5/1 with oc's stride 25 wedged between); why the GEMM wants oc innermost (warp lanes
+// walk oc in the b-tile copy → consecutive lanes hit consecutive addresses → one wide memory
+// transaction instead of 32 scattered ones); and how the same lane-walks-the-contiguous-dim
+// rule explains the conv2 thread-remap experiment that LOST (cache absorbed the scatter —
+// coalescing matters most when the data DOESN'T already live in L1/L2). Concrete artifacts:
+// the w45g transpose loop, gemmFusedKernel's copy_threads layout, the TODO.md kernel-audit
+// entries, and the before/after nsys tables.
 
 ```python
 # right now - Array of Structs (AoS)

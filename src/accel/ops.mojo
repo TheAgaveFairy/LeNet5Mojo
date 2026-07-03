@@ -214,7 +214,9 @@ def gemmFusedKernel[
         barrier()
 
         comptime for k in range(TILE_SIZE):
-            accum += rebind[sftype](ta[local_row, k] * tb[k, local_col])
+            var a_val = rebind[sftype](ta[local_row, k])
+            var b_val = rebind[sftype](tb[k, local_col])
+            accum = a_val.fma(b_val, accum)
         barrier()
 
     if global_row < M and global_col < N:
