@@ -1,6 +1,7 @@
 from layout import Layout, LayoutTensor, lt_to_tt
+from layout import row_major as tt_row_major  # new-style Layout for TileTensor APIs
 from std.bit import next_power_of_two  # prev_power_of_two
-from std.math import ceildiv, abs, max
+from std.math import ceildiv, abs, max, min
 import std.sys.defines as defines
 from std.benchmark import (
     Bench,
@@ -21,13 +22,16 @@ from std.gpu.host import (
 from std.gpu import thread_idx, block_idx, block_dim, barrier, global_idx
 from std.sys import has_accelerator
 from std.gpu.primitives import block
-from std.gpu.memory import AddressSpace
+from std.gpu.memory import AddressSpace, async_copy_wait_all
+from layout.tile_io import copy_dram_to_sram_async
 
 from constants import (
     ftype,
     sftype,
     nelts,
     act_fn,
+    CPU_TILE_SIZE,
+    GPU_TILE_SIZE,
     FeatureLayouts,
     WeightLayouts,
     BiasLayouts,
@@ -38,8 +42,7 @@ from origin_util import untrack, untrack_imm
 
 from linalg.matmul import matmul # (out_tt, a_tt, b_tt, ctx = None)
 
-# override at build time: -D TILE_SIZE=16
-comptime TILE_SIZE = defines.get_defined_int["TILE_SIZE", nelts]()
+# override at build time: -D CPU_TILE_SIZE=16, etc
 
 def naiveCPU[
     a_layout: Layout,
@@ -78,7 +81,7 @@ def tiledCPU[
     b_layout: Layout,
     c_layout: Layout,
     bias_layout: Layout,
-    epilogue_act: Bool = False,
+    epilogue_act: Bool = False, 
 ](
     a: LayoutTensor[ftype, a_layout, _],
     b: LayoutTensor[ftype, b_layout, _],
@@ -90,6 +93,8 @@ def tiledCPU[
     comptime K = a.shape[1]()
     comptime N = b.shape[1]()
 
+    comptime TILE_SIZE = CPU_TILE_SIZE
+
     comptime assert bias_layout.size() == M, "bias must be (M,)"
     # zero-padded tiles mean no ragged SIMD tail — divisibility is all we need
     comptime assert TILE_SIZE % nelts == 0, "TILE_SIZE must be a multiple of nelts"
@@ -100,9 +105,10 @@ def tiledCPU[
     comptime BK = ceildiv(K, TILE_SIZE)
 
     # prep tiles
-    var ta = LayoutTensor[ftype, tile_layout, MutUntrackedOrigin](alloc[sftype](TILE_SIZE * TILE_SIZE))
-    var tb = LayoutTensor[ftype, tile_layout, MutUntrackedOrigin](alloc[sftype](TILE_SIZE * TILE_SIZE))
-    var tc = LayoutTensor[ftype, tile_layout, MutUntrackedOrigin](alloc[sftype](TILE_SIZE * TILE_SIZE))
+    comptime TileType = LayoutTensor[ftype, tile_layout, MutUntrackedOrigin]
+    var ta = TileType.stack_allocation()
+    var tb = TileType.stack_allocation()
+    var tc = TileType.stack_allocation()
 
     for bm in range(BM):
         for bn in range(BN):
@@ -158,17 +164,10 @@ def tiledCPU[
                             v = act_fn.simdForward(v)
                         c[global_m + ti, global_n + tj] = v
 
-    ta.ptr.free()
-    tb.ptr.free()
-    tc.ptr.free()
-
 # --- GPU ------------------------------------------------------------------
 # Same contract as the CPU fns: a(M,K) @ b(K,N) + bias(M,) = c(M,N), optional
 # fused act. Kernel body + launch dims are the work items; everything around
 # them (buffers, verify, bench) is wired.
-
-# TODO(paul): tune; placeholder square block for the naive kernel
-comptime GPU_BLOCK = 16
 
 def gemmGPUKernel[
     a_layout: Layout,
@@ -176,30 +175,73 @@ def gemmGPUKernel[
     c_layout: Layout,
     bias_layout: Layout,
     epilogue_act: Bool = False,
+    TILE_SIZE: Int = GPU_TILE_SIZE, # maybe this doesn't make sense here...
 ](
+    # concrete origins required: enqueue_function takes the kernel as a comptime
+    # param, so `_` (inferred-from-args) origins never get bound and no concrete
+    # DeviceFunction type exists — untracked is the supported spelling (see
+    # untrack_imm docstring / docs/origin_migration.md)
     a: LayoutTensor[ftype, a_layout, ImmutUntrackedOrigin],
     b: LayoutTensor[ftype, b_layout, ImmutUntrackedOrigin],
     c: LayoutTensor[ftype, c_layout, MutUntrackedOrigin],
     bias: LayoutTensor[ftype, bias_layout, ImmutUntrackedOrigin],
 ):
-    # PLACEHOLDER KERNEL: one thread per c element, naive K loop straight from
-    # global memory. Correct but slow — replace with shared-memory tiles
-    # (stack_allocation[.., AddressSpace.SHARED] + barrier()), keep the epilogue.
+    # Tiled shared-memory GEMM: one thread per c element within a TILE x TILE
+    # block. masked=True async copies zero-fill ragged edge tiles.
     comptime M = a.shape[0]()
     comptime K = a.shape[1]()
     comptime N = b.shape[1]()
     comptime assert b.shape[0]() == K, "bad shapes (a or b)"
     comptime assert bias_layout.size() == M, "bias must be (M,)"
 
-    var row = global_idx.y
-    var col = global_idx.x
-    if row < M and col < N:
-        var accum = rebind[sftype](bias[row])
-        for k in range(K):
-            accum += rebind[sftype](a[row, k] * b[k, col])
+    comptime BK = ceildiv(K, TILE_SIZE)
+
+    comptime tile_layout = Layout.row_major(TILE_SIZE, TILE_SIZE)
+    comptime SharedTileType = LayoutTensor[ftype, tile_layout, MutAnyOrigin, address_space = AddressSpace.SHARED]
+    var ta = SharedTileType.stack_allocation()
+    var tb = SharedTileType.stack_allocation()
+
+    var tile_row = block_idx.y # range(BM)
+    var tile_col = block_idx.x # range(BN)
+    var local_row = thread_idx.y # range(TILE_SIZE)
+    var local_col = thread_idx.x # range(TILE_SIZE)
+    var global_row = tile_row * TILE_SIZE + local_row
+    var global_col = tile_col * TILE_SIZE + local_col
+
+    # the async copiers speak TileTensor; convert views once, tile per bk step
+    # TODO: take TileTensor params and convert host-side (gemmGPU) instead —
+    # saves the per-thread conversion work here
+    var a_tt = lt_to_tt(a)
+    var b_tt = lt_to_tt(b)
+    var ta_tt = lt_to_tt(ta)
+    var tb_tt = lt_to_tt(tb)
+
+    # one element per thread, thread x on cols = coalesced global reads
+    comptime copy_threads = tt_row_major[TILE_SIZE, TILE_SIZE]()
+
+    var accum: sftype = 0 # bias joins in the guarded epilogue (rows >= M have no bias)
+    for bk in range(BK):
+        # Tile sub-views don't runtime-clip dim0, so pass the clip via src_num_valid_rows. Last-row copies may overread a few elements past the buffer end (linear bound) — absorbed by device alloc padding.
+        copy_dram_to_sram_async[thread_layout=copy_threads, masked=True](
+            ta_tt, a_tt.tile[TILE_SIZE, TILE_SIZE](tile_row, bk),
+            min(TILE_SIZE, M - tile_row * TILE_SIZE),
+        )
+        copy_dram_to_sram_async[thread_layout=copy_threads, masked=True](
+            tb_tt, b_tt.tile[TILE_SIZE, TILE_SIZE](bk, tile_col),
+            min(TILE_SIZE, K - bk * TILE_SIZE),
+        )
+        async_copy_wait_all()
+        barrier()
+
+        comptime for k in range(TILE_SIZE):
+            accum += rebind[sftype](ta[local_row, k] * tb[k, local_col])
+        barrier()
+
+    if global_row < M and global_col < N:
+        accum += rebind[sftype](bias[global_row])
         comptime if epilogue_act:
             accum = act_fn.simdForward(accum)
-        c[row, col] = accum
+        c[global_row, global_col] = accum
 
 
 def gemmGPU[
@@ -210,21 +252,24 @@ def gemmGPU[
     epilogue_act: Bool = False,
 ](
     ctx: DeviceContext,
-    a: LayoutTensor[ftype, a_layout, ImmutUntrackedOrigin],
-    b: LayoutTensor[ftype, b_layout, ImmutUntrackedOrigin],
+    a: LayoutTensor[ftype, a_layout, _],
+    b: LayoutTensor[ftype, b_layout, _],
     c: LayoutTensor[ftype, c_layout, MutUntrackedOrigin],
-    bias: LayoutTensor[ftype, bias_layout, ImmutUntrackedOrigin],
+    bias: LayoutTensor[ftype, bias_layout, _],
 ) raises:
     comptime M = a.shape[0]()
     comptime N = b.shape[1]()
+    comptime K = b.shape[0]()
     comptime kernel = gemmGPUKernel[
         a_layout, b_layout, c_layout, bias_layout, epilogue_act
     ]
+    comptime BM = ceildiv(M, GPU_TILE_SIZE)
+    comptime BN = ceildiv(N, GPU_TILE_SIZE)
+    # grid_dim is (x, y): x walks cols (BN), y walks rows (BM)
     ctx.enqueue_function[kernel](
         a, b, c, bias,
-        # TODO(paul): grid/block strategy is yours — this just covers c 1:1
-        grid_dim=(ceildiv(N, GPU_BLOCK), ceildiv(M, GPU_BLOCK)),
-        block_dim=(GPU_BLOCK, GPU_BLOCK),
+        grid_dim=(BN, BM),
+        block_dim=(GPU_TILE_SIZE, GPU_TILE_SIZE),
     )
 
 

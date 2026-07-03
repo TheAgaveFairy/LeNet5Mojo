@@ -49,6 +49,7 @@ comptime nelts = simd_width_of[ftype]()
 
 comptime CPU_TILE_SIZE = defines.get_defined_int["CPU_TILE_SIZE", nelts]()
 
+comptime GPU_TILE_SIZE = defines.get_defined_int["GPU_TILE_SIZE", 16]()
 comptime GPU_STREAM_BATCH_SIZE = defines.get_defined_int[
     "GPU_STREAM_BATCH_SIZE", 100
 ]()
