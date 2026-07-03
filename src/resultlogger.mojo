@@ -36,7 +36,7 @@ def reflectCSV[T: AnyType](ref s: T) -> String:
             + reflect[T].name()
             + " must be Writable"
         )
-        line += String(trait_downcast[Writable](fr))
+        line += String(fr)
     return line^
 
 
