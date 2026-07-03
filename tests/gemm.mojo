@@ -38,6 +38,7 @@ from constants import (
 )
 from accel.model import LeNet5GPU
 from accel.feature import FeatureGPU, FeatureGPUBuffers
+from accel.ops import gemmFusedKernel  # single source — developed here, lives there
 from origin_util import untrack, untrack_imm
 
 from linalg.matmul import matmul # (out_tt, a_tt, b_tt, ctx = None)
@@ -260,7 +261,7 @@ def gemmGPU[
     comptime M = a.shape[0]()
     comptime N = b.shape[1]()
     comptime K = b.shape[0]()
-    comptime kernel = gemmGPUKernel[
+    comptime kernel = gemmFusedKernel[
         a_layout, b_layout, c_layout, bias_layout, epilogue_act
     ]
     comptime BM = ceildiv(M, GPU_TILE_SIZE)

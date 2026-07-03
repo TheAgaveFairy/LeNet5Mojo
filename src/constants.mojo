@@ -54,8 +54,10 @@ comptime GPU_STREAM_BATCH_SIZE = defines.get_defined_int[
     "GPU_STREAM_BATCH_SIZE", 100
 ]()
 comptime NUM_GPU_STREAMS = defines.get_defined_int[
-    "NUM_GPU_STREAMS", 5
-]()  # saturation knee ~5-6 after Tier A conv3 (low-occupancy kernels leave headroom); 8 wasted
+    "NUM_GPU_STREAMS", 12
+]()  # knee moved 5 -> 12 after conv3 GEMM (2026-07-02 sweep, bs=100: 1.42M fps @ s=12
+# vs 1.30M @ s=8 vs 1.20M @ s=5; s=16 flat — knee). Lighter kernels pack more streams.
+comptime MAX_GPU_STREAMS = 16  # sanity cap for --num-streams; raise freely, slots are runtime-alloc'd
 
 comptime act_fn = ConditionalType[
     Trait=ActivationFunction,
@@ -125,6 +127,12 @@ struct WeightLayouts:
     )
     comptime w45 = Layout.row_major(
         LAYER4, LAYER5, LENGTH_KERNEL, LENGTH_KERNEL
+    )
+    # w45 transposed to GEMM b(K, N): row-major (ic*kw*kh, oc). One-time
+    # device copy made at weight upload; w45's native (ic, oc, kw, kh) order
+    # can't be a 2D strided view (k mixes ic and kw*kh at different strides).
+    comptime w45g = Layout.row_major(
+        LAYER4 * LENGTH_KERNEL * LENGTH_KERNEL, LAYER5
     )
     comptime w56 = Layout.row_major(
         LAYER5 * LENGTH_FEATURE5 * LENGTH_FEATURE5, OUTPUT

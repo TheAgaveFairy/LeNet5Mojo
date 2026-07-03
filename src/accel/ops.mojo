@@ -1,7 +1,9 @@
 """GPU forward-pass kernels and the batched multi-stream inference pipeline."""
 
-from layout import Layout, LayoutTensor
-from std.math import abs, sqrt, max
+from layout import Layout, LayoutTensor, IntTuple, lt_to_tt
+from layout import row_major as tt_row_major  # new-style Layout for TileTensor APIs
+from layout.tile_io import copy_dram_to_sram_async
+from std.math import abs, sqrt, max, min, ceildiv
 from std.bit import next_power_of_two  # prev_power_of_two
 from std.memory import memcpy, memset_zero
 from std.sys import size_of, stderr
@@ -13,9 +15,16 @@ from std.gpu.host import (
     HostBuffer,
     DeviceFunction,
 )
-from std.gpu import thread_idx, block_idx, block_dim, barrier
+from std.gpu import (
+    thread_idx,
+    block_idx,
+    block_dim,
+    barrier,
+    global_idx,
+    WARP_SIZE,
+)
 from std.gpu.primitives import block
-from std.gpu.memory import AddressSpace
+from std.gpu.memory import AddressSpace, async_copy_wait_all
 
 from constants import (
     ftype,
@@ -28,6 +37,7 @@ from constants import (
     LENGTH_FEATURE3,
     LENGTH_FEATURE4,
     LENGTH_FEATURE5,
+    GPU_TILE_SIZE,
     INPUT,
     LAYER1,
     LAYER2,
@@ -119,7 +129,139 @@ def normalizeInputsKernel[
         ) / stats[1]
 
 
-def matMulFusedKernel[
+def gemmFusedKernel[
+    a_layout: Layout,
+    b_layout: Layout,
+    c_layout: Layout,
+    bias_layout: Layout,
+    epilogue_act: Bool = False,
+    bias_per_col: Bool = False,
+    TILE_SIZE: Int = GPU_TILE_SIZE,
+](
+    # concrete origins required: enqueue_function takes the kernel as a comptime
+    # param, so `_` (inferred-from-args) origins never get bound and no concrete
+    # DeviceFunction type exists — untracked is the supported spelling (see
+    # untrack_imm docstring / docs/origin_migration.md)
+    a: LayoutTensor[ftype, a_layout, ImmutUntrackedOrigin],
+    b: LayoutTensor[ftype, b_layout, ImmutUntrackedOrigin],
+    c: LayoutTensor[ftype, c_layout, MutUntrackedOrigin],
+    bias: LayoutTensor[ftype, bias_layout, ImmutUntrackedOrigin],
+):
+    """Tiled shared-memory GEMM: c(M,N) = a(M,K) @ b(K,N) + bias, one thread
+    per c element within a TILE x TILE block, optional act_fn epilogue.
+
+    Grid Dim = (ceildiv(N, TILE_SIZE), ceildiv(M, TILE_SIZE))  — (x, y)!
+    Block Dim = (TILE_SIZE, TILE_SIZE)
+    bias is (M,) per-row, or (N,) per-col with bias_per_col (conv3/FC want
+    per-out-channel). a/c tolerate strided layouts (AoS feature-arena views);
+    b should be row-major for the masked zero-fill cancellation below.
+    Developed + benched in tests/gemm.mojo.
+    """
+    comptime M = a.shape[0]()
+    comptime K = a.shape[1]()
+    comptime N = b.shape[1]()
+    comptime assert b.shape[0]() == K, "bad shapes (a or b)"
+    comptime if bias_per_col:
+        comptime assert bias_layout.size() == N, "bias must be (N,)"
+    else:
+        comptime assert bias_layout.size() == M, "bias must be (M,)"
+
+    comptime BK = ceildiv(K, TILE_SIZE)
+
+    comptime tile_layout = Layout.row_major(TILE_SIZE, TILE_SIZE)
+    comptime SharedTileType = LayoutTensor[
+        ftype, tile_layout, MutAnyOrigin, address_space = AddressSpace.SHARED
+    ]
+    var ta = SharedTileType.stack_allocation()
+    var tb = SharedTileType.stack_allocation()
+
+    var tile_row = block_idx.y  # range(BM)
+    var tile_col = block_idx.x  # range(BN)
+    var local_row = thread_idx.y  # range(TILE_SIZE)
+    var local_col = thread_idx.x  # range(TILE_SIZE)
+    var global_row = tile_row * TILE_SIZE + local_row
+    var global_col = tile_col * TILE_SIZE + local_col
+
+    # the async copiers speak TileTensor; convert views once, tile per bk step
+    # TODO: take TileTensor params and convert host-side instead — saves the
+    # per-thread conversion work here
+    var a_tt = lt_to_tt(a)
+    var b_tt = lt_to_tt(b)
+    var ta_tt = lt_to_tt(ta)
+    var tb_tt = lt_to_tt(tb)
+
+    # one element per thread, thread x on cols = coalesced global reads
+    comptime copy_threads = tt_row_major[TILE_SIZE, TILE_SIZE]()
+
+    var accum: sftype = 0  # bias joins in the guarded epilogue
+    for bk in range(BK):
+        # masked bound is rows-only and linear (rows * row_stride): tb rows past
+        # K zero-fill, which also cancels ta's K-edge column garbage (x * 0);
+        # ta rows past M zero-fill; tb's N-edge column garbage is only read by
+        # threads the output guard discards. Tile sub-views don't runtime-clip
+        # dim0, so pass the clip via src_num_valid_rows. Last-row copies may
+        # overread a few elements past the buffer end (linear bound) — absorbed
+        # by device alloc padding.
+        copy_dram_to_sram_async[thread_layout=copy_threads, masked=True](
+            ta_tt, a_tt.tile[TILE_SIZE, TILE_SIZE](tile_row, bk),
+            min(TILE_SIZE, M - tile_row * TILE_SIZE),
+        )
+        copy_dram_to_sram_async[thread_layout=copy_threads, masked=True](
+            tb_tt, b_tt.tile[TILE_SIZE, TILE_SIZE](bk, tile_col),
+            min(TILE_SIZE, K - bk * TILE_SIZE),
+        )
+        async_copy_wait_all()
+        barrier()
+
+        comptime for k in range(TILE_SIZE):
+            accum += rebind[sftype](ta[local_row, k] * tb[k, local_col])
+        barrier()
+
+    if global_row < M and global_col < N:
+        comptime if bias_per_col:
+            accum += rebind[sftype](bias[global_col])
+        else:
+            accum += rebind[sftype](bias[global_row])
+        comptime if epilogue_act:
+            accum = act_fn.simdForward(accum)
+        c[global_row, global_col] = accum
+
+
+# argmax is trivially parallel (one thread per image, no block cooperation),
+# so block size is just an occupancy knob: 4 warps is the conventional
+# minimum-overhead shape for tiny kernels
+comptime ARGMAX_TPB = 4 * WARP_SIZE
+
+
+def argMaxKernel[
+    batch_size: Int
+](
+    outputs: LayoutTensor[
+        ftype, Layout.row_major(batch_size, OUTPUT), ImmutUntrackedOrigin
+    ],
+    guesses: LayoutTensor[
+        DType.uint8, Layout.row_major(batch_size), MutUntrackedOrigin
+    ],
+) -> None:
+    """One thread per image, sequential scan of its OUTPUT logits — 10 reads.
+    Was fused into the block.sum matmul; the GEMM path computes logits as a
+    batch matrix, so argmax stands alone (still only 1 byte/img D2H).
+    Grid Dim = ceildiv(batch_size, ARGMAX_TPB), Block Dim = ARGMAX_TPB.
+    """
+    var img_idx = global_idx.x
+    if img_idx < batch_size:
+        var best = sftype.MIN
+        var best_idx: UInt8 = 0
+        comptime for oc in range(OUTPUT):
+            var logit = rebind[sftype](outputs[img_idx, oc])
+            if logit > best:
+                best = logit
+                best_idx = UInt8(oc)
+        guesses[img_idx] = best_idx
+
+
+@deprecated("Replaced by gemmFusedKernel + argMaxKernel; kept for A/B.")
+def matMulBlockSumKernel[
     batch_size: Int
 ](
     lenet: LeNet5GPU,
@@ -489,6 +631,40 @@ def batchedArgMax[
         guesses[b] = max_idx
 
 
+# --- GEMM view plumbing -------------------------------------------------------
+# Per-image feature slabs sit at a uniform stride in the bump arena (all layers
+# are ftype, so 4-byte alignment never pads), so a batch of layer4/layer5
+# buffers IS a matrix: shape (batch, feats), strides (slab, 1). Views only — no
+# data movement. conv3 and FC are then plain GEMMs with batch as M.
+comptime FEAT_STRIDE = FeatureGPUBuffers.sizeInBytes() // size_of[sftype]()
+comptime CONV3_K = LAYER4 * LENGTH_KERNEL * LENGTH_KERNEL  # 400
+
+comptime GemmLayer4Layout[batch_size: Int] = Layout(
+    IntTuple(batch_size, CONV3_K), IntTuple(FEAT_STRIDE, 1)
+)
+comptime GemmLayer5Layout[batch_size: Int] = Layout(
+    IntTuple(batch_size, LAYER5), IntTuple(FEAT_STRIDE, 1)
+)
+comptime OutputsLayout[batch_size: Int] = Layout.row_major(batch_size, OUTPUT)
+
+comptime Conv3GemmKernel[batch_size: Int] = gemmFusedKernel[
+    GemmLayer4Layout[batch_size],
+    WeightLayouts.w45g,
+    GemmLayer5Layout[batch_size],
+    BiasLayouts.b45,
+    epilogue_act=True,
+    bias_per_col=True,
+]
+comptime FCGemmKernel[batch_size: Int] = gemmFusedKernel[
+    GemmLayer5Layout[batch_size],
+    WeightLayouts.w56,
+    OutputsLayout[batch_size],
+    BiasLayouts.b56,
+    epilogue_act=False,  # raw logits by design: no act_fn after the final FC
+    bias_per_col=True,
+]
+
+
 struct CompiledKernels[batch_size: Int](Movable):
     """The full forward-pass kernel set for one batch size, compiled once.
 
@@ -516,10 +692,13 @@ struct CompiledKernels[batch_size: Int](Movable):
         DeviceContext().compile_function[maxPool2Kernel[Self.batch_size]]()
     )
     var conv3: type_of(
-        DeviceContext().compile_function[conv3FusedKernel[Self.batch_size]]()
+        DeviceContext().compile_function[Conv3GemmKernel[Self.batch_size]]()
     )
     var matmul: type_of(
-        DeviceContext().compile_function[matMulFusedKernel[Self.batch_size]]()
+        DeviceContext().compile_function[FCGemmKernel[Self.batch_size]]()
+    )
+    var argmax: type_of(
+        DeviceContext().compile_function[argMaxKernel[Self.batch_size]]()
     )
 
     def __init__(out self, ctx: DeviceContext) raises:
@@ -531,8 +710,9 @@ struct CompiledKernels[batch_size: Int](Movable):
         ]()
         self.conv2 = ctx.compile_function[conv2FusedKernel[Self.batch_size]]()
         self.pool2 = ctx.compile_function[maxPool2Kernel[Self.batch_size]]()
-        self.conv3 = ctx.compile_function[conv3FusedKernel[Self.batch_size]]()
-        self.matmul = ctx.compile_function[matMulFusedKernel[Self.batch_size]]()
+        self.conv3 = ctx.compile_function[Conv3GemmKernel[Self.batch_size]]()
+        self.matmul = ctx.compile_function[FCGemmKernel[Self.batch_size]]()
+        self.argmax = ctx.compile_function[argMaxKernel[Self.batch_size]]()
 
 
 struct StreamSlot[batch_size: Int](Movable):
@@ -724,21 +904,45 @@ struct StreamSlot[batch_size: Int](Movable):
             grid_dim=(Self.batch_size),
             block_dim=(LENGTH_FEATURE4, LENGTH_FEATURE4, LAYER4),
         )
+        # conv3 + FC as batched GEMMs: a/c are strided views over the feature
+        # arena (batch rows at FEAT_STRIDE, unit stride in K), built from the
+        # first image's buffer pointer. Views cost nothing per call.
+        comptime BM_TILES = ceildiv(Self.batch_size, GPU_TILE_SIZE)
+        var layer4_batch = untrack_imm(
+            LayoutTensor[ftype, GemmLayer4Layout[Self.batch_size]](
+                self.device_buffers[0].layer4.unsafe_ptr()
+            )
+        )
+        var layer5_batch = untrack(
+            LayoutTensor[ftype, GemmLayer5Layout[Self.batch_size]](
+                self.device_buffers[0].layer5.unsafe_ptr()
+            )
+        )
+
         self.ctx.enqueue_function(
             kernels.conv3,
-            model,
-            self.features_ptr,
-            grid_dim=(Self.batch_size),
-            block_dim=(LAYER5),
+            layer4_batch,
+            untrack_imm(model.weight4_5_gemm),
+            layer5_batch,
+            untrack_imm(model.bias4_5),
+            grid_dim=(ceildiv(LAYER5, GPU_TILE_SIZE), BM_TILES),
+            block_dim=(GPU_TILE_SIZE, GPU_TILE_SIZE),
         )
         self.ctx.enqueue_function(
             kernels.matmul,
-            model,
-            self.features_ptr,
+            untrack_imm(layer5_batch),
+            untrack_imm(model.weight5_6),
             self.outputs,
+            untrack_imm(model.bias5_6),
+            grid_dim=(ceildiv(OUTPUT, GPU_TILE_SIZE), BM_TILES),
+            block_dim=(GPU_TILE_SIZE, GPU_TILE_SIZE),
+        )
+        self.ctx.enqueue_function(
+            kernels.argmax,
+            untrack_imm(self.outputs),
             self.guesses,
-            grid_dim=(Self.batch_size),
-            block_dim=(next_power_of_two(LAYER5)),
+            grid_dim=(ceildiv(Self.batch_size, ARGMAX_TPB)),
+            block_dim=(ARGMAX_TPB),
         )
         # 1 byte/img — logits stay on device
         self.hosted_guesses.enqueue_copy_from(self.guesses_buffer)

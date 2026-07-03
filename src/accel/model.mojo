@@ -14,6 +14,9 @@ from origin_util import untrack
 from constants import (
     ftype,
     sftype,
+    LAYER4,
+    LAYER5,
+    LENGTH_KERNEL,
     WeightLayouts,
     BiasLayouts,
 )
@@ -47,6 +50,7 @@ struct LeNet5GPUBuffers(ArenaSizable):
     var w01_storage: DeviceBuffer[ftype]
     var w23_storage: DeviceBuffer[ftype]
     var w45_storage: DeviceBuffer[ftype]
+    var w45g_storage: DeviceBuffer[ftype]  # w45 transposed for the GEMM path
     var w56_storage: DeviceBuffer[ftype]
     var b01_storage: DeviceBuffer[ftype]
     var b23_storage: DeviceBuffer[ftype]
@@ -64,6 +68,9 @@ struct LeNet5GPUBuffers(ArenaSizable):
         )
         self.w45_storage = arena.alloc[ftype](
             comptime (WeightLayouts.w45.size())
+        )
+        self.w45g_storage = arena.alloc[ftype](
+            comptime (WeightLayouts.w45g.size())
         )
         self.w56_storage = arena.alloc[ftype](
             comptime (WeightLayouts.w56.size())
@@ -85,6 +92,9 @@ struct LeNet5GPUBuffers(ArenaSizable):
         )
         self.w45_storage = ctx.enqueue_create_buffer[ftype](
             comptime (WeightLayouts.w45.size())
+        )
+        self.w45g_storage = ctx.enqueue_create_buffer[ftype](
+            comptime (WeightLayouts.w45g.size())
         )
         self.w56_storage = ctx.enqueue_create_buffer[ftype](
             comptime (WeightLayouts.w56.size())
@@ -115,6 +125,21 @@ struct LeNet5GPUBuffers(ArenaSizable):
         self.w23_storage.enqueue_copy_from(cpu_model.weight2_3.ptr)
         self.w45_storage.enqueue_copy_from(cpu_model.weight4_5.ptr)
         self.w56_storage.enqueue_copy_from(cpu_model.weight5_6.ptr)
+        # w45 rearranged once, (ic, oc, kw, kh) -> GEMM b(K=ic*kw*kh, N=oc);
+        # written through map_to_host (syncs on exit — no staging lifetime)
+        with self.w45g_storage.map_to_host() as w45g_host:
+            for ic in range(LAYER4):
+                for oc in range(LAYER5):
+                    for kw in range(LENGTH_KERNEL):
+                        for kh in range(LENGTH_KERNEL):
+                            var k = (
+                                ic * LENGTH_KERNEL + kw
+                            ) * LENGTH_KERNEL + kh
+                            w45g_host[k * LAYER5 + oc] = cpu_model.weight4_5.ptr[
+                                ((ic * LAYER5 + oc) * LENGTH_KERNEL + kw)
+                                * LENGTH_KERNEL
+                                + kh
+                            ]
         self.b01_storage.enqueue_copy_from(cpu_model.bias0_1.ptr)
         self.b23_storage.enqueue_copy_from(cpu_model.bias2_3.ptr)
         self.b45_storage.enqueue_copy_from(cpu_model.bias4_5.ptr)
@@ -125,6 +150,7 @@ struct LeNet5GPUBuffers(ArenaSizable):
         self.w01_storage.enqueue_fill(0.0)
         self.w23_storage.enqueue_fill(0.0)
         self.w45_storage.enqueue_fill(0.0)
+        self.w45g_storage.enqueue_fill(0.0)
         self.w56_storage.enqueue_fill(0.0)
         self.b01_storage.enqueue_fill(0.0)
         self.b23_storage.enqueue_fill(0.0)
@@ -146,6 +172,9 @@ struct LeNet5GPU(ArenaSizable, DevicePassable, TrivialRegisterPassable):
     var weight0_1: LayoutTensor[ftype, WeightLayouts.w01, MutUntrackedOrigin]
     var weight2_3: LayoutTensor[ftype, WeightLayouts.w23, MutUntrackedOrigin]
     var weight4_5: LayoutTensor[ftype, WeightLayouts.w45, MutUntrackedOrigin]
+    var weight4_5_gemm: LayoutTensor[
+        ftype, WeightLayouts.w45g, MutUntrackedOrigin
+    ]
     var weight5_6: LayoutTensor[ftype, WeightLayouts.w56, MutUntrackedOrigin]
 
     # BIASES
@@ -162,10 +191,14 @@ struct LeNet5GPU(ArenaSizable, DevicePassable, TrivialRegisterPassable):
         var w0 = bufs.w01_storage
         var w2 = bufs.w23_storage
         var w4 = bufs.w45_storage
+        var w4g = bufs.w45g_storage
         var w5 = bufs.w56_storage
         self.weight0_1 = untrack(LayoutTensor[ftype, WeightLayouts.w01](w0))
         self.weight2_3 = untrack(LayoutTensor[ftype, WeightLayouts.w23](w2))
         self.weight4_5 = untrack(LayoutTensor[ftype, WeightLayouts.w45](w4))
+        self.weight4_5_gemm = untrack(
+            LayoutTensor[ftype, WeightLayouts.w45g](w4g)
+        )
         self.weight5_6 = untrack(LayoutTensor[ftype, WeightLayouts.w56](w5))
         var b0 = bufs.b01_storage
         var b2 = bufs.b23_storage
@@ -182,6 +215,7 @@ struct LeNet5GPU(ArenaSizable, DevicePassable, TrivialRegisterPassable):
             WeightLayouts.w01.size()
             + WeightLayouts.w23.size()
             + WeightLayouts.w45.size()
+            + WeightLayouts.w45g.size()
             + WeightLayouts.w56.size()
             + BiasLayouts.b01.size()
             + BiasLayouts.b23.size()

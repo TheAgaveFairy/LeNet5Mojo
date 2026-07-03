@@ -2,7 +2,12 @@
 
 from std.sys import argv, stderr
 
-from constants import NUM_GPU_STREAMS, GPU_STREAM_BATCH_SIZE, DEFAULT_SEED
+from constants import (
+    NUM_GPU_STREAMS,
+    MAX_GPU_STREAMS,
+    GPU_STREAM_BATCH_SIZE,
+    DEFAULT_SEED,
+)
 
 
 @fieldwise_init
@@ -43,7 +48,10 @@ struct CliArgs(Copyable, Movable):
                     raise Error("seed not an int")
             elif args[i] == "--num-streams":
                 if i + 1 >= len(args):
-                    print("--num-streams needs a value 1..10", file=stderr)
+                    print(
+                        t"--num-streams needs a value 1..{MAX_GPU_STREAMS}",
+                        file=stderr,
+                    )
                     raise Error("num_streams missing value")
                 var v: Int
                 try:
@@ -53,8 +61,11 @@ struct CliArgs(Copyable, Movable):
                         "--num-streams: not an int:", args[i + 1], file=stderr
                     )
                     raise Error("num_streams not an int")
-                if v < 1 or v > 10:
-                    print("--num-streams must be 1..10, got", v, file=stderr)
+                if v < 1 or v > MAX_GPU_STREAMS:
+                    print(
+                        t"--num-streams must be 1..{MAX_GPU_STREAMS}, got {v}",
+                        file=stderr,
+                    )
                     raise Error("num_streams out of range")
                 num_streams = v
             elif args[i].startswith("--"):
@@ -72,7 +83,7 @@ def printHelp():
     print()
     print("runtime args (no recompile):")
     print(
-        t"  --num-streams N   GPU concurrent streams, 1..10 (default"
+        t"  --num-streams N   GPU concurrent streams, 1..{MAX_GPU_STREAMS} (default"
         t" {NUM_GPU_STREAMS})"
     )
     print("  --bench-only      load saved model, skip training, bench only")
