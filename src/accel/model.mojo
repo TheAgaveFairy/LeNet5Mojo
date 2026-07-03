@@ -3,8 +3,6 @@
 from layout import LayoutTensor
 
 from std.gpu.host import DeviceContext, DeviceBuffer
-from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
-from std.reflection.reflect import reflect
 from std.sys import size_of
 
 from cpu.model import LeNet5
@@ -160,13 +158,13 @@ struct LeNet5GPUBuffers(ArenaSizable):
             sync_ctx.value().synchronize()
 
 
-struct LeNet5GPU(ArenaSizable, DevicePassable, TrivialRegisterPassable):
+struct LeNet5GPU(ArenaSizable):
     """
     Same as the CPU version, but storage is on the GPU.
     LayoutTensors only — DeviceBuffers live in LeNet5GPUBuffers.
+    Host-side aggregate only: kernels take individual weight/bias tensors
+    (already device-passable), so no DevicePassable machinery here.
     """
-
-    comptime device_type: AnyType = Self
 
     # WEIGHTS
     var weight0_1: LayoutTensor[ftype, WeightLayouts.w01, MutUntrackedOrigin]
@@ -223,12 +221,3 @@ struct LeNet5GPU(ArenaSizable, DevicePassable, TrivialRegisterPassable):
             + BiasLayouts.b56.size()
         )
         return num_ftypes * size_of[ftype]()
-
-    @staticmethod
-    def get_type_name() -> String:
-        return reflect[Self].name()
-
-    def _to_device_type(
-        self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]
-    ):
-        encoder.encode(self, target)

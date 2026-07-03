@@ -12,15 +12,16 @@ time -19%, stream knee moved to 12, best e2e bs=100 s=12 ≈ 1.37-1.42M fps — 
 recorded onnxrt-tensorrt ceiling (1.41M) in CNNTesting. conv2 (43%) is the #1 kernel,
 and per its ncu audit the cheap conv2 wins are mined out — its next win is structural.
 
-- **Phase 1 — SoA feature buffers** (the keystone; see the batched-layout item below).
-  One `[batch_size, C, H, W]` tensor per layer instead of per-image `FeatureGPU` AoS.
-  Kernels keep their grids, indexing goes `feats[img].layerN[...]` → `layerN[img, ...]`
-  (mechanical, bisectable, accuracy-gated). Riders that fold in: kernels take
-  weight/bias/feature tensors directly (the 2026-07-01 fields-not-holder decision —
-  SoA rewrites every signature anyway and removes the param-ceiling reason for
-  pointer-passing); dead `FeatureGPU.output` dies; `StreamSlot.__init__` loses the
-  per-image seeding dance; conv3/FC GEMM strided views become dense (expect some
-  conv3 gemm improvement for free — scattered a-rows was a known suspect).
+- **Phase 1 — SoA feature buffers** ✅ DONE 2026-07-02. `BatchedFeatureLayouts[bs]`
+  (constants.mojo) + `FeatureGPUBuffers[bs]` with one batched buffer per live layer;
+  `FeatureGPU` deleted entirely (with it: the device_features byte-copy seeding,
+  `features_ptr` bitcast, StreamSlot `__del__`, and EVERY custom DevicePassable impl —
+  LeNet5GPU stripped too). All riders landed: kernels take weight/bias/feature tensors
+  directly; layer1 + output buffers dropped (arena per slot >2× smaller); GEMM views
+  dense (`FEAT_STRIDE` dead). Accuracy exact (9686/10000). Perf: e2e WASH in
+  back-to-back stash A/B (AoS 1.301/1.301M vs SoA 1.338/1.305/1.294M fps, bs=100
+  s=12, clocks locked) — the scattered-a-rows tax was already hidden by 12-stream
+  SM packing. Value delivered = structure + Phase 2 unlock, at zero perf cost.
 - **Phase 2 — conv2 as batched GEMM** (needs Phase 1; deliberately parked until then,
   partly to let the tile-indexing ideas marinate). Path of least resistance agreed:
   (a) *materialized* im2col — a simple index-shuffle kernel builds A(N·100, 150),
@@ -90,7 +91,7 @@ and per its ncu audit the cheap conv2 wins are mined out — its next win is str
   - If CPU profiling shows packing cost, migrate CPU ops to consume `raw_pixels`/`raw_labels` spans
     directly. `Image` becomes a lightweight view into the arena rather than an owned struct.
 
-- [ ] **Batched feature layout — SoA across images, not AoS `FeatureGPU` per image** (`accel/feature.mojo`, `accel/ops.mojo`) — **ROADMAP PHASE 1, NEXT UP** (was "long-term"; promoted 2026-07-02)
+- [x] **Batched feature layout — SoA across images, not AoS `FeatureGPU` per image** (`accel/feature.mojo`, `accel/ops.mojo`) — **DONE 2026-07-02 (Roadmap Phase 1** — results/evidence up there)
   - Today every kernel is `grid=(batch_size, ...)` with one image's small feature tensors per block
     (`feats[img].layerN`). A batched `[N, C, H, W]` tensor per layer would let conv2/conv3 become real
     GEMMs over the whole eff_batch (better coalescing, fewer/larger launches). This is the natural
@@ -101,7 +102,7 @@ and per its ncu audit the cheap conv2 wins are mined out — its next win is str
     FEAT_STRIDE hack, the dead `output` buffer, and the per-image StreamSlot seeding.
     Plan details in the Roadmap section at the top.
 
-- [ ] **GPU ops should take weight/bias FIELDS directly, not the `lenet` holder** (`accel/ops.mojo`, `accel/model.mojo`, `main.mojo`)
+- [x] **GPU ops should take weight/bias FIELDS directly, not the `lenet` holder** (`accel/ops.mojo`, `accel/model.mojo`, `main.mojo`) — DONE 2026-07-02, folded into Phase 1 (feats side went straight to batched tensors, skipping the weights-first staging; DevicePassable machinery dropped as planned; writeup note in ideas.typ)
   - DECISION 2026-07-01: pass each kernel only the tensors it uses (e.g. `matMulFused(weight5_6, bias5_6,
     ...)`, `conv3(weight4_5, bias4_5, ...)`) instead of the whole `LeNet5GPU`. Rationale: the signature
     becomes the real dependency contract (standard cuDNN/CUTLASS style); it's a SMALLER by-value param
@@ -363,7 +364,7 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     to count matches; or `comptime for` unroll since `batch_size` is comptime. ~50–100 bytes/batch so
     perf impact tiny — mostly a SIMD exercise. `batchedArgMax` kept around as the host-side fallback.
 
-- [ ] **Remove now-unused `FeatureGPU.output` buffer — or fold into the SoA migration** (`accel/feature.mojo`)
+- [x] **Remove now-unused `FeatureGPU.output` buffer — or fold into the SoA migration** (`accel/feature.mojo`) — DONE 2026-07-02 via option (b): Phase 1 deleted `FeatureGPU` wholesale; `output` AND the fused-away `layer1` have no batched buffer
   - After the matmul→outputs fusion no kernel reads/writes `feats[img].output`; the field, its
     layout, the `FeatureGPUBuffers.output` alloc, and its share of `sizeInBytes()` are dead weight
     (small: OUTPUT floats/img, but misleading to readers). Two options: (a) quick delete now, or

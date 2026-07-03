@@ -37,7 +37,7 @@ from constants import (
     BiasLayouts,
 )
 from accel.model import LeNet5GPU
-from accel.feature import FeatureGPU, FeatureGPUBuffers
+from accel.feature import FeatureGPUBuffers
 from accel.ops import gemmFusedKernel  # single source — developed here, lives there
 from origin_util import untrack, untrack_imm
 

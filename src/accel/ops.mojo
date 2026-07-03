@@ -1,6 +1,6 @@
 """GPU forward-pass kernels and the batched multi-stream inference pipeline."""
 
-from layout import Layout, LayoutTensor, IntTuple, lt_to_tt
+from layout import Layout, LayoutTensor, lt_to_tt
 from layout import row_major as tt_row_major  # new-style Layout for TileTensor APIs
 from layout.tile_io import copy_dram_to_sram_async
 from std.math import abs, sqrt, max, min, ceildiv
@@ -51,11 +51,12 @@ from constants import (
     NUM_GPU_STREAMS,
     GPU_STREAM_BATCH_SIZE,
     FeatureLayouts,
+    BatchedFeatureLayouts,
     WeightLayouts,
     BiasLayouts,
 )
 from accel.model import LeNet5GPU
-from accel.feature import FeatureGPU, FeatureGPUBuffers
+from accel.feature import FeatureGPUBuffers
 from accel.arena import GPUBumpArenaAllocator
 from origin_util import untrack, untrack_imm
 from dataloader import MNISTDataView
@@ -80,7 +81,9 @@ def normalizeInputsKernel[
         Layout.row_major(batch_size, IMAGE_SIZE, IMAGE_SIZE),
         ImmutUntrackedOrigin,
     ],
-    feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin],
+    input: LayoutTensor[
+        ftype, BatchedFeatureLayouts[batch_size].input, MutUntrackedOrigin
+    ],
 ):
     """Call with grid_dim=batch_size, block_dim=next_power_of_two(IMAGE_SIZE*IMAGE_SIZE) (1D).
     Pads and normalizes raw uint8 pixels into the feature input buffer.
@@ -124,7 +127,7 @@ def normalizeInputsKernel[
 
     if active:
         # buffers are zeroed at arena / allocator init, so padding border is already 0
-        feats[img].input[0, row + PADDING, col + PADDING] = (
+        input[img, 0, row + PADDING, col + PADDING] = (
             pix - stats[0]
         ) / stats[1]
 
@@ -266,8 +269,11 @@ def argMaxKernel[
 def matMulBlockSumKernel[
     batch_size: Int
 ](
-    lenet: LeNet5GPU,
-    feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin],
+    weight5_6: LayoutTensor[ftype, WeightLayouts.w56, ImmutUntrackedOrigin],
+    bias5_6: LayoutTensor[ftype, BiasLayouts.b56, ImmutUntrackedOrigin],
+    layer5: LayoutTensor[
+        ftype, BatchedFeatureLayouts[batch_size].layer5, ImmutUntrackedOrigin
+    ],
     outputs: LayoutTensor[
         ftype, Layout.row_major(batch_size, OUTPUT), MutUntrackedOrigin
     ],
@@ -289,17 +295,17 @@ def matMulBlockSumKernel[
     comptime reduction_size = next_power_of_two(LAYER5)  # 120 -> 128
 
     # TODO: dram to local call possible
-    var feat = feats[img_idx].layer5[thread, 0, 0] if thread < LAYER5 else 0
+    var feat = layer5[img_idx, thread] if thread < LAYER5 else 0
     var best = sftype.MIN
     var best_idx: UInt8 = 0
 
     comptime for oc in range(OUTPUT):
-        var weight = lenet.weight5_6[thread, oc] if thread < LAYER5 else 0
+        var weight = weight5_6[thread, oc] if thread < LAYER5 else 0
         var prod = feat * weight
         var answer = block.sum[block_size=reduction_size, broadcast=False](prod)
         if thread == 0:
             var logit = rebind[sftype](
-                answer + rebind[sftype](lenet.bias5_6[oc])
+                answer + rebind[sftype](bias5_6[oc])
             )
             outputs[img_idx, oc] = logit
             # raw logits by design: no act_fn after the final FC layer
@@ -315,7 +321,12 @@ def matMulBlockSumKernel[
 def maxPool2Kernel[
     batch_size: Int
 ](
-    lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
+    layer3: LayoutTensor[
+        ftype, BatchedFeatureLayouts[batch_size].layer3, ImmutUntrackedOrigin
+    ],
+    layer4: LayoutTensor[
+        ftype, BatchedFeatureLayouts[batch_size].layer4, MutUntrackedOrigin
+    ],
 ) -> None:
     """
     Runs as block_dim = (LF4, LF4, LAYER4) = 5 * 5 * 16 = 400, grid_dim = (batch_size).
@@ -333,23 +344,31 @@ def maxPool2Kernel[
     var tc = col * 2
     var temp: sftype = rebind[sftype](
         max(
-            feats[img_idx].layer3[chan, tr, tc],
-            feats[img_idx].layer3[chan, tr + 1, tc],
+            layer3[img_idx, chan, tr, tc],
+            layer3[img_idx, chan, tr + 1, tc],
         )
     )
     temp = max(
-        temp, rebind[sftype](feats[img_idx].layer3[chan, tr + 1, tc + 1])
+        temp, rebind[sftype](layer3[img_idx, chan, tr + 1, tc + 1])
     )
-    temp = max(temp, rebind[sftype](feats[img_idx].layer3[chan, tr, tc + 1]))
+    temp = max(temp, rebind[sftype](layer3[img_idx, chan, tr, tc + 1]))
 
-    feats[img_idx].layer4[chan, row, col] = temp
+    layer4[img_idx, chan, row, col] = temp
 
 
+@deprecated("Replaced by Conv3GemmKernel (gemmFusedKernel); kept for A/B.")
 def conv3FusedKernel[
     batch_size: Int
 ](
-    lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
-) -> None:  # TODO: convert these kernels to take Spans
+    weight4_5: LayoutTensor[ftype, WeightLayouts.w45, ImmutUntrackedOrigin],
+    bias4_5: LayoutTensor[ftype, BiasLayouts.b45, ImmutUntrackedOrigin],
+    layer4: LayoutTensor[
+        ftype, BatchedFeatureLayouts[batch_size].layer4, ImmutUntrackedOrigin
+    ],
+    layer5: LayoutTensor[
+        ftype, BatchedFeatureLayouts[batch_size].layer5, MutUntrackedOrigin
+    ],
+) -> None:
     """Call with grid_dim = (batch_size), block_dim = LAYER5. Each thread handles one output channel.
     """
     var img_idx = block_idx.x
@@ -365,7 +384,7 @@ def conv3FusedKernel[
     ].stack_allocation()
 
     for i in range(oc, num_feats, LAYER5):
-        local_feats.ptr[i] = feats[img_idx].layer4.ptr[i]
+        local_feats.ptr[i] = layer4.ptr[img_idx * num_feats + i]
 
     barrier()
 
@@ -374,18 +393,23 @@ def conv3FusedKernel[
         comptime for kw in range(LENGTH_KERNEL):
             comptime for kh in range(LENGTH_KERNEL):
                 acc += rebind[sftype](local_feats[ic, kw, kh]) * rebind[sftype](
-                    lenet.weight4_5[ic, oc, kw, kh]
+                    weight4_5[ic, oc, kw, kh]
                 )
 
-    feats[img_idx].layer5[oc, 0, 0] = act_fn.simdForward(
-        acc + lenet.bias4_5[oc]
-    )
+    layer5[img_idx, oc] = act_fn.simdForward(acc + bias4_5[oc])
 
 
 def conv2FusedKernel[
     batch_size: Int
 ](
-    lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
+    weight2_3: LayoutTensor[ftype, WeightLayouts.w23, ImmutUntrackedOrigin],
+    bias2_3: LayoutTensor[ftype, BiasLayouts.b23, ImmutUntrackedOrigin],
+    layer2: LayoutTensor[
+        ftype, BatchedFeatureLayouts[batch_size].layer2, ImmutUntrackedOrigin
+    ],
+    layer3: LayoutTensor[
+        ftype, BatchedFeatureLayouts[batch_size].layer3, MutUntrackedOrigin
+    ],
 ) -> None:
     """Conv2 + activation, one thread per output pixel, output channels split into
     `div_chans_conv2` sections. Stages the kernels and input tile into shared memory.
@@ -420,7 +444,7 @@ def conv2FusedKernel[
     # TODO: could make this much more efficient
     comptime for ic in range(LAYER2):
         if row < LENGTH_KERNEL and col < LENGTH_KERNEL:
-            local_kernels[ic, local_chan, row, col] = lenet.weight2_3[
+            local_kernels[ic, local_chan, row, col] = weight2_3[
                 ic, global_chan, row, col
             ]
 
@@ -433,12 +457,9 @@ def conv2FusedKernel[
 
     var idx = flat_idx
     while idx < local_image.size():
-        # var tch = idx // (LENGTH_FEATURE2 * LENGTH_FEATURE2)
-        # var rem = idx % (LENGTH_FEATURE2 * LENGTH_FEATURE2)
-        # var tr = rem // LENGTH_FEATURE2
-        # var tc = rem % LENGTH_FEATURE2
-        # local_image[tch, tr, tc] = feats[img_idx].layer2[tch, tr, tc]
-        local_image.ptr[idx] = feats[img_idx].layer2.ptr[idx]
+        # batched layer2 is row-major, so one image's slab is contiguous:
+        # flat-copy from its offset instead of 3D index math per element
+        local_image.ptr[idx] = layer2.ptr[img_idx * local_image.size() + idx]
         idx += TPB
 
     barrier()
@@ -453,15 +474,22 @@ def conv2FusedKernel[
                     local_image[ic, in_row, in_col]
                 ) * rebind[sftype](local_kernels[ic, local_chan, i, j])
 
-    feats[img_idx].layer3[global_chan, row, col] = act_fn.simdForward(
-        result + lenet.bias2_3[global_chan]
+    layer3[img_idx, global_chan, row, col] = act_fn.simdForward(
+        result + bias2_3[global_chan]
     )
 
 
 def conv1PoolFusedKernel[
     batch_size: Int
 ](
-    lenet: LeNet5GPU, feats: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
+    weight0_1: LayoutTensor[ftype, WeightLayouts.w01, ImmutUntrackedOrigin],
+    bias0_1: LayoutTensor[ftype, BiasLayouts.b01, ImmutUntrackedOrigin],
+    input: LayoutTensor[
+        ftype, BatchedFeatureLayouts[batch_size].input, ImmutUntrackedOrigin
+    ],
+    layer2: LayoutTensor[
+        ftype, BatchedFeatureLayouts[batch_size].layer2, MutUntrackedOrigin
+    ],
 ) -> None:
     """Conv1 + activation + 2x2 maxpool fused: input → layer2, layer1 never
     touches global memory (its buffer is now dead in the GPU path).
@@ -495,7 +523,7 @@ def conv1PoolFusedKernel[
         address_space=AddressSpace.SHARED,
     ].stack_allocation()
     if flat_idx < local_kernels.size():
-        local_kernels.ptr[flat_idx] = lenet.weight0_1.ptr[flat_idx]
+        local_kernels.ptr[flat_idx] = weight0_1.ptr[flat_idx]
 
     # INPUT > 1 not handled — guarded by the comptime assert above.
     var local_image = LayoutTensor[
@@ -511,7 +539,7 @@ def conv1PoolFusedKernel[
     while tid < LENGTH_FEATURE0 * LENGTH_FEATURE0:
         var r = tid // LENGTH_FEATURE0
         var c = tid % LENGTH_FEATURE0
-        local_image[0, r, c] = feats[img_idx].input[0, r, c]
+        local_image[0, r, c] = input[img_idx, 0, r, c]
         tid += TPB
 
     var local_biases = LayoutTensor[
@@ -521,7 +549,7 @@ def conv1PoolFusedKernel[
         address_space=AddressSpace.SHARED,
     ].stack_allocation()
     if flat_idx < LAYER1:
-        local_biases[flat_idx] = lenet.bias0_1[flat_idx]
+        local_biases[flat_idx] = bias0_1[flat_idx]
 
     barrier()
 
@@ -544,7 +572,7 @@ def conv1PoolFusedKernel[
                         result + rebind[sftype](local_biases[oc])
                     ),
                 )
-        feats[img_idx].layer2[oc, row, col] = best
+        layer2[img_idx, oc, row, col] = best
 
 
 def printerGPU[
@@ -634,31 +662,28 @@ def batchedArgMax[
 
 
 # --- GEMM view plumbing -------------------------------------------------------
-# Per-image feature slabs sit at a uniform stride in the bump arena (all layers
-# are ftype, so 4-byte alignment never pads), so a batch of layer4/layer5
-# buffers IS a matrix: shape (batch, feats), strides (slab, 1). Views only — no
-# data movement. conv3 and FC are then plain GEMMs with batch as M.
-comptime FEAT_STRIDE = FeatureGPUBuffers.sizeInBytes() // size_of[sftype]()
+# Batched (SoA) feature buffers are dense row-major, so the GEMM 'a' operands
+# are pure reshapes: layer4 (bs, 16, 5, 5) reads as (bs, 400), and layer5 is
+# already (bs, 120). Views only — no data movement. conv3 and FC are then
+# plain GEMMs with batch as M. (Pre-SoA these were FEAT_STRIDE-strided views
+# over per-image arena slabs — the dense rows are the free coalescing win.)
 comptime CONV3_K = LAYER4 * LENGTH_KERNEL * LENGTH_KERNEL  # 400
 
-comptime GemmLayer4Layout[batch_size: Int] = Layout(
-    IntTuple(batch_size, CONV3_K), IntTuple(FEAT_STRIDE, 1)
-)
-comptime GemmLayer5Layout[batch_size: Int] = Layout(
-    IntTuple(batch_size, LAYER5), IntTuple(FEAT_STRIDE, 1)
+comptime GemmLayer4Layout[batch_size: Int] = Layout.row_major(
+    batch_size, CONV3_K
 )
 comptime OutputsLayout[batch_size: Int] = Layout.row_major(batch_size, OUTPUT)
 
 comptime Conv3GemmKernel[batch_size: Int] = gemmFusedKernel[
     GemmLayer4Layout[batch_size],
     WeightLayouts.w45g,
-    GemmLayer5Layout[batch_size],
+    BatchedFeatureLayouts[batch_size].layer5,
     BiasLayouts.b45,
     epilogue_act=True,
     bias_per_col=True,
 ]
 comptime FCGemmKernel[batch_size: Int] = gemmFusedKernel[
-    GemmLayer5Layout[batch_size],
+    BatchedFeatureLayouts[batch_size].layer5,
     WeightLayouts.w56,
     OutputsLayout[batch_size],
     BiasLayouts.b56,
@@ -726,11 +751,7 @@ struct StreamSlot[batch_size: Int](Movable):
 
     var ctx: DeviceContext
     var device_arena: GPUBumpArenaAllocator
-    var device_buffers: UnsafePointer[FeatureGPUBuffers, MutUntrackedOrigin]
-
-    # older version that used InlineArrays to store FeatureGPUs lead to the compiler synthesizeing moves that unrolled N times which *exploded* compile times
-    var device_features: DeviceBuffer[DType.uint8]
-    var features_ptr: UnsafePointer[FeatureGPU, MutUntrackedOrigin]
+    var features: FeatureGPUBuffers[Self.batch_size]
     var hosted_inputs: HostBuffer[DType.uint8]
     var device_inputs: DeviceBuffer[DType.uint8]
     var outputs_buffer: DeviceBuffer[
@@ -748,40 +769,15 @@ struct StreamSlot[batch_size: Int](Movable):
     ]
 
     def __init__(out self) raises:
-        """Allocate this slot's stream, arena, feature buffers, and I/O buffers, then
-        seed `device_features` with the `FeatureGPU` views. Syncs once at the end.
+        """Allocate this slot's stream, arena, batched feature buffers, and I/O
+        buffers. Syncs once at the end.
         """
         comptime img_sz = IMAGE_SIZE * IMAGE_SIZE
         self.ctx = DeviceContext()
         self.device_arena = GPUBumpArenaAllocator(
-            self.ctx, Self.batch_size * FeatureGPUBuffers.sizeInBytes()
+            self.ctx, FeatureGPUBuffers[Self.batch_size].sizeInBytes()
         )
-        self.device_buffers = rebind[
-            UnsafePointer[FeatureGPUBuffers, MutUntrackedOrigin]
-        ](alloc[FeatureGPUBuffers](Self.batch_size))
-        # Local, NOT a field: only needed to seed device_features below. Keeping it
-        # off the struct avoids unrolling N FeatureGPU moves on every StreamSlot move.
-        # TODO: could probably bypass this intermediate
-        var features = InlineArray[FeatureGPU, Self.batch_size](
-            uninitialized=True
-        )
-        for j in range(Self.batch_size):
-            (self.device_buffers + j).init_pointee_move(
-                FeatureGPUBuffers(self.device_arena)
-            )
-            (features.unsafe_ptr() + j).init_pointee_move(
-                FeatureGPU((self.device_buffers + j)[])
-            )
-        comptime feat_bytes = Self.batch_size * size_of[FeatureGPU]()
-        self.device_features = self.ctx.enqueue_create_buffer[DType.uint8](
-            feat_bytes
-        )
-        self.device_features.enqueue_copy_from(
-            features.unsafe_ptr().bitcast[UInt8]()
-        )
-        self.features_ptr = rebind[
-            UnsafePointer[FeatureGPU, MutUntrackedOrigin]
-        ](self.device_features.unsafe_ptr().bitcast[FeatureGPU]())
+        self.features = FeatureGPUBuffers[Self.batch_size](self.device_arena)
         self.device_inputs = self.ctx.enqueue_create_buffer[DType.uint8](
             img_sz * Self.batch_size
         )
@@ -808,11 +804,6 @@ struct StreamSlot[batch_size: Int](Movable):
             )
         )
         self.ctx.synchronize()
-
-    def __del__(deinit self):
-        for i in range(Self.batch_size):
-            (self.device_buffers + i).destroy_pointee()
-        self.device_buffers.free()
 
     def loadBatch(self, batch: Span[UInt8, _]) raises:
         """
@@ -874,24 +865,53 @@ struct StreamSlot[batch_size: Int](Movable):
             LayoutTensor[DType.uint8, batch_pixels_layout](self.device_inputs)
         )
 
+        # Batched feature views — pure pointer wrapping, no data movement.
+        # Built mut once per layer; readers take untrack_imm(view) at the call.
+        comptime feat_layouts = BatchedFeatureLayouts[Self.batch_size]
+        var input_feats = untrack(
+            LayoutTensor[ftype, feat_layouts.input](self.features.input)
+        )
+        var layer2 = untrack(
+            LayoutTensor[ftype, feat_layouts.layer2](self.features.layer2)
+        )
+        var layer3 = untrack(
+            LayoutTensor[ftype, feat_layouts.layer3](self.features.layer3)
+        )
+        var layer4 = untrack(
+            LayoutTensor[ftype, feat_layouts.layer4](self.features.layer4)
+        )
+        var layer5 = untrack(
+            LayoutTensor[ftype, feat_layouts.layer5](self.features.layer5)
+        )
+        # same layer4 bytes reshaped (bs, 16, 5, 5) -> (bs, 400) for GEMM 'a'
+        var layer4_gemm = untrack_imm(
+            LayoutTensor[ftype, GemmLayer4Layout[Self.batch_size]](
+                self.features.layer4
+            )
+        )
+
         self.ctx.enqueue_function(
             kernels.norm,
             raw_pixels_tensor,
-            self.features_ptr,
+            input_feats,
             grid_dim=(Self.batch_size),
             block_dim=(next_power_of_two(IMAGE_SIZE * IMAGE_SIZE)),
         )
         self.ctx.enqueue_function(
             kernels.conv1,
-            model,
-            self.features_ptr,
+            untrack_imm(model.weight0_1),
+            untrack_imm(model.bias0_1),
+            untrack_imm(input_feats),
+            layer2,
             grid_dim=(Self.batch_size),
             block_dim=(LENGTH_FEATURE2, LENGTH_FEATURE2),
         )
         self.ctx.enqueue_function(
             kernels.conv2,
-            model,
-            self.features_ptr,
+            untrack_imm(model.weight2_3),
+            untrack_imm(model.bias2_3),
+            untrack_imm(layer2),
+            layer3,
             grid_dim=(Self.batch_size, div_chans_conv2),
             block_dim=(
                 LENGTH_FEATURE3,
@@ -901,38 +921,24 @@ struct StreamSlot[batch_size: Int](Movable):
         )
         self.ctx.enqueue_function(
             kernels.pool2,
-            model,
-            self.features_ptr,
+            untrack_imm(layer3),
+            layer4,
             grid_dim=(Self.batch_size),
             block_dim=(LENGTH_FEATURE4, LENGTH_FEATURE4, LAYER4),
         )
-        # conv3 + FC as batched GEMMs: a/c are strided views over the feature
-        # arena (batch rows at FEAT_STRIDE, unit stride in K), built from the
-        # first image's buffer pointer. Views cost nothing per call.
         comptime BM_TILES = ceildiv(Self.batch_size, GPU_TILE_SIZE)
-        var layer4_batch = untrack_imm(
-            LayoutTensor[ftype, GemmLayer4Layout[Self.batch_size]](
-                self.device_buffers[0].layer4.unsafe_ptr()
-            )
-        )
-        var layer5_batch = untrack(
-            LayoutTensor[ftype, GemmLayer5Layout[Self.batch_size]](
-                self.device_buffers[0].layer5.unsafe_ptr()
-            )
-        )
-
         self.ctx.enqueue_function(
             kernels.conv3,
-            layer4_batch,
+            layer4_gemm,
             untrack_imm(model.weight4_5_gemm),
-            layer5_batch,
+            layer5,
             untrack_imm(model.bias4_5),
             grid_dim=(ceildiv(LAYER5, GPU_TILE_SIZE), BM_TILES),
             block_dim=(GPU_TILE_SIZE, GPU_TILE_SIZE),
         )
         self.ctx.enqueue_function(
             kernels.matmul,
-            untrack_imm(layer5_batch),
+            untrack_imm(layer5),
             untrack_imm(model.weight5_6),
             self.outputs,
             untrack_imm(model.bias5_6),

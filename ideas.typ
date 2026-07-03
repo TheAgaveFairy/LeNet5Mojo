@@ -488,6 +488,17 @@ I do wish I'd made one big change: I'm typically allocating these as an array of
 // coalescing matters most when the data DOESN'T already live in L1/L2). Concrete artifacts:
 // the w45g transpose loop, gemmFusedKernel's copy_threads layout, the TODO.md kernel-audit
 // entries, and the before/after nsys tables.
+// TODO (writeup item 2026-07-02, Phase 1 SoA): the DevicePassable story now has an ending —
+// tell it as an exploration→refinement arc. Act 1: pass whole structs (LeNet5GPU, FeatureGPU)
+// to kernels, which demands the DevicePassable/TrivialRegisterPassable machinery (device_type,
+// get_type_name, _to_device_type) plus the pointer-pass workaround for the ~0x7ffc param-space
+// ceiling. Act 2 (the refinement): kernels take the individual weight/bias/feature LayoutTensors
+// they actually use — those are already device-passable, the signature becomes the real
+// dependency contract (cuDNN/CUTLASS style), the param footprint shrinks below the ceiling
+// naturally, and EVERY custom DevicePassable impl in the repo gets deleted. Lesson: the trait
+// machinery wasn't wrong, it was scaffolding for an API shape that batched SoA made unnecessary.
+// (MNISTDataView keeps TrivialRegisterPassable — that's a host-side register-value view, a
+// different concern.)
 
 ```python
 # right now - Array of Structs (AoS)

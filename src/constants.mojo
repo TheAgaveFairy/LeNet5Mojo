@@ -120,6 +120,27 @@ struct FeatureLayouts:
     comptime output = Layout.row_major(OUTPUT)
 
 
+# GPU-side batched (SoA) feature layouts — one [batch_size, C, H, W] tensor per
+# layer instead of per-image FeatureGPU slabs. Only layers that touch global
+# memory in the GPU path exist here: layer1 is fused away inside conv1PoolFused
+# and the old per-image `output` was dead. layer5 is 2D (batch, chan) — its
+# spatial dims are 1x1 and the GEMM path reads/writes it as a matrix.
+struct BatchedFeatureLayouts[bs: Int = GPU_STREAM_BATCH_SIZE]():
+    comptime input = Layout.row_major(
+        Self.bs, INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0
+    )
+    comptime layer2 = Layout.row_major(
+        Self.bs, LAYER2, LENGTH_FEATURE2, LENGTH_FEATURE2
+    )
+    comptime layer3 = Layout.row_major(
+        Self.bs, LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE3
+    )
+    comptime layer4 = Layout.row_major(
+        Self.bs, LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4
+    )
+    comptime layer5 = Layout.row_major(Self.bs, LAYER5)
+
+
 struct WeightLayouts:
     comptime w01 = Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)
     comptime w23 = Layout.row_major(
