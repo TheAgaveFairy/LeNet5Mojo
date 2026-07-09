@@ -1,5 +1,7 @@
 from layout import Layout, LayoutTensor, lt_to_tt
-from layout import row_major as tt_row_major  # new-style Layout for TileTensor APIs
+from layout import (
+    row_major as tt_row_major,
+)  # new-style Layout for TileTensor APIs
 from std.bit import next_power_of_two  # prev_power_of_two
 from std.math import ceildiv, abs, max, min
 import std.sys.defines as defines
@@ -38,12 +40,15 @@ from constants import (
 )
 from accel.model import LeNet5GPU
 from accel.feature import FeatureGPUBuffers
-from accel.ops import gemmFusedKernel  # single source — developed here, lives there
+from accel.ops import (
+    gemmFusedKernel,
+)  # single source — developed here, lives there
 from origin_util import untrack, untrack_imm
 
-from linalg.matmul import matmul # (out_tt, a_tt, b_tt, ctx = None)
+from linalg.matmul import matmul  # (out_tt, a_tt, b_tt, ctx = None)
 
 # override at build time: -D CPU_TILE_SIZE=16, etc
+
 
 def naiveCPU[
     a_layout: Layout,
@@ -77,12 +82,13 @@ def naiveCPU[
                 accum = act_fn.simdForward(accum)
             c[i, j] = accum
 
+
 def tiledCPU[
     a_layout: Layout,
     b_layout: Layout,
     c_layout: Layout,
     bias_layout: Layout,
-    epilogue_act: Bool = False, 
+    epilogue_act: Bool = False,
 ](
     a: LayoutTensor[ftype, a_layout, _],
     b: LayoutTensor[ftype, b_layout, _],
@@ -98,7 +104,9 @@ def tiledCPU[
 
     comptime assert bias_layout.size() == M, "bias must be (M,)"
     # zero-padded tiles mean no ragged SIMD tail — divisibility is all we need
-    comptime assert TILE_SIZE % nelts == 0, "TILE_SIZE must be a multiple of nelts"
+    comptime assert (
+        TILE_SIZE % nelts == 0
+    ), "TILE_SIZE must be a multiple of nelts"
 
     comptime tile_layout = Layout.row_major(TILE_SIZE, TILE_SIZE)
     comptime BM = ceildiv(M, TILE_SIZE)
@@ -116,7 +124,6 @@ def tiledCPU[
             # super important to zero this
             _ = tc.fill(0.0)
             for bk in range(BK):
-
                 # pack tile a
                 var global_m = bm * TILE_SIZE
                 for i in range(TILE_SIZE):
@@ -137,7 +144,7 @@ def tiledCPU[
                         if global_k >= K or global_n >= N:
                             tb[j, i] = 0.0
                         else:
-                            tb[j, i] = b[global_k, global_n] # transpose
+                            tb[j, i] = b[global_k, global_n]  # transpose
                         global_n += 1
                     global_k += 1
 
@@ -149,8 +156,12 @@ def tiledCPU[
                     for tj in range(TILE_SIZE):
                         var accum = SIMD[ftype, nelts](0.0)
                         comptime for tk in range(0, TILE_SIZE, nelts):
-                            var x = ta.ptr.load[width=nelts](ti * TILE_SIZE + tk)
-                            var y = tb.ptr.load[width=nelts](tj * TILE_SIZE + tk)
+                            var x = ta.ptr.load[width=nelts](
+                                ti * TILE_SIZE + tk
+                            )
+                            var y = tb.ptr.load[width=nelts](
+                                tj * TILE_SIZE + tk
+                            )
                             accum = x.fma(y, accum)
                         tc[ti, tj] += accum.reduce_add()
 
@@ -160,15 +171,19 @@ def tiledCPU[
             for ti in range(TILE_SIZE):
                 for tj in range(TILE_SIZE):
                     if global_m + ti < M and global_n + tj < N:
-                        var v = rebind[sftype](tc[ti, tj]) + rebind[sftype](bias[global_m + ti])
+                        var v = rebind[sftype](tc[ti, tj]) + rebind[sftype](
+                            bias[global_m + ti]
+                        )
                         comptime if epilogue_act:
                             v = act_fn.simdForward(v)
                         c[global_m + ti, global_n + tj] = v
+
 
 # --- GPU ------------------------------------------------------------------
 # Same contract as the CPU fns: a(M,K) @ b(K,N) + bias(M,) = c(M,N), optional
 # fused act. Kernel body + launch dims are the work items; everything around
 # them (buffers, verify, bench) is wired.
+
 
 def gemmGPUKernel[
     a_layout: Layout,
@@ -176,7 +191,7 @@ def gemmGPUKernel[
     c_layout: Layout,
     bias_layout: Layout,
     epilogue_act: Bool = False,
-    TILE_SIZE: Int = GPU_TILE_SIZE, # maybe this doesn't make sense here...
+    TILE_SIZE: Int = GPU_TILE_SIZE,  # maybe this doesn't make sense here...
 ](
     # concrete origins required: enqueue_function takes the kernel as a comptime
     # param, so `_` (inferred-from-args) origins never get bound and no concrete
@@ -198,14 +213,16 @@ def gemmGPUKernel[
     comptime BK = ceildiv(K, TILE_SIZE)
 
     comptime tile_layout = Layout.row_major(TILE_SIZE, TILE_SIZE)
-    comptime SharedTileType = LayoutTensor[ftype, tile_layout, MutAnyOrigin, address_space = AddressSpace.SHARED]
+    comptime SharedTileType = LayoutTensor[
+        ftype, tile_layout, MutAnyOrigin, address_space=AddressSpace.SHARED
+    ]
     var ta = SharedTileType.stack_allocation()
     var tb = SharedTileType.stack_allocation()
 
-    var tile_row = block_idx.y # range(BM)
-    var tile_col = block_idx.x # range(BN)
-    var local_row = thread_idx.y # range(TILE_SIZE)
-    var local_col = thread_idx.x # range(TILE_SIZE)
+    var tile_row = block_idx.y  # range(BM)
+    var tile_col = block_idx.x  # range(BN)
+    var local_row = thread_idx.y  # range(TILE_SIZE)
+    var local_col = thread_idx.x  # range(TILE_SIZE)
     var global_row = tile_row * TILE_SIZE + local_row
     var global_col = tile_col * TILE_SIZE + local_col
 
@@ -220,15 +237,19 @@ def gemmGPUKernel[
     # one element per thread, thread x on cols = coalesced global reads
     comptime copy_threads = tt_row_major[TILE_SIZE, TILE_SIZE]()
 
-    var accum: sftype = 0 # bias joins in the guarded epilogue (rows >= M have no bias)
+    var accum: sftype = (
+        0  # bias joins in the guarded epilogue (rows >= M have no bias)
+    )
     for bk in range(BK):
         # Tile sub-views don't runtime-clip dim0, so pass the clip via src_num_valid_rows. Last-row copies may overread a few elements past the buffer end (linear bound) — absorbed by device alloc padding.
         copy_dram_to_sram_async[thread_layout=copy_threads, masked=True](
-            ta_tt, a_tt.tile[TILE_SIZE, TILE_SIZE](tile_row, bk),
+            ta_tt,
+            a_tt.tile[TILE_SIZE, TILE_SIZE](tile_row, bk),
             min(TILE_SIZE, M - tile_row * TILE_SIZE),
         )
         copy_dram_to_sram_async[thread_layout=copy_threads, masked=True](
-            tb_tt, b_tt.tile[TILE_SIZE, TILE_SIZE](bk, tile_col),
+            tb_tt,
+            b_tt.tile[TILE_SIZE, TILE_SIZE](bk, tile_col),
             min(TILE_SIZE, K - bk * TILE_SIZE),
         )
         async_copy_wait_all()
@@ -268,7 +289,10 @@ def gemmGPU[
     comptime BN = ceildiv(N, GPU_TILE_SIZE)
     # grid_dim is (x, y): x walks cols (BN), y walks rows (BM)
     ctx.enqueue_function[kernel](
-        a, b, c, bias,
+        a,
+        b,
+        c,
+        bias,
         grid_dim=(BN, BM),
         block_dim=(GPU_TILE_SIZE, GPU_TILE_SIZE),
     )
@@ -324,6 +348,7 @@ def verifyGPU[
     print(t"verify GPU {M}x{K}x{N} act={epilogue_act}: diff {gpu_diff}")
     if gpu_diff > tol:
         raise Error("GPU GEMM verification failed vs naiveCPU")
+
 
 # --- benchmarking -------------------------------------------------------------
 #   pixi run mojo -I src tests/gemm.mojo
@@ -390,7 +415,10 @@ def verify[M: Int, K: Int, N: Int, epilogue_act: Bool = False]() raises:
     c_out.ptr.free()
 
     comptime tol = sftype(1e-4)
-    print(t"verify {M}x{K}x{N} act={epilogue_act}: naive diff {naive_diff}, tiled diff {tiled_diff}")
+    print(
+        t"verify {M}x{K}x{N} act={epilogue_act}: naive diff {naive_diff}, tiled"
+        t" diff {tiled_diff}"
+    )
     if naive_diff > tol or tiled_diff > tol:
         raise Error("GEMM verification failed vs linalg.matmul")
 
@@ -457,7 +485,9 @@ def benchGemms[M: Int, K: Int, N: Int](mut bench: Bench) raises:
 
         @parameter
         def work() raises:
-            matmul[transpose_b=False](lt_to_tt(c), lt_to_tt(a), lt_to_tt(bt), None)
+            matmul[transpose_b=False](
+                lt_to_tt(c), lt_to_tt(a), lt_to_tt(bt), None
+            )
             keep(c.ptr)
 
         b.iter[work]()
@@ -466,14 +496,22 @@ def benchGemms[M: Int, K: Int, N: Int](mut bench: Bench) raises:
         c.ptr.free()
 
     var measures = [ThroughputMeasure(BenchMetric.flops, flops)]
-    bench.bench_function[bench_naive](BenchId("naive_" + suffix), measures=measures.copy())
-    bench.bench_function[bench_tiled](BenchId("tiled_" + suffix), measures=measures.copy())
-    bench.bench_function[bench_linalg](BenchId("linalg_" + suffix), measures=measures.copy())
+    bench.bench_function[bench_naive](
+        BenchId("naive_" + suffix), measures=measures.copy()
+    )
+    bench.bench_function[bench_tiled](
+        BenchId("tiled_" + suffix), measures=measures.copy()
+    )
+    bench.bench_function[bench_linalg](
+        BenchId("linalg_" + suffix), measures=measures.copy()
+    )
 
 
 # GPU counterpart: hand-written kernel vs linalg.matmul on-device. Buffers set
 # up once per size; iter_custom times only the enqueued kernel (proper GPU sync).
-def benchGemmsGPU[M: Int, K: Int, N: Int](mut bench: Bench, ctx: DeviceContext) raises:
+def benchGemmsGPU[
+    M: Int, K: Int, N: Int
+](mut bench: Bench, ctx: DeviceContext) raises:
     comptime al = Layout.row_major(M, K)
     comptime bl = Layout.row_major(K, N)
     comptime cl = Layout.row_major(M, N)
@@ -527,8 +565,12 @@ def benchGemmsGPU[M: Int, K: Int, N: Int](mut bench: Bench, ctx: DeviceContext) 
         b.iter_custom(launch, ctx)
 
     var measures = [ThroughputMeasure(BenchMetric.flops, flops)]
-    bench.bench_function[bench_gpu](BenchId("gpu_" + suffix), measures=measures.copy())
-    bench.bench_function[bench_linalg_gpu](BenchId("linalg_gpu_" + suffix), measures=measures.copy())
+    bench.bench_function[bench_gpu](
+        BenchId("gpu_" + suffix), measures=measures.copy()
+    )
+    bench.bench_function[bench_linalg_gpu](
+        BenchId("linalg_gpu_" + suffix), measures=measures.copy()
+    )
 
 
 def main() raises:

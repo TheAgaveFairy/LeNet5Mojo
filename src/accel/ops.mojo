@@ -1,7 +1,9 @@
 """GPU forward-pass kernels and the batched multi-stream inference pipeline."""
 
 from layout import Layout, LayoutTensor, lt_to_tt
-from layout import row_major as tt_row_major  # new-style Layout for TileTensor APIs
+from layout import (
+    row_major as tt_row_major,
+)  # new-style Layout for TileTensor APIs
 from layout.tile_io import copy_dram_to_sram_async
 from std.math import abs, sqrt, max, min, ceildiv
 from std.bit import next_power_of_two  # prev_power_of_two
@@ -127,9 +129,9 @@ def normalizeInputsKernel[
 
     if active:
         # buffers are zeroed at arena / allocator init, so padding border is already 0
-        input[img, 0, row + PADDING, col + PADDING] = (
-            pix - stats[0]
-        ) / stats[1]
+        input[img, 0, row + PADDING, col + PADDING] = (pix - stats[0]) / stats[
+            1
+        ]
 
 
 def gemmFusedKernel[
@@ -173,7 +175,7 @@ def gemmFusedKernel[
 
     comptime tile_layout = Layout.row_major(TILE_SIZE, TILE_SIZE)
     comptime SharedTileType = LayoutTensor[
-        ftype, tile_layout, MutAnyOrigin, address_space = AddressSpace.SHARED
+        ftype, tile_layout, MutAnyOrigin, address_space=AddressSpace.SHARED
     ]
     var ta = SharedTileType.stack_allocation()
     var tb = SharedTileType.stack_allocation()
@@ -206,11 +208,13 @@ def gemmFusedKernel[
         # overread a few elements past the buffer end (linear bound) — absorbed
         # by device alloc padding.
         copy_dram_to_sram_async[thread_layout=copy_threads, masked=True](
-            ta_tt, a_tt.tile[TILE_SIZE, TILE_SIZE](tile_row, bk),
+            ta_tt,
+            a_tt.tile[TILE_SIZE, TILE_SIZE](tile_row, bk),
             min(TILE_SIZE, M - tile_row * TILE_SIZE),
         )
         copy_dram_to_sram_async[thread_layout=copy_threads, masked=True](
-            tb_tt, b_tt.tile[TILE_SIZE, TILE_SIZE](bk, tile_col),
+            tb_tt,
+            b_tt.tile[TILE_SIZE, TILE_SIZE](bk, tile_col),
             min(TILE_SIZE, K - bk * TILE_SIZE),
         )
         async_copy_wait_all()
@@ -304,9 +308,7 @@ def matMulBlockSumKernel[
         var prod = feat * weight
         var answer = block.sum[block_size=reduction_size, broadcast=False](prod)
         if thread == 0:
-            var logit = rebind[sftype](
-                answer + rebind[sftype](bias5_6[oc])
-            )
+            var logit = rebind[sftype](answer + rebind[sftype](bias5_6[oc]))
             outputs[img_idx, oc] = logit
             # raw logits by design: no act_fn after the final FC layer
             # TODO: parameterize act_fn epilogue
@@ -348,9 +350,7 @@ def maxPool2Kernel[
             layer3[img_idx, chan, tr + 1, tc],
         )
     )
-    temp = max(
-        temp, rebind[sftype](layer3[img_idx, chan, tr + 1, tc + 1])
-    )
+    temp = max(temp, rebind[sftype](layer3[img_idx, chan, tr + 1, tc + 1]))
     temp = max(temp, rebind[sftype](layer3[img_idx, chan, tr, tc + 1]))
 
     layer4[img_idx, chan, row, col] = temp

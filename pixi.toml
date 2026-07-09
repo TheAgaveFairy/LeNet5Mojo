@@ -23,13 +23,10 @@ gpulock = { cmd = "sudo scripts/gpu_lock.sh", cwd = "."}
 gpuunlock = { cmd = "sudo scripts/gpu_unlock.sh", cwd = "."}
 
 [dependencies]
-matplotlib = ">=3.10.9,<4"
-numpy = ">=2.4.6,<3"
-mojo = ">=1.0.0b2.dev2026053106,<2"
+matplotlib = ">=3.11.0,<4"
+numpy = ">=2.5.0,<3"
+mojo = ">=1.0.0b3.dev2026070306,<2"
 pandas = ">=3.0.3,<4"
-cuda-toolkit = ">=13.3.0,<14"
-max = ">=26.4.0.dev2026060406,<27"
-# Mojo's runtime .so's need glibc >=2.34 symbols (pthread/dl/sem merged into libc).
-# The default conda sysroot was 2.28, which broke `mojo build` (static link). Pin a
-# modern sysroot so the conda linker resolves @GLIBC_2.34/2.32 symbols.
-sysroot_linux-64 = ">=2.34"
+cuda-toolkit = ">=13.3.1,<14"
+max = ">=26.5.0.dev2026070306,<27"
+sysroot_linux-64 = ">=2.28,<3"

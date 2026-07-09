@@ -83,8 +83,8 @@ def printHelp():
     print()
     print("runtime args (no recompile):")
     print(
-        t"  --num-streams N   GPU concurrent streams, 1..{MAX_GPU_STREAMS} (default"
-        t" {NUM_GPU_STREAMS})"
+        t"  --num-streams N   GPU concurrent streams,"
+        t" 1..{MAX_GPU_STREAMS} (default {NUM_GPU_STREAMS})"
     )
     print("  --bench-only      load saved model, skip training, bench only")
     print(

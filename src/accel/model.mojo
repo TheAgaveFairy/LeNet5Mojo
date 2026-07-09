@@ -133,7 +133,9 @@ struct LeNet5GPUBuffers(ArenaSizable):
                             var k = (
                                 ic * LENGTH_KERNEL + kw
                             ) * LENGTH_KERNEL + kh
-                            w45g_host[k * LAYER5 + oc] = cpu_model.weight4_5.ptr[
+                            w45g_host[
+                                k * LAYER5 + oc
+                            ] = cpu_model.weight4_5.ptr[
                                 ((ic * LAYER5 + oc) * LENGTH_KERNEL + kw)
                                 * LENGTH_KERNEL
                                 + kh

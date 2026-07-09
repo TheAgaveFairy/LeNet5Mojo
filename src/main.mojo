@@ -352,7 +352,7 @@ def runGPUTest(
         # Allocate slots once — reused across warmup and timed passes
         var slots = alloc[StreamSlot[batch_size]](num_streams)
         for s in range(num_streams):
-            (slots + s).init_pointee_move(StreamSlot[batch_size]())
+            (slots + s).unsafe_write(StreamSlot[batch_size]())
 
         # warmup
         for _ in range(N_WARMUP):

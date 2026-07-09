@@ -1,4 +1,25 @@
-"""A small declarative CLI parser (standalone demo; the app uses `cli`)."""
+"""A small declarative CLI parser (standalone demo; the app uses `cli`).
+
+TODO critique (2026-07-03, bugs verified by running):
+- bool flag eats the next flag: `--verbose --seed 99` -> BOTH silently vanish,
+  no diagnostic (_find takes "--seed" as the value, marks it consumed). Fix:
+  _find refuses values starting with "--"; better: bare bools, presence = True.
+- trailing `--seed` (no value) runs the whole app on the default, THEN exits
+  with a misleading late "not valid" — fail loud at parse point, not at del.
+- exit() in __del__ during unwind swallowed a pending exception (the SIMD
+  demo error never printed). Validate via explicit finish(); __del__ at most
+  a backstop.
+- `--verbose banana` silently defaults (Int/Float _fail, Bool doesn't); in
+  __del__, help check should run BEFORE unknown-arg check (-h + stale flag
+  currently errors instead of helping); consume by index, not string match.
+- verbosity root cause: T: AnyType. Bound T: ImplicitlyCopyable & Writable
+  (Bool conforms — verified) -> hoist help-append + not-found return once,
+  delete both conforms_to asserts and the _register closure (~50 -> ~25
+  lines); unsupported T becomes `comptime assert False` and get() drops
+  `raises` (callers lose the try).
+- to actually replace cli.mojo: needs bare bools + loud missing-value; range
+  checks (num-streams 1..MAX) stay at the call site after get().
+"""
 
 from std.sys import argv, stderr, exit
 
@@ -25,16 +46,80 @@ struct ArgParser[hard_exit_mode: Bool = True]():
             var a = String(raw[i])
             if a == "-h" or a == "--help":
                 self.print_help = True
-            self.args.append(a)
+            else:
+                self.args.append(a)
 
-    def _find(
-        mut self, tag: String, default_str: String, desc: String
-    ) -> Optional[String]:
-        """Register `tag`'s help line and return the value following it, if present.
-        """
-        self.help_strs.append(
-            String(t"{tag} [default {default_str}]; Usage: {desc}")
-        )
+    def get[
+        T: AnyType
+    ](mut self, tag: String, default: T, desc: String) raises -> T:
+        comptime assert conforms_to(
+            T, ImplicitlyCopyable
+        ), "arg T not ImplicitlyCopyable"
+
+        # the support of "Bool" means we can't check for Writable conformance here
+        def _register(default_str: String) {read, mut self}:
+            self.help_strs.append(
+                String(t"{tag} [default {default_str}]; Usage: {desc}")
+            )
+
+        var found = self._find(tag)
+        comptime if T == Bool:
+            # comptime assert conforms_to(T, ImplicitlyCopyable), "CLIParser conformance failure"
+            _register("True" if Bool(rebind_var[Bool](default)) else "False")
+            if not found:
+                return rebind_var[T](default)
+            else:
+                var v = found.value().lower()
+                if v == "true":
+                    return rebind_var[T](True)
+                elif v == "false":
+                    return rebind_var[T](False)
+                else:
+                    return rebind_var[T](default)
+
+        elif T == Int:
+            comptime assert conforms_to(T, Writable)
+            _register(String(default))
+            if not found:
+                return rebind_var[T](default)
+            else:
+                try:
+                    return rebind_var[T](Int(found.value()))
+                except e:
+                    self._fail(tag, String(found.value()), default)
+                    return rebind_var[T](default)
+
+        elif T == Float64:
+            comptime assert conforms_to(T, Writable)
+            _register(String(default))
+            if not found:
+                return rebind_var[T](default)
+            else:
+                try:
+                    return rebind_var[T](Float64(found.value()))
+                except e:
+                    self._fail(tag, String(found.value()), default)
+                    return rebind_var[T](default)
+
+        elif T == String:
+            comptime assert conforms_to(T, Writable)
+            _register(String(default))
+            if not found:
+                return rebind_var[T](default)
+            else:
+                return rebind_var[T](found.value())
+
+        else:
+            raise Error(
+                String(t"{reflect[T].name()} not supported by CLIParser")
+            )
+
+    def registerHelpString(mut self, str: StringSlice):
+        """For anything that won't be automatically registered, use this."""
+        self.help_strs.append(String(str))
+
+    def _find(mut self, tag: String) -> Optional[String]:
+        """ONLY find `tag` and return the value following it, if present."""
         for i in range(len(self.args)):
             if self.args[i] == tag and i + 1 < len(self.args):
                 self.consumed.append(tag)
@@ -50,45 +135,6 @@ struct ArgParser[hard_exit_mode: Bool = True]():
             exit(2)
         else:
             print(t"{tag} failed: {e}. using: {default}", file=stderr)
-
-    def get(mut self, tag: String, default: Int, desc: String) -> Int:
-        """Read `tag` as the type of `default`, returning `default` when absent or unparseable.
-        """
-        var found = self._find(tag, String(default), desc)
-        if found:
-            try:
-                return Int(found.value())
-            except e:
-                self._fail(tag, String(e), default)
-        return default
-
-    def get(mut self, tag: String, default: Float64, desc: String) -> Float64:
-        var found = self._find(tag, String(default), desc)
-        if found:
-            try:
-                return Float64(found.value())
-            except e:
-                self._fail(tag, String(e), default)
-        return default
-
-    def get(mut self, tag: String, default: String, desc: String) -> String:
-        var found = self._find(tag, default, desc)
-        if found:
-            return found.value()
-        return default
-
-    def get(mut self, tag: String, default: Bool, desc: String) -> Bool:
-        """Accepts `true/1/yes` and `false/0/no` (case-insensitive); anything else fails.
-        """
-        var found = self._find(tag, String(default), desc)
-        if found:
-            var v = found.value().lower()
-            if v == "true" or v == "1" or v == "yes":
-                return True
-            if v == "false" or v == "0" or v == "no":
-                return False
-            self._fail(tag, "'v' not boolable", default)
-        return default
 
     def __del__(deinit self):
         """Reject any unconsumed args, then print help if `-h`/`--help` was seen.
@@ -111,13 +157,20 @@ struct ArgParser[hard_exit_mode: Bool = True]():
             exit(0)
 
 
-def main() raises:
+def main():
     var parser = ArgParser()
-    var seed = parser.get("--seed", 42, "sets seed for rand()")
-    var lr = parser.get("--lr", 0.01, "learning rate")
-    var name = parser.get("--name", "model", "output model name")
-    var verbose = parser.get("--verbose", False, "enable verbose logging")
-    print("seed:", seed)
-    print("lr:", lr)
-    print("name:", name)
-    print("verbose:", verbose)
+    parser.registerHelpString("-D define hints could go here, etc")
+    try:
+        var seed = parser.get("--seed", 42, "sets seed for rand()")
+        var lr = parser.get("--lr", 0.01, "learning rate")
+        var name = parser.get("--name", "model", "output model name")
+        var verbose = parser.get("--verbose", False, "enable verbose logging")
+        print("seed:", seed)
+        print("lr:", lr)
+        print("name:", name)
+        print("verbose:", verbose)
+        var should_fail = parser.get(
+            "--failure-test", SIMD[DType.float16, 4](1.0), "SIMD should fail"
+        )
+    except e:
+        print(e)

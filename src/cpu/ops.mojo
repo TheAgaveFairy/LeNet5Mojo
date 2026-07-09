@@ -544,7 +544,8 @@ def matmulBackward[
             var ie_k = rem % feat_size  # feat_size
             wdeltas[x, y] += input[ie_i, ie_j, ie_k] * outerror[y]
 
-def matmulForward[ # tiled single-threaded GEMM
+
+def matmulForward[  # tiled single-threaded GEMM
     a_layout: Layout,
     b_layout: Layout,
     c_layout: Layout,
@@ -552,9 +553,9 @@ def matmulForward[ # tiled single-threaded GEMM
     epilogue_act: Bool = False,
     TILE_SIZE: Int = CPU_TILE_SIZE,
 ](
-    input: LayoutTensor[ftype, a_layout, _], # a 
-    weights: LayoutTensor[ftype, b_layout, _], # b
-    output: LayoutTensor[ftype, c_layout, MutUntrackedOrigin], # c
+    input: LayoutTensor[ftype, a_layout, _],  # a
+    weights: LayoutTensor[ftype, b_layout, _],  # b
+    output: LayoutTensor[ftype, c_layout, MutUntrackedOrigin],  # c
     bias: LayoutTensor[ftype, bias_layout, _],
 ) -> None:
     # a(M, K) @ b(K, N) + bias(M,) = c(M, N), act_fn epilogue optional
@@ -564,7 +565,9 @@ def matmulForward[ # tiled single-threaded GEMM
 
     comptime assert bias_layout.size() == M, "bias must be (M,)"
     # zero-padded tiles mean no ragged SIMD tail — divisibility is all we need
-    comptime assert TILE_SIZE % nelts == 0, "TILE_SIZE must be a multiple of nelts"
+    comptime assert (
+        TILE_SIZE % nelts == 0
+    ), "TILE_SIZE must be a multiple of nelts"
 
     comptime tile_layout = Layout.row_major(TILE_SIZE, TILE_SIZE)
     comptime BM = ceildiv(M, TILE_SIZE)
@@ -572,16 +575,21 @@ def matmulForward[ # tiled single-threaded GEMM
     comptime BK = ceildiv(K, TILE_SIZE)
 
     # prep tiles
-    var ta = LayoutTensor[ftype, tile_layout, MutUntrackedOrigin].stack_allocation()
-    var tb = LayoutTensor[ftype, tile_layout, MutUntrackedOrigin].stack_allocation()
-    var tc = LayoutTensor[ftype, tile_layout, MutUntrackedOrigin].stack_allocation()
+    var ta = LayoutTensor[
+        ftype, tile_layout, MutUntrackedOrigin
+    ].stack_allocation()
+    var tb = LayoutTensor[
+        ftype, tile_layout, MutUntrackedOrigin
+    ].stack_allocation()
+    var tc = LayoutTensor[
+        ftype, tile_layout, MutUntrackedOrigin
+    ].stack_allocation()
 
     for bm in range(BM):
         for bn in range(BN):
             # super important to zero this
             _ = tc.fill(0.0)
             for bk in range(BK):
-
                 # pack tile a
                 var global_m = bm * TILE_SIZE
                 for i in range(TILE_SIZE):
@@ -602,7 +610,7 @@ def matmulForward[ # tiled single-threaded GEMM
                         if global_k >= K or global_n >= N:
                             tb[j, i] = 0.0
                         else:
-                            tb[j, i] = weights[global_k, global_n] # transpose
+                            tb[j, i] = weights[global_k, global_n]  # transpose
                         global_n += 1
                     global_k += 1
 
@@ -614,8 +622,12 @@ def matmulForward[ # tiled single-threaded GEMM
                     for tj in range(TILE_SIZE):
                         var accum = SIMD[ftype, nelts](0.0)
                         comptime for tk in range(0, TILE_SIZE, nelts):
-                            var x = ta.ptr.load[width=nelts](ti * TILE_SIZE + tk)
-                            var y = tb.ptr.load[width=nelts](tj * TILE_SIZE + tk)
+                            var x = ta.ptr.load[width=nelts](
+                                ti * TILE_SIZE + tk
+                            )
+                            var y = tb.ptr.load[width=nelts](
+                                tj * TILE_SIZE + tk
+                            )
                             accum = x.fma(y, accum)
                         tc[ti, tj] += accum.reduce_add()
 
@@ -625,7 +637,9 @@ def matmulForward[ # tiled single-threaded GEMM
             for ti in range(TILE_SIZE):
                 for tj in range(TILE_SIZE):
                     if global_m + ti < M and global_n + tj < N:
-                        var v = rebind[sftype](tc[ti, tj]) + rebind[sftype](bias[global_m + ti])
+                        var v = rebind[sftype](tc[ti, tj]) + rebind[sftype](
+                            bias[global_m + ti]
+                        )
                         comptime if epilogue_act:
                             v = act_fn.simdForward(v)
                         output[global_m + ti, global_n + tj] = v
@@ -689,9 +703,15 @@ def trainBatchParallel(
 
     for i in range(batch_size):
         # doing features[i] = Feature() will try and __del__ what "was already there" - bad
+        _ = """
         (features + i).init_pointee_move(Feature(intermediate_arena))
         (errors + i).init_pointee_move(Feature(intermediate_arena))
         (deltas + i).init_pointee_move(LeNet5(intermediate_arena))
+        """
+        (features + i).unsafe_write(Feature(intermediate_arena))
+        (errors + i).unsafe_write(Feature(intermediate_arena))
+        (deltas + i).unsafe_write(LeNet5(intermediate_arena))
+        # losses[i] = 0
         # losses[i] = 0
         corrects[i] = 0
 
@@ -892,7 +912,7 @@ def testingParallel(
 
     for i in range(batch_size):
         # doing feats[i] = Feature() will try and __del__ what "was already there" - bad
-        (feats + i).init_pointee_move(Feature(feat_arena))
+        (feats + i).unsafe_write(Feature(feat_arena))
     var corrects = List[Int](length=batch_size, fill=0)
 
     var n_full = len(data) // batch_size

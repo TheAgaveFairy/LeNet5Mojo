@@ -62,7 +62,9 @@ def maxPoolBackwardBranchy[
 ](
     input: Tens[Layout.row_major(num_channels, in_feat_size, in_feat_size)],
     inerror: Tens[Layout.row_major(num_channels, in_feat_size, in_feat_size)],
-    outerror: Tens[Layout.row_major(num_channels, out_feat_size, out_feat_size)],
+    outerror: Tens[
+        Layout.row_major(num_channels, out_feat_size, out_feat_size)
+    ],
 ):
     comptime len0 = in_feat_size // out_feat_size
     comptime len1 = in_feat_size // out_feat_size
@@ -97,13 +99,26 @@ comptime OUT2 = LENGTH_FEATURE4  # 5
 @parameter
 def bench_fwd_branchless(mut b: Bencher) raises:
     var arena = CPUArena(
-        (IC1 * IN1 * IN1 + IC1 * OUT1 * OUT1 + IC2 * IN2 * IN2 + IC2 * OUT2 * OUT2)
+        (
+            IC1 * IN1 * IN1
+            + IC1 * OUT1 * OUT1
+            + IC2 * IN2 * IN2
+            + IC2 * OUT2 * OUT2
+        )
         * size_of[ftype]()
     )
-    var in1 = Tens[Layout.row_major(IC1, IN1, IN1)](arena.alloc[sftype](IC1 * IN1 * IN1))
-    var out1 = Tens[Layout.row_major(IC1, OUT1, OUT1)](arena.alloc[sftype](IC1 * OUT1 * OUT1))
-    var in2 = Tens[Layout.row_major(IC2, IN2, IN2)](arena.alloc[sftype](IC2 * IN2 * IN2))
-    var out2 = Tens[Layout.row_major(IC2, OUT2, OUT2)](arena.alloc[sftype](IC2 * OUT2 * OUT2))
+    var in1 = Tens[Layout.row_major(IC1, IN1, IN1)](
+        arena.alloc[sftype](IC1 * IN1 * IN1)
+    )
+    var out1 = Tens[Layout.row_major(IC1, OUT1, OUT1)](
+        arena.alloc[sftype](IC1 * OUT1 * OUT1)
+    )
+    var in2 = Tens[Layout.row_major(IC2, IN2, IN2)](
+        arena.alloc[sftype](IC2 * IN2 * IN2)
+    )
+    var out2 = Tens[Layout.row_major(IC2, OUT2, OUT2)](
+        arena.alloc[sftype](IC2 * OUT2 * OUT2)
+    )
     fillVaried(in1.ptr, IC1 * IN1 * IN1)
     fillVaried(in2.ptr, IC2 * IN2 * IN2)
 
@@ -120,13 +135,26 @@ def bench_fwd_branchless(mut b: Bencher) raises:
 @parameter
 def bench_fwd_branchy(mut b: Bencher) raises:
     var arena = CPUArena(
-        (IC1 * IN1 * IN1 + IC1 * OUT1 * OUT1 + IC2 * IN2 * IN2 + IC2 * OUT2 * OUT2)
+        (
+            IC1 * IN1 * IN1
+            + IC1 * OUT1 * OUT1
+            + IC2 * IN2 * IN2
+            + IC2 * OUT2 * OUT2
+        )
         * size_of[ftype]()
     )
-    var in1 = Tens[Layout.row_major(IC1, IN1, IN1)](arena.alloc[sftype](IC1 * IN1 * IN1))
-    var out1 = Tens[Layout.row_major(IC1, OUT1, OUT1)](arena.alloc[sftype](IC1 * OUT1 * OUT1))
-    var in2 = Tens[Layout.row_major(IC2, IN2, IN2)](arena.alloc[sftype](IC2 * IN2 * IN2))
-    var out2 = Tens[Layout.row_major(IC2, OUT2, OUT2)](arena.alloc[sftype](IC2 * OUT2 * OUT2))
+    var in1 = Tens[Layout.row_major(IC1, IN1, IN1)](
+        arena.alloc[sftype](IC1 * IN1 * IN1)
+    )
+    var out1 = Tens[Layout.row_major(IC1, OUT1, OUT1)](
+        arena.alloc[sftype](IC1 * OUT1 * OUT1)
+    )
+    var in2 = Tens[Layout.row_major(IC2, IN2, IN2)](
+        arena.alloc[sftype](IC2 * IN2 * IN2)
+    )
+    var out2 = Tens[Layout.row_major(IC2, OUT2, OUT2)](
+        arena.alloc[sftype](IC2 * OUT2 * OUT2)
+    )
     fillVaried(in1.ptr, IC1 * IN1 * IN1)
     fillVaried(in2.ptr, IC2 * IN2 * IN2)
 
@@ -143,15 +171,32 @@ def bench_fwd_branchy(mut b: Bencher) raises:
 @parameter
 def bench_bwd_branchless(mut b: Bencher) raises:
     var arena = CPUArena(
-        (2 * IC1 * IN1 * IN1 + IC1 * OUT1 * OUT1 + 2 * IC2 * IN2 * IN2 + IC2 * OUT2 * OUT2)
+        (
+            2 * IC1 * IN1 * IN1
+            + IC1 * OUT1 * OUT1
+            + 2 * IC2 * IN2 * IN2
+            + IC2 * OUT2 * OUT2
+        )
         * size_of[ftype]()
     )
-    var in1 = Tens[Layout.row_major(IC1, IN1, IN1)](arena.alloc[sftype](IC1 * IN1 * IN1))
-    var ie1 = Tens[Layout.row_major(IC1, IN1, IN1)](arena.alloc[sftype](IC1 * IN1 * IN1)).fill(0.0)
-    var oe1 = Tens[Layout.row_major(IC1, OUT1, OUT1)](arena.alloc[sftype](IC1 * OUT1 * OUT1)).fill(1.0)
-    var in2 = Tens[Layout.row_major(IC2, IN2, IN2)](arena.alloc[sftype](IC2 * IN2 * IN2))
-    var ie2 = Tens[Layout.row_major(IC2, IN2, IN2)](arena.alloc[sftype](IC2 * IN2 * IN2)).fill(0.0)
-    var oe2 = Tens[Layout.row_major(IC2, OUT2, OUT2)](arena.alloc[sftype](IC2 * OUT2 * OUT2)).fill(1.0)
+    var in1 = Tens[Layout.row_major(IC1, IN1, IN1)](
+        arena.alloc[sftype](IC1 * IN1 * IN1)
+    )
+    var ie1 = Tens[Layout.row_major(IC1, IN1, IN1)](
+        arena.alloc[sftype](IC1 * IN1 * IN1)
+    ).fill(0.0)
+    var oe1 = Tens[Layout.row_major(IC1, OUT1, OUT1)](
+        arena.alloc[sftype](IC1 * OUT1 * OUT1)
+    ).fill(1.0)
+    var in2 = Tens[Layout.row_major(IC2, IN2, IN2)](
+        arena.alloc[sftype](IC2 * IN2 * IN2)
+    )
+    var ie2 = Tens[Layout.row_major(IC2, IN2, IN2)](
+        arena.alloc[sftype](IC2 * IN2 * IN2)
+    ).fill(0.0)
+    var oe2 = Tens[Layout.row_major(IC2, OUT2, OUT2)](
+        arena.alloc[sftype](IC2 * OUT2 * OUT2)
+    ).fill(1.0)
     fillVaried(in1.ptr, IC1 * IN1 * IN1)
     fillVaried(in2.ptr, IC2 * IN2 * IN2)
 
@@ -168,15 +213,32 @@ def bench_bwd_branchless(mut b: Bencher) raises:
 @parameter
 def bench_bwd_branchy(mut b: Bencher) raises:
     var arena = CPUArena(
-        (2 * IC1 * IN1 * IN1 + IC1 * OUT1 * OUT1 + 2 * IC2 * IN2 * IN2 + IC2 * OUT2 * OUT2)
+        (
+            2 * IC1 * IN1 * IN1
+            + IC1 * OUT1 * OUT1
+            + 2 * IC2 * IN2 * IN2
+            + IC2 * OUT2 * OUT2
+        )
         * size_of[ftype]()
     )
-    var in1 = Tens[Layout.row_major(IC1, IN1, IN1)](arena.alloc[sftype](IC1 * IN1 * IN1))
-    var ie1 = Tens[Layout.row_major(IC1, IN1, IN1)](arena.alloc[sftype](IC1 * IN1 * IN1)).fill(0.0)
-    var oe1 = Tens[Layout.row_major(IC1, OUT1, OUT1)](arena.alloc[sftype](IC1 * OUT1 * OUT1)).fill(1.0)
-    var in2 = Tens[Layout.row_major(IC2, IN2, IN2)](arena.alloc[sftype](IC2 * IN2 * IN2))
-    var ie2 = Tens[Layout.row_major(IC2, IN2, IN2)](arena.alloc[sftype](IC2 * IN2 * IN2)).fill(0.0)
-    var oe2 = Tens[Layout.row_major(IC2, OUT2, OUT2)](arena.alloc[sftype](IC2 * OUT2 * OUT2)).fill(1.0)
+    var in1 = Tens[Layout.row_major(IC1, IN1, IN1)](
+        arena.alloc[sftype](IC1 * IN1 * IN1)
+    )
+    var ie1 = Tens[Layout.row_major(IC1, IN1, IN1)](
+        arena.alloc[sftype](IC1 * IN1 * IN1)
+    ).fill(0.0)
+    var oe1 = Tens[Layout.row_major(IC1, OUT1, OUT1)](
+        arena.alloc[sftype](IC1 * OUT1 * OUT1)
+    ).fill(1.0)
+    var in2 = Tens[Layout.row_major(IC2, IN2, IN2)](
+        arena.alloc[sftype](IC2 * IN2 * IN2)
+    )
+    var ie2 = Tens[Layout.row_major(IC2, IN2, IN2)](
+        arena.alloc[sftype](IC2 * IN2 * IN2)
+    ).fill(0.0)
+    var oe2 = Tens[Layout.row_major(IC2, OUT2, OUT2)](
+        arena.alloc[sftype](IC2 * OUT2 * OUT2)
+    ).fill(1.0)
     fillVaried(in1.ptr, IC1 * IN1 * IN1)
     fillVaried(in2.ptr, IC2 * IN2 * IN2)
 

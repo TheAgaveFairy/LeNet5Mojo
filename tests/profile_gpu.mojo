@@ -41,7 +41,7 @@ def main() raises:
     with DeviceContext() as ctx:
         var gpu_session = DeviceSession[GPUBumpArenaAllocator](ctx)
         gpu_session.bufs.loadCPUWeights(model)
-        keep(gpu_session)
+        # keep(gpu_session)
 
         var kernels = CompiledKernels[batch_size](ctx)
 
@@ -57,8 +57,14 @@ def main() raises:
         warm_slot.doWork(kernels, gpu_session.model)
         _ = warm_slot.getResults(Span(zero_labels))
 
-        var total = MNISTDataRepository.COUNT_TEST if use_test_data else MNISTDataRepository.COUNT_TRAIN
-        var data = data_repo.getTestBatch(0, MNISTDataRepository.COUNT_TEST) if use_test_data else data_repo.getTrainBatch(0, MNISTDataRepository.COUNT_TRAIN)
+        var total = (
+            MNISTDataRepository.COUNT_TEST if use_test_data else MNISTDataRepository.COUNT_TRAIN
+        )
+        var data = data_repo.getTestBatch(
+            0, MNISTDataRepository.COUNT_TEST
+        ) if use_test_data else data_repo.getTrainBatch(
+            0, MNISTDataRepository.COUNT_TRAIN
+        )
 
         var correct = batchedForwardMultiStream[batch_size](
             ctx, data, gpu_session.model, kernels, num_streams
