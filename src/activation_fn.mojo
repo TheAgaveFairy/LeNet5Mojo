@@ -2,9 +2,9 @@
 
 from std.algorithm.functional import vectorize
 from layout import Layout, LayoutTensor
-from std.math import tanh, exp, sqrt, erf, log, pi, tau
+from std.math import tanh, exp, sqrt, erf, pi, tau
 
-from constants import ftype, sftype, nelts
+from constants import ftype, nelts
 
 
 # comptime activation_fn = fn(sftype) -> sftype # if was scalar
@@ -42,8 +42,18 @@ trait ActivationFunction:
         """Takes the original forward input 'x',
         the upstream gradient, d_output,
         and calculates the d_z gradient as our output for pre-act.
+
+        Default: map `simdBackward` over the tensors. Every activation's backward
+        is just its `simdBackward` applied elementwise, so this default covers all
+        of them — a struct only overrides it if it needs something else.
         """
-        ...
+
+        def vectorize_closure[width: Int](i: Int) {read}:
+            var nums = x.ptr.load[width=width](i)
+            var upstream = d_output.ptr.load[width=width](i)
+            d_z.ptr.store[width=width](i, Self.simdBackward(nums, upstream))
+
+        vectorize[nelts](comptime (layout.size()), vectorize_closure)
 
     @staticmethod
     @always_inline("nodebug")
@@ -71,30 +81,6 @@ struct ReLU(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def backward[
-        layout: Layout
-    ](
-        x: LayoutTensor[ftype, layout, _],
-        d_output: LayoutTensor[ftype, layout, _],
-        d_z: LayoutTensor[ftype, layout, MutAnyOrigin],
-    ):
-        """
-        SCALAR FORM is "return d_output if x > 0.0 else 0.0".
-        SIMD enhanced.
-        """
-
-        def closure[width: Int](i: Int) {read}:
-            comptime zeros = SIMD[ftype, width](0.0)
-            var xvec = x.ptr.load[width](i)
-            var mask = xvec.gt(zeros)
-            var vec = d_output.ptr.load[width](i)
-            var res = mask.select(vec, zeros)
-            d_z.ptr.store[width](i, res)
-
-        vectorize[nelts](comptime (layout.size()), closure)
-
-    @staticmethod
-    @always_inline("nodebug")
     def simdForward[
         fp: DType, width: SIMDSize
     ](x: SIMD[fp, width]) -> SIMD[fp, width]:
@@ -109,6 +95,7 @@ struct ReLU(ActivationFunction):
     def simdBackward[
         fp: DType, width: SIMDSize
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
+        """SCALAR FORM is "return d_output if x > 0.0 else 0.0"."""
         comptime assert (
             fp.is_floating_point()
         ), "simdBackward requires floating point"
@@ -121,29 +108,6 @@ struct Sigmoid(ActivationFunction):
     Exact implementation.
     sigmoid(x) = 1 / (1 + e^(-x))
     """
-
-    @staticmethod
-    @always_inline("nodebug")
-    def backward[
-        layout: Layout
-    ](
-        x: LayoutTensor[ftype, layout, _],
-        d_output: LayoutTensor[ftype, layout, _],
-        d_z: LayoutTensor[ftype, layout, MutAnyOrigin],
-    ):
-        """
-        sigmoid'(z) = sigmoid(z) * (1-sigmoid(z))
-        """
-
-        def vectorize_closure[width: Int](i: Int) {read}:
-            var nums = x.ptr.load[width=width](i)
-            comptime ones = SIMD[ftype, width](1.0)
-            var upstream = d_output.ptr.load[width=width](i)
-            var s = ones / (ones + exp(-nums))
-            var answer = upstream * s * (ones - s)
-            d_z.ptr.store[width=width](i, answer)
-
-        vectorize[nelts](comptime (layout.size()), vectorize_closure)
 
     @staticmethod
     @always_inline("nodebug")
@@ -161,6 +125,7 @@ struct Sigmoid(ActivationFunction):
     def simdBackward[
         fp: DType, width: SIMDSize
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
+        """sigmoid'(z) = sigmoid(z) * (1 - sigmoid(z))."""
         comptime assert (
             fp.is_floating_point()
         ), "simdBackward requires floating point"
@@ -173,27 +138,6 @@ struct Tanh(ActivationFunction):
     """
     tanh(x) = (e^x - e^(-x)) / (e^x + e^(-x))
     """
-
-    @staticmethod
-    @always_inline("nodebug")
-    def backward[
-        layout: Layout
-    ](
-        x: LayoutTensor[ftype, layout, _],
-        d_output: LayoutTensor[ftype, layout, _],
-        d_z: LayoutTensor[ftype, layout, MutAnyOrigin],
-    ):
-        """
-        tanh'(x) = 1 - tanh(x)^2
-        """
-
-        def vectorize_closure[width: Int](i: Int) {read}:
-            comptime ones = SIMD[ftype, width](1.0)
-            var t = tanh(x.ptr.load[width=width](i))
-            var upstream = d_output.ptr.load[width=width](i)
-            d_z.ptr.store[width=width](i, upstream * (ones - t * t))
-
-        vectorize[nelts](comptime (layout.size()), vectorize_closure)
 
     @staticmethod
     @always_inline("nodebug")
@@ -210,6 +154,7 @@ struct Tanh(ActivationFunction):
     def simdBackward[
         fp: DType, width: SIMDSize
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
+        """tanh'(x) = 1 - tanh(x)^2."""
         comptime assert (
             fp.is_floating_point()
         ), "simdBackward requires floating point"
@@ -224,51 +169,6 @@ struct GELU(ActivationFunction):
     GELU(x) = x * CDF(x) = x * (1 + erf(x / sqrt(2))) / 2
     Can be approximated with a tanh version, or quick version (see GELU paper).
     """
-
-    @staticmethod
-    @always_inline("nodebug")
-    def backward[
-        layout: Layout
-    ](
-        x: LayoutTensor[ftype, layout, _],
-        d_output: LayoutTensor[ftype, layout, _],
-        d_z: LayoutTensor[ftype, layout, MutAnyOrigin],
-    ):
-        """
-        (x * CDF(x))' = x'CDF(x) + xCDF'(x) .
-                      = CDF(x) + xPDF(x)    .
-
-        PyTorch:
-        pdf_val = torch.distributions.Normal(0, 1).log_prob(data).exp() .
-        return grad_output * (cdf + data * pdf_val)                     .
-
-        Modifies d_input in-place, assuming it was already loaded with d_output.
-        This approach is less explicit and more error prone, but a touch faster.
-        """
-        comptime sqrt2 = sqrt(2.0)
-        comptime sqrttau = sqrt(tau)  # math.pi * 2.0
-
-        def vectorize_closure[width: Int](i: Int) {read}:
-            var nums = x.ptr.load[width=width](i)
-            comptime sqrt2_vec = SIMD[ftype, width](sqrt2)
-            comptime sqrttau_vec = SIMD[ftype, width](sqrttau)
-            comptime term = log(sqrttau_vec)
-            comptime halves = SIMD[ftype, width](0.5)
-            comptime neg_halves = SIMD[ftype, width](-0.5)
-            comptime ones = SIMD[ftype, width](1.0)
-            comptime inverse_sqrttau = SIMD[ftype, width](1 / sqrttau)
-            var cdf = halves * (ones + erf(nums / sqrt2_vec))
-
-            # var pdf = exp(
-            #    neg_halves * nums * nums - term
-            # )  # or exp(-0.5 * x**2) / sqrt(tau)
-            var pdf = exp(neg_halves * nums * nums) * inverse_sqrttau
-
-            var upstream = d_output.ptr.load[width=width](i)
-            var answer = upstream * (cdf + nums * pdf)
-            d_z.ptr.store[width=width](i, answer)
-
-        vectorize[nelts](comptime (layout.size()), vectorize_closure)
 
     @staticmethod
     @always_inline("nodebug")
@@ -289,6 +189,12 @@ struct GELU(ActivationFunction):
     def simdBackward[
         fp: DType, width: SIMDSize
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
+        """(x * CDF(x))' = x'CDF(x) + xCDF'(x) = CDF(x) + xPDF(x).
+
+        PyTorch equivalent:
+        pdf_val = torch.distributions.Normal(0, 1).log_prob(data).exp()
+        return grad_output * (cdf + data * pdf_val)
+        """
         comptime assert (
             fp.is_floating_point()
         ), "simdBackward requires floating point"
@@ -311,48 +217,6 @@ struct GELUTanh(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def backward[
-        layout: Layout
-    ](
-        x: LayoutTensor[ftype, layout, _],
-        d_output: LayoutTensor[ftype, layout, _],
-        d_z: LayoutTensor[ftype, layout, MutAnyOrigin],
-    ):
-        """
-        Defined as the following...
-        k = sqrt(2 / pi)
-        c = 0.044715
-        t = tanh(z) = tanh(k * (x + c * x^3))
-        dy/dx = 0.5 * ((1 + t) + x * (1 - t^2) * k * (1 + 3 * c * x^2))
-        Doc ends with a period.
-        """
-        comptime k = sqrt(2.0 / pi)
-        comptime c = 0.044715
-
-        def vectorize_closure[width: Int](i: Int) {read}:
-            var nums = x.ptr.load[width=width](i)
-            comptime ks = SIMD[ftype, width](k)
-            comptime cs = SIMD[ftype, width](c)
-            comptime threecs = SIMD[ftype, width](3.0 * c)
-            comptime ones = SIMD[ftype, width](1.0)
-            comptime halves = SIMD[ftype, width](0.5)
-
-            var ts = tanh(ks * (nums + cs * (nums * nums * nums)))
-            var deriv = halves * (
-                (ones + ts)
-                + nums
-                * (ones - (ts * ts))
-                * ks
-                * (ones + threecs * nums * nums)
-            )
-            var upstream = d_output.ptr.load[width=width](i)
-            var answer = upstream * deriv
-            d_z.ptr.store[width=width](i, answer)
-
-        vectorize[nelts](comptime (layout.size()), vectorize_closure)
-
-    @staticmethod
-    @always_inline("nodebug")
     def simdForward[
         fp: DType, width: SIMDSize
     ](x: SIMD[fp, width]) -> SIMD[fp, width]:
@@ -370,6 +234,12 @@ struct GELUTanh(ActivationFunction):
     def simdBackward[
         fp: DType, width: SIMDSize
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
+        """Defined as the following...
+        k = sqrt(2 / pi)
+        c = 0.044715
+        t = tanh(z) = tanh(k * (x + c * x^3))
+        dy/dx = 0.5 * ((1 + t) + x * (1 - t^2) * k * (1 + 3 * c * x^2))
+        """
         comptime assert (
             fp.is_floating_point()
         ), "simdBackward requires floating point"
@@ -408,34 +278,6 @@ struct GELUFast(ActivationFunction):
 
     @staticmethod
     @always_inline("nodebug")
-    def backward[
-        layout: Layout
-    ](
-        x: LayoutTensor[ftype, layout, _],
-        d_output: LayoutTensor[ftype, layout, _],
-        d_z: LayoutTensor[ftype, layout, MutAnyOrigin],
-    ):
-        """
-        Defined as:
-        f'(1.702x) = sigmoid(1.702x) + (x * 1.702 * sigmoid(1.702x) * (1 - sigmoid(1.702x)))
-        See paper.
-        """
-        comptime alpha = sftype(1.702)
-
-        def vectorize_closure[width: Int](i: Int) {read}:
-            comptime alphas = SIMD[ftype, width](alpha)
-            comptime ones = SIMD[ftype, width](1.0)
-            var nums = x.ptr.load[width=width](i)
-            var s = Self._sigmoid(nums * alphas)
-            var deriv = s + alphas * nums * s * (ones - s)
-            var upstream = d_output.ptr.load[width=width](i)
-            var answer = upstream * deriv
-            d_z.ptr.store[width=width](i, answer)
-
-        vectorize[nelts](comptime (layout.size()), vectorize_closure)
-
-    @staticmethod
-    @always_inline("nodebug")
     def simdForward[
         fp: DType, width: SIMDSize
     ](x: SIMD[fp, width]) -> SIMD[fp, width]:
@@ -450,6 +292,10 @@ struct GELUFast(ActivationFunction):
     def simdBackward[
         fp: DType, width: SIMDSize
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
+        """f'(1.702x) = sigmoid(1.702x)
+                        + (x * 1.702 * sigmoid(1.702x) * (1 - sigmoid(1.702x))).
+        See paper.
+        """
         comptime assert (
             fp.is_floating_point()
         ), "simdBackward requires floating point"
