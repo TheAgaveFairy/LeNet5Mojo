@@ -965,12 +965,15 @@ struct StreamSlot[batch_size: Int](Movable):
         the zero-padded slots produce garbage guesses and are skipped.
         """
         self.ctx.synchronize()
-        var correct = 0
-        # argmax already done on device — just compare guess bytes to labels
+        # argmax already done on device — just compare guess bytes to labels.
+        # `n` counts only the real slots, so a padded tail batch skips its
+        # zero-padded slots. (A SIMD version was explored but isn't worth the
+        # complexity for a ~1 KB/batch compare run once after the D2H sync —
+        # see ignoreme/simd_eq_mwe.mojo.)
         var n = min(len(labels), Self.batch_size)
+        var correct = 0
         for j in range(n):
-            if self.hosted_guesses[j] == labels[j]:
-                correct += 1
+            correct += Int(self.hosted_guesses[j] == labels[j])
         return correct
 
 

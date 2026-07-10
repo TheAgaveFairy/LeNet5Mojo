@@ -283,25 +283,18 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     (dense a-rows). Design/gotcha notes: tests/gemm.mojo (kept as reference copy),
     docs/origin_migration.md, kernel comments.
 
-- [ ] **Full image coverage for ANY batch size (pad the tail)** (`accel/ops.mojo`, `main.mojo`)
-  - Today `batch_size` must divide the dataset or the remainder is dropped. The drop is at
-    `batch_size` granularity, NOT `eff_batch` — `_batchRun` does `total_batches = count // batch_size`
-    and `main.mojo` reports over `n_proc = (COUNT_TEST // batch_size) * batch_size`. `num_streams`
-    does NOT affect coverage. E.g. bs=75 drops `10000 % 75 = 25` images → 9975/10000 (independent of
-    stream count). That's why the default is pinned to bs=50 (divides 10000 & 60000). Want: any batch
-    size covers all 10k/60k.
-  - NOTE (2026-07-09): half the machinery already exists. `StreamSlot.loadBatch` already handles a
-    short span correctly — memcpy `len(batch)`, `memset_zero` the remainder (`accel/ops.mojo:838-844`).
-    That padding branch is currently DEAD: `_batchRun` never hands it a short batch (stops at
-    `total_batches`). Wiring pad-the-tail = (1) run `ceildiv` batches instead of floor in `_batchRun`
-    so the short tail is dispatched, and (2) fix result tallying to count only real slots — today
-    `getResults` requires `len(labels) >= batch_size` and loops the full `batch_size`, so it needs a
-    `valid_count`/short-label path (the padded slots' guesses would otherwise be compared against
-    garbage/clamped labels). Kernels stay fixed-size (padded images run as normal, just ignored).
-  - Approach: pad the final partial batch to full `batch_size` with zeros (loadBatch already does the
-    pixels), run it, then ignore the padded slots when tallying correct/total. Keeps the kernels
-    fixed-size (no special last-batch path) and frees batch size to be a pure perf knob.
-  - Mirrors the CPU-side remainder handling already done in `testingParallel` (cpu/ops.mojo).
+- [x] **Full image coverage for ANY batch size (pad the tail)** (`accel/ops.mojo`, `main.mojo`) — DONE 2026-07-09 (8dda273)
+  - Was: `batch_size` had to divide the dataset or the remainder was dropped, at `batch_size`
+    granularity (NOT `eff_batch` — `num_streams` never affected coverage). E.g. bs=75 dropped
+    `10000 % 75 = 25` images → 9975/10000. That's why the default was pinned to bs=50.
+  - FIX: `StreamSlot.loadBatch` already zero-padded a short span; the driver just never handed it one.
+    Now `_batchRun` uses `ceildiv` (dispatches the short tail), `getResults` tallies only
+    `min(len(labels), batch_size)` real slots (padded slots' garbage guesses skipped; the raise-on-short
+    guard is gone), and `main.mojo` reports over `n_proc = COUNT_TEST`. Kernels stay fixed-size (padded
+    images run as normal, just ignored). Zero images normalize to NaN but padded slots are never tallied
+    and kernels are per-image, so no contamination. Pad notice gated behind `comptime if DISPLAY`.
+  - Verified RTX 3070: bs=75 and bs=69 (non-divisors) report `/10000` with GPU count matching CPU
+    exactly (9409/10000 on the pruned f32 model, CPU==GPU). Mirrors `testingParallel`'s CPU tail.
 
 - [ ] **Auto-heuristic for `num_streams` from compile-time batch size** (`main.mojo`, `cli.mojo`)
   - Today the user must hand-tune `--num-streams` per `GPU_STREAM_BATCH_SIZE` to hit peak (grid
@@ -379,11 +372,13 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
       `getResults`. Logits still land in `outputs` on device for debugging; `batchedArgMax` kept
       as host-side fallback. Accuracy 9648/10000, exact CPU match throughout.
 
-- [ ] **`getResults`: SIMD the guess-vs-label byte compare** (`accel/ops.mojo`)
-  - The scalar `for j in range(batch_size)` loop compares two UInt8 buffers. Candidates: load
-    `SIMD[DType.uint8, nelts]` chunks from both (`UnsafePointer.load[width=...]`), `(g == l).cast[DType.uint8]().reduce_add()`
-    to count matches; or `comptime for` unroll since `batch_size` is comptime. ~50–100 bytes/batch so
-    perf impact tiny — mostly a SIMD exercise. `batchedArgMax` kept around as the host-side fallback.
+- [x] **`getResults`: SIMD the guess-vs-label byte compare** (`accel/ops.mojo`) — EXPLORED, WONTFIX 2026-07-10
+  - Built a working SIMD version (`byte_w`-wide chunks + `.eq()` mask + reduce_add, scalar tail) but
+    reverted: it's a ~1 KB/batch compare run once per batch right after the GPU sync + D2H, so the
+    perf win is unmeasurable and the pointer/chunk/cast/remainder machinery isn't worth the
+    complexity. Kept the plain scalar loop. GOTCHA worth remembering: elementwise SIMD compares are
+    the *methods* `.eq()/.lt()/.gt()/…` — the `==`/`<`/`>` operators are whole-vector-Bool or
+    Scalar-only and don't give a lane mask. Learning artifact kept at `ignoreme/simd_eq_mwe.mojo`.
 
 - [x] **Remove now-unused `FeatureGPU.output` buffer — or fold into the SoA migration** (`accel/feature.mojo`) — DONE 2026-07-02 via option (b): Phase 1 deleted `FeatureGPU` wholesale; `output` AND the fused-away `layer1` have no batched buffer
   - After the matmul→outputs fusion no kernel reads/writes `feats[img].output`; the field, its
@@ -659,8 +654,17 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
   - FOLLOW-UP DONE: rewrote `maxPoolForward`/`maxPoolBackward` inner loops to branchy. Accuracy
     bit-identical (9691/10000 CPU + GPU — `>` keeps earliest-max tie-break as before). Aside in `ideas.typ`.
 
-- [ ] **`loadFromFile`: kill the extra copy** (`cpu/model.mojo:397`)
-  - Reads into an `InlineArray` then `memcpy`s; load straight into the destination buffer.
+- [x] **`loadFromFile`: kill the extra copy** (`cpu/model.mojo:397`) — DONE 2026-07-10
+  - Was: `read_bytes` → `List[UInt8]`, `memcpy`'d into a per-layer `InlineArray` only to satisfy
+    `bytesToFType`'s fixed-size param. Now `bytesToFType` borrows the `List` directly (dropped the
+    `num_bytes` comptime param, derives `num_elems` from `layout.size()`, runtime `debug_assert`
+    guards short reads). No intermediate buffer, no copy. Verified: `--bench-only` load →
+    9686/10000 on CPU + GPU (bit-identical), model.dat md5 unchanged.
+
+- [ ] **`loadFromFile`: runtime-dtype wrapper** (`cpu/model.mojo`, above `loadFromFile`)
+  - Maybe add a wrapper that switches on a `DType` parsed from the filename tag / CLI, so callers
+    needn't know the saved precision at compile time. `Scalar[dt]` is a type, so the inner decode
+    stays comptime regardless. (Moved out of an in-file TODO 2026-07-10.)
 
 - [x] **`CPUSession`: offer constructors for other allocators** (`cpu/model.mojo:537`) — DONE 2026-06-30
   - Now `CPUSession[Allocator: CPUAllocator = CPUBumpArenaAllocator]` — parameterized on the allocator,

@@ -30,3 +30,6 @@ main
 out.*
 perf.*
 flamegraph.svg
+
+# Claude Code project instructions (local, not tracked)
+CLAUDE.md

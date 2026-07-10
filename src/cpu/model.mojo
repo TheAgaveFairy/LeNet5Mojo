@@ -395,28 +395,32 @@ struct LeNet5(ArenaSizable, Movable):
     @staticmethod
     def bytesToFType[
         filetype: DType,
-        num_bytes: Int,
         layout: Layout,
         big_e: Bool = is_big_endian(),
     ](
-        bytes: InlineArray[Scalar[DType.uint8], num_bytes],
+        bytes: List[UInt8],
         tensor: LayoutTensor[ftype, layout, MutAnyOrigin],
     ) -> None:
         """
-        Helper function that takes in an array of bytes from a "model.dat" file
-        and converts them to the correct datatype and fills the associated layer.
+        Helper function that takes the raw bytes of one layer from a "model.dat"
+        file and converts them to the correct datatype, filling the associated
+        layer. `bytes` is borrowed straight from the file read — no copy.
+
+        On release builds, we lose some safety of checking the file-size and could have
+        OOB accesses at the tensor.ptr[i] writes.
         """
 
         comptime f_sz = size_of[
             filetype
         ]()  # 4 bytes for Float32, 8 for F64, etc
-        comptime num_elems = num_bytes // f_sz
+        comptime num_elems = layout.size()
 
-        comptime assert (
-            num_elems == tensor.layout.size()
-        ), "FATAL ERROR CONVERTING BYTES TO TENSOR"
+        debug_assert(
+            len(bytes) == num_elems * f_sz,
+            "FATAL ERROR CONVERTING BYTES TO TENSOR",
+        )
 
-        for i in range(comptime (tensor.layout.size())):
+        for i in range(num_elems):
             var buffer = InlineArray[Byte, size_of[Scalar[filetype]]()](fill=0)
             comptime for bi in range(f_sz):
                 var temp_idx = i * f_sz + bi
@@ -450,20 +454,7 @@ struct LeNet5(ArenaSizable, Movable):
                     except ee:
                         print("helper fromFile", ee)
                         bytes = type_of(bytes)()
-                    var buffer = InlineArray[
-                        Scalar[DType.uint8], bytes_to_read
-                    ](uninitialized=True)
-                    # TODO: get rid of extra copy, etc
-                    # for i in range(bytes_to_read):
-                    #    buffer[i] = bytes[i]  # memcpy
-                    memcpy(
-                        src=bytes.unsafe_ptr(),
-                        dest=buffer.unsafe_ptr(),
-                        count=bytes_to_read,
-                    )
-                    Self.bytesToFType[filetype, bytes_to_read, layout](
-                        buffer, weights
-                    )
+                    Self.bytesToFType[filetype, layout](bytes, weights)
 
                 helper(self.weight0_1)
                 helper(self.weight2_3)
