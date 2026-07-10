@@ -322,7 +322,7 @@ def runGPUTest(
 ) raises:
     """Upload `model`'s weights, compile the kernels, and benchmark the batched
     multi-stream GPU pipeline over the test set (warmup + timed passes, median
-    reported). The partial trailing batch is dropped.
+    reported). Any batch size covers all images — the short tail is zero-padded.
     """
     comptime batch_size = GPU_STREAM_BATCH_SIZE
     with DeviceContext() as ctx:
@@ -345,8 +345,8 @@ def runGPUTest(
                 t"results/gpu_infer_bs{batch_size}_act={act_fn_name}_run={run_id}.csv"
             )
         )
-        # actual images processed: drop remainder that doesn't fill a full batch
-        comptime n_proc = (COUNT_TEST // batch_size) * batch_size
+        # pad-the-tail covers every image now, so all COUNT_TEST are processed
+        comptime n_proc = COUNT_TEST
         var eff_batch = batch_size * num_streams
 
         # Allocate slots once — reused across warmup and timed passes

@@ -134,9 +134,11 @@ and per its ncu audit the cheap conv2 wins are mined out — its next win is str
 - [ ] **Parameterize + fuse the `act_fn` epilogue (CPU + GPU)** (`accel/ops.mojo:158`, `cpu/ops.mojo:418`, `cpu/ops.mojo:582`)
   - PROGRESS 2026-07-02: knob prototyped in `tests/gemm.mojo` — `epilogue_act: Bool = False` comptime
     param on `naiveCPU`/`tiledCPU`, bias + `act_fn.simdForward[ftype, 1]` fused into the store loop,
-    verified against `linalg.matmul` (bias/act folded into the reference). Remaining: port the pattern
-    into `cpu/ops.mojo` (`matmulForward`, `convoluteForward`) and the GPU kernels once the winning
-    GEMM lands.
+    verified against `linalg.matmul` (bias/act folded into the reference).
+  - UPDATE 2026-07-09: DONE for `cpu/ops.mojo` `matmulForward` (now carries `epilogue_act`, fuses
+    `act_fn.simdForward` into the tile store at `:643-644`) AND the GPU GEMM (`gemmFusedKernel` bias +
+    act epilogue). REMAINING: only `convoluteForward` — still has the unfused `# TODO: fuse this into
+    the above loop using simdForward()` at `cpu/ops.mojo:409`.
   - Three markers, one theme: make the post-op activation a compile-time knob (enable/disable) and fuse
     it into the preceding accumulation loop instead of a separate `act_fn.forward` pass — `matMulFusedKernel`
     (GPU, raw-logits epilogue), `convoluteForward` (fuse `simdForward()` into the bias add loop), and
@@ -180,12 +182,17 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     `[ic, kw, kh, oc]` proposal, consumed as GEMM `b` rather than by the old kernel.
     The Tier A pad item below is mooted (old conv3 kernel replaced entirely).
 
-- [ ] **Fuse pool1 into conv1 epilogue** (`accel/ops.mojo:202`) [12.7% share]
-  - maxPool1 costs MORE than conv1 (22.6 vs 19.2 us median) for 4 loads + 1 store/thread:
-    launch overhead + 196-thread blocks (6.1 warps) + stride-2 uncoalesced reads. conv1
-    already has all of layer1 in registers/shared at write time — pool in the epilogue
-    (28x28 threads compute, 14x14 subset writes pooled layer2), delete the kernel + the
-    layer1 global roundtrip. Same pattern later for pool2 into conv2 [4.4% share].
+- [x] **Fuse pool1 into conv1 epilogue** (`accel/ops.mojo`) [12.7% share] — DONE (verified 2026-07-09)
+  - Landed as `conv1PoolFusedKernel` (conv1 + activation + 2x2 maxpool, input → layer2 directly;
+    layer1 never touches global memory, its buffer is dead in the GPU path). One block per image,
+    one thread per POOLED output pixel (14x14), each thread computes its 2x2 window's conv outputs
+    in registers and writes the max. Pool applied post-activation to stay bit-exact with CPU (act_fn
+    not guaranteed monotonic — GELU). `maxPool1Kernel` deleted.
+
+- [ ] **Fuse pool2 into conv2 epilogue** (`accel/ops.mojo` `maxPool2Kernel`) [4.4% share] — split out of the pool1 item (pool1 done)
+  - Same pattern as the conv1+pool1 fusion above: `conv2`'s epilogue writes the pooled layer4
+    directly and the standalone `maxPool2Kernel` (still present) disappears. Lower share than pool1
+    was, so lower priority.
 
 - [ ] **Pooling: 2x2 window hardcoded; parameterize window + op** (`accel/ops.mojo` fused conv1
   kernel `range(2)` loops + `row*2`; `maxPool2Kernel` `tr = row*2`; CPU pools derive the window
@@ -210,9 +217,12 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     swap-back. The stride-10 weight5_6 note is mooted: in GEMM orientation lanes
     walk oc which is already unit-stride.
 
-- [ ] **Misc**: dead `lenet` param on both pool kernels; maxPool2 has the same chan-on-x
-  scatter (low stakes at 4.4%); partial-warp blocks (784=24.5w conv1, 196=6.1w pool1,
-  120=3.75w conv3) — conv3 pad already a TODO, others matter less than the items above.
+- [x] **Misc** — mostly OBSOLETE after the tensors-direct refactor (f4c9dbe) + pool1/conv3 changes (confirmed 2026-07-09)
+  - dead `lenet` param on pool kernels → GONE: `maxPool2Kernel` takes `layer3`/`layer4` tensors
+    directly (maxPool1 fused into conv1, so no maxPool1Kernel at all).
+  - maxPool2 chan-on-x scatter → FIXED: col is now on `thread_idx.x` (stride-2 reads, stride-1 writes).
+  - partial-warp blocks: pool1 (196) fused away; conv3 (120) deprecated. Only conv1's 784-thread
+    block remains, and it's now `conv1PoolFusedKernel` — minor, not worth a dedicated item.
 
 - [ ] **Explicit `.fma()` audit** (repo-wide) — added 2026-07-02
   - `gemmFusedKernel`'s inner loop now uses `a_val.fma(b_val, accum)` explicitly (A/B'd:
@@ -274,11 +284,22 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     docs/origin_migration.md, kernel comments.
 
 - [ ] **Full image coverage for ANY batch size (pad the tail)** (`accel/ops.mojo`, `main.mojo`)
-  - Today eff_batch must divide the dataset or the remainder images are dropped (e.g. bs=75 →
-    eff 375, 10000 % 375 = 25 dropped → 9975/10000). That's why the default is pinned to bs=50
-    (divides 10000 & 60000). Want: any batch size covers all 10k/60k.
-  - Approach: pad the final partial batch to full `eff_batch` with zeros (pixels and/or a masked
-    label), run it, then ignore the padded slots when tallying correct/total. Keeps the kernels
+  - Today `batch_size` must divide the dataset or the remainder is dropped. The drop is at
+    `batch_size` granularity, NOT `eff_batch` — `_batchRun` does `total_batches = count // batch_size`
+    and `main.mojo` reports over `n_proc = (COUNT_TEST // batch_size) * batch_size`. `num_streams`
+    does NOT affect coverage. E.g. bs=75 drops `10000 % 75 = 25` images → 9975/10000 (independent of
+    stream count). That's why the default is pinned to bs=50 (divides 10000 & 60000). Want: any batch
+    size covers all 10k/60k.
+  - NOTE (2026-07-09): half the machinery already exists. `StreamSlot.loadBatch` already handles a
+    short span correctly — memcpy `len(batch)`, `memset_zero` the remainder (`accel/ops.mojo:838-844`).
+    That padding branch is currently DEAD: `_batchRun` never hands it a short batch (stops at
+    `total_batches`). Wiring pad-the-tail = (1) run `ceildiv` batches instead of floor in `_batchRun`
+    so the short tail is dispatched, and (2) fix result tallying to count only real slots — today
+    `getResults` requires `len(labels) >= batch_size` and loops the full `batch_size`, so it needs a
+    `valid_count`/short-label path (the padded slots' guesses would otherwise be compared against
+    garbage/clamped labels). Kernels stay fixed-size (padded images run as normal, just ignored).
+  - Approach: pad the final partial batch to full `batch_size` with zeros (loadBatch already does the
+    pixels), run it, then ignore the padded slots when tallying correct/total. Keeps the kernels
     fixed-size (no special last-batch path) and frees batch size to be a pure perf knob.
   - Mirrors the CPU-side remainder handling already done in `testingParallel` (cpu/ops.mojo).
 
@@ -343,7 +364,7 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     mean/std reduction, and normalize in shared before convolving. Kills one launch per batch AND a
     full global round-trip of the 32×32 fp32 input. Pairs with the normalization-parity item below.
 
-- [ ] **Fuse matmul → outputs (+ GPU argmax); delete gather kernel** (`accel/ops.mojo`)
+- [x] **Fuse matmul → outputs (+ GPU argmax); delete gather kernel** (`accel/ops.mojo`) — DONE 2026-06-12; since superseded by `gemmFusedKernel` + standalone `argMaxKernel` (d9242c9), but the fusion + on-device argmax it describes are in place (`gatherOutputsKernel` deleted; verified gone 2026-07-09).
   - `matMulFusedKernel` can write straight into the batched `outputs` tensor — `gatherOutputsKernel`
     disappears (1 of 8 launches gone; launch overhead matters at these kernel sizes). Stretch: do
     argmax on-device and D2H 1 byte/img instead of `OUTPUT` floats; `getResults` becomes a byte compare.
@@ -382,9 +403,10 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     recording was warm/unlocked at different conditions — only the same-day A/B delta is real.
     Re-baseline with locked clocks (`pixi run gpulock`) before quoting numbers in the writeup.
 
-- [ ] **conv3 Tier A: pad block_dim 120 → 128** (`accel/ops.mojo` `conv3FusedKernel`)
-  - 120 threads = 3.75 warps; the partial warp wastes a scheduler slot. Cheap experiment: launch 128,
-    guard `oc < LAYER5` (or give the 8 spare threads shared-load duty).
+- [x] **conv3 Tier A: pad block_dim 120 → 128** (`accel/ops.mojo` `conv3FusedKernel`) — MOOT / WON'T DO (confirmed 2026-07-09)
+  - `conv3FusedKernel` is now `@deprecated` ("Replaced by Conv3GemmKernel (gemmFusedKernel); kept for
+    A/B"). conv3 runs as a batched GEMM, so the old kernel's 120-thread partial warp no longer runs in
+    the hot path. Nothing to pad. (Already flagged mooted in the conv3-transpose item up top.)
 
 - [x] **FC matmul as a real GPU GEMM** — DONE 2026-07-02 (d9242c9; see the matMul block.sum
   item above for the honest wash verdict). Playground history below kept for the record.
@@ -598,10 +620,11 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
 
 ### New markers (added 2026-06-29 pass)
 
-- [ ] **`matmulForward` is not production-grade — port the real CPU matmul** (`cpu/ops.mojo:553`)
-  - Marker: "this is not production grade, i have one somewhere to copy over...". CPU-only; bring over
-    Paul's existing CPU matmul and replace the naive triple-loop. Unrelated to the GPU `gemm.mojo` /
-    conv3 work below.
+- [x] **`matmulForward` is not production-grade — port the real CPU matmul** (`cpu/ops.mojo:548`) — DONE (verified 2026-07-09)
+  - The naive triple-loop is gone: `matmulForward` is now a tiled single-threaded GEMM (packed
+    TILE_SIZE×TILE_SIZE `ta`/`tb`/`tc` tiles, `epilogue_act` knob, comptime M/K/N from `.shape[N]()`),
+    the tiled kernel from the `tests/gemm.mojo` playground ported over. The "not production grade /
+    one somewhere to copy over" marker is deleted.
 
 - [ ] **`predict`: make `feat` an explicit `Optional[Feature]` and combine the two paths** (`cpu/model.mojo:321`)
   - One predict that takes/builds the feature arena instead of two near-duplicate methods.

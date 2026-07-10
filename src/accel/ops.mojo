@@ -52,6 +52,7 @@ from constants import (
     PADDING,
     NUM_GPU_STREAMS,
     GPU_STREAM_BATCH_SIZE,
+    DISPLAY,
     FeatureLayouts,
     BatchedFeatureLayouts,
     WeightLayouts,
@@ -837,10 +838,13 @@ struct StreamSlot[batch_size: Int](Movable):
         var dst = self.hosted_inputs.unsafe_ptr()
         memcpy(dest=dst, src=batch.unsafe_ptr(), count=len(batch))
         comptime full_bytes = img_sz * Self.batch_size
-        if len(batch) < full_bytes:  # expected to have a perfect batch
-            print(
-                "Rest of GPU StreamSlot batch padded with zeros.", file=stderr
-            )  # TODO: proper logging
+        if len(batch) < full_bytes:  # short tail batch: pad the rest
+            # zero images normalize to NaN, but padded slots are never tallied
+            comptime if DISPLAY:
+                print(
+                    "Rest of GPU StreamSlot batch padded with zeros.",
+                    file=stderr,
+                )
             memset_zero(dst + len(batch), full_bytes - len(batch))
 
         self.device_inputs.enqueue_copy_from(self.hosted_inputs)
@@ -956,17 +960,15 @@ struct StreamSlot[batch_size: Int](Movable):
         self.hosted_guesses.enqueue_copy_from(self.guesses_buffer)
 
     def getResults(self, labels: Span[UInt8, _]) raises -> Int:
-        """Returns number correct for a batch. Syncs the slot's stream first. Does not check for a full batch - handle at call.
+        """Returns number correct for a batch. Syncs the slot's stream first.
+        A short `labels` span (padded tail batch) counts only its real slots —
+        the zero-padded slots produce garbage guesses and are skipped.
         """
-        if len(labels) < Self.batch_size:
-            raise Error(
-                t"getResults: labels span ({len(labels)}) shorter than"
-                t" batch_size ({Self.batch_size})"
-            )
         self.ctx.synchronize()
         var correct = 0
         # argmax already done on device — just compare guess bytes to labels
-        for j in range(Self.batch_size):
+        var n = min(len(labels), Self.batch_size)
+        for j in range(n):
             if self.hosted_guesses[j] == labels[j]:
                 correct += 1
         return correct
@@ -987,7 +989,9 @@ def _batchRun[
     var count = len(data)
     var total_correct = 0
     comptime batch_bytes = batch_size * IMAGE_SIZE * IMAGE_SIZE
-    var total_batches = count // batch_size
+    # ceildiv, not floor: dispatch the short tail batch (loadBatch zero-pads it,
+    # getResults tallies only its real slots) so any batch size covers all images
+    var total_batches = ceildiv(count, batch_size)
 
     for batch_num in range(total_batches):
         var slot_idx = batch_num % num_streams
