@@ -2,7 +2,7 @@
 
 from layout import Layout, LayoutTensor
 from std.math import sqrt
-from std.memory import memcpy
+from std.memory import unsafe_memcpy
 from std.sys import stderr, simd_width_of, size_of
 from std.algorithm.functional import vectorize
 
@@ -80,7 +80,7 @@ struct Image(ImplicitlyCopyable):
                 arena.alloc[UInt8](layout_size)
             )
         )
-        memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
+        unsafe_memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
 
     def __init__(
         out self, raw: Self.PixelStorage, label: UInt8, mut arena: Arena
@@ -97,7 +97,7 @@ struct Image(ImplicitlyCopyable):
                 arena.alloc[UInt8](layout_size)
             )
         )
-        memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
+        unsafe_memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
 
         # no longer normalizing at init because we don't know the end device and that's a separate task
 

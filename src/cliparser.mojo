@@ -57,7 +57,7 @@ struct ArgParser[hard_exit_mode: Bool = True]():
         ), "arg T not ImplicitlyCopyable"
 
         # the support of "Bool" means we can't check for Writable conformance here
-        def _register(default_str: String) {read, mut self}:
+        def _register(default_str: String) {imm, mut self}:
             self.help_strs.append(
                 String(t"{tag} [default {default_str}]; Usage: {desc}")
             )

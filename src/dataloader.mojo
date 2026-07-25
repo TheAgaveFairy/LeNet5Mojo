@@ -2,7 +2,7 @@
 
 import std.os as os
 from std.pathlib import Path
-from std.memory import memcpy
+from std.memory import unsafe_memcpy
 from std.sys import size_of, stderr
 
 from image import Image
@@ -49,7 +49,7 @@ struct MNISTDataView[
         var pptr = pixel_buffer.unsafe_ptr()
         for i in range(num_images):
             var img = images[i]
-            memcpy(src=img.pixels.ptr, dest=pptr + offset, count=size)
+            unsafe_memcpy(src=img.pixels.ptr, dest=pptr + offset, count=size)
             label_buffer.unsafe_get(i) = img.label
             offset += size
         self.raw_pixels = rebind[Span[UInt8, Self.origin]](pixel_buffer)
@@ -194,9 +194,9 @@ struct MNISTDataRepository:
             self._train_labels_arena.buffer + start
         )
         var pixels_span = Span(
-            ptr=p_ptr, length=(end - start) * image_size_in_bytes
+            unsafe_ptr=p_ptr, length=(end - start) * image_size_in_bytes
         )
-        var labels_span = Span(ptr=l_ptr, length=(end - start))
+        var labels_span = Span(unsafe_ptr=l_ptr, length=(end - start))
         return MNISTDataView(pixels_span, labels_span)
 
     def getTestBatch(
@@ -216,9 +216,9 @@ struct MNISTDataRepository:
             self._test_labels_arena.buffer + start
         )
         var pixels_span = Span(
-            ptr=p_ptr, length=(end - start) * image_size_in_bytes
+            unsafe_ptr=p_ptr, length=(end - start) * image_size_in_bytes
         )
-        var labels_span = Span(ptr=l_ptr, length=(end - start))
+        var labels_span = Span(unsafe_ptr=l_ptr, length=(end - start))
         return MNISTDataView(pixels_span, labels_span)
 
     # Shuffle helpers

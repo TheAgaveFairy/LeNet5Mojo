@@ -6,7 +6,7 @@ from std.random import random_float64, rand
 from std.sys import stderr, is_big_endian, size_of, simd_width_of
 from std.utils.index import IndexList
 import std.os as os
-from std.memory import memcpy
+from std.memory import unsafe_memcpy
 from std.pathlib import Path
 from std.algorithm.functional import vectorize
 
@@ -257,7 +257,7 @@ struct LeNet5(ArenaSizable, Movable):
             a[i] += (b[i] * lr)
         """
 
-        def vectorize_closure[width: Int](i: Int) {read}:
+        def vectorize_closure[width: Int](i: Int) {imm}:
             var lrs = SIMD[ftype, width](lr)
             var a_nums = accum.ptr.load[width=width](i)
             var b_nums = other.ptr.load[width=width](i)
@@ -291,7 +291,7 @@ struct LeNet5(ArenaSizable, Movable):
         fan-based (Xavier-style) init from the paper.
         """
         comptime N = tensor.layout.size()
-        var data = Span(ptr=tensor.ptr, length=comptime (N))
+        var data = Span(unsafe_ptr=tensor.ptr, length=comptime (N))
         rand(data, min=-1.0, max=1.0)  # uniform distribution
         # tensor *= sftype(sqrt(6.0)) / scale  # from the paper # compiler is slow for this
         # naive could look like this, but we want SIMD speedup
@@ -300,7 +300,7 @@ struct LeNet5(ArenaSizable, Movable):
             tensor.ptr[i] *= sftype(sqrt(6.0)) / scale
         """
 
-        def vectorize_closure[width: Int](i: Int) {read}:
+        def vectorize_closure[width: Int](i: Int) {imm}:
             comptime sixes = SIMD[ftype, width](6.0)
             var scales = SIMD[ftype, width](scale)
             var nums = tensor.ptr.load[width=width](i)
@@ -482,8 +482,8 @@ struct LeNet5(ArenaSizable, Movable):
         var ptr_bytes = tensor.ptr.bitcast[UInt8]()
         var ptr_len = comptime (layout.size()) * fbs
         var temp_buf = alloc[UInt8](ptr_len)
-        var bytes_span = Span(ptr=temp_buf, length=ptr_len)
-        memcpy(src=ptr_bytes, dest=temp_buf, count=ptr_len)
+        var bytes_span = Span(unsafe_ptr=temp_buf, length=ptr_len)
+        unsafe_memcpy(src=ptr_bytes, dest=temp_buf, count=ptr_len)
         comptime if is_big_endian():  # TODO: maybe make this a function parameter / arg check
             for i in range(0, ptr_len, fbs):
                 comptime for j in range(fbs // 2):

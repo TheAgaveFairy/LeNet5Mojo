@@ -69,7 +69,7 @@ def crossEntropyLossSIMD[
     """
     var global_max: sftype = preds.ptr[0]
 
-    def find_max[width: Int](i: Int) {read, mut global_max}:
+    def find_max[width: Int](i: Int) {imm, mut global_max}:
         var nums = preds.ptr.load[width=width](i)
         var local_max = nums.reduce_max()
         if local_max > global_max:
@@ -79,7 +79,7 @@ def crossEntropyLossSIMD[
 
     var exp_sum: sftype = 0.0
 
-    def calc_exp[width: Int](i: Int) {read, mut exp_sum}:
+    def calc_exp[width: Int](i: Int) {imm, mut exp_sum}:
         var ps = preds.ptr.load[width](i)
         var maxes = SIMD[ftype, width](global_max)
         var diff = ps - maxes
@@ -715,7 +715,7 @@ def trainBatchParallel(
         # losses[i] = 0
         corrects[i] = 0
 
-    def work(tid: Int) {read, mut intermediate_arena, mut corrects, mut losses}:
+    def work(tid: Int) {imm, mut intermediate_arena, mut corrects, mut losses}:
         features[tid].loadInput(inputs[tid])
         model.forward(features[tid])
         var pred = argMax(features[tid].output)
@@ -919,7 +919,7 @@ def testingParallel(
     for i in range(0, n_full * batch_size, batch_size):
         feat_arena.zero()
 
-        def work(tid: Int) {read, mut corrects}:
+        def work(tid: Int) {imm, mut corrects}:
             var pred = model.predict(feats[tid], data[i + tid])
             var actual = Int(data[i + tid].label)
             corrects[tid] += 1 if pred == actual else 0

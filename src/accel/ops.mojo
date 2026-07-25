@@ -7,7 +7,7 @@ from layout import (
 from layout.tile_io import copy_dram_to_sram_async
 from std.math import abs, sqrt, max, min, ceildiv
 from std.bit import next_power_of_two  # prev_power_of_two
-from std.memory import memcpy, memset_zero
+from std.memory import unsafe_memcpy, unsafe_memset_zero
 from std.sys import size_of, stderr
 import std.sys.defines as defines
 
@@ -82,7 +82,7 @@ def normalizeInputsKernel[
     raw_pixels: LayoutTensor[
         DType.uint8,
         Layout.row_major(batch_size, IMAGE_SIZE, IMAGE_SIZE),
-        ImmutUntrackedOrigin,
+        ImmUntrackedOrigin,
     ],
     input: LayoutTensor[
         ftype, BatchedFeatureLayouts[batch_size].input, MutUntrackedOrigin
@@ -148,10 +148,10 @@ def gemmFusedKernel[
     # param, so `_` (inferred-from-args) origins never get bound and no concrete
     # DeviceFunction type exists — untracked is the supported spelling (see
     # untrack_imm docstring / docs/origin_migration.md)
-    a: LayoutTensor[ftype, a_layout, ImmutUntrackedOrigin],
-    b: LayoutTensor[ftype, b_layout, ImmutUntrackedOrigin],
+    a: LayoutTensor[ftype, a_layout, ImmUntrackedOrigin],
+    b: LayoutTensor[ftype, b_layout, ImmUntrackedOrigin],
     c: LayoutTensor[ftype, c_layout, MutUntrackedOrigin],
-    bias: LayoutTensor[ftype, bias_layout, ImmutUntrackedOrigin],
+    bias: LayoutTensor[ftype, bias_layout, ImmUntrackedOrigin],
 ):
     """Tiled shared-memory GEMM: c(M,N) = a(M,K) @ b(K,N) + bias, one thread
     per c element within a TILE x TILE block, optional act_fn epilogue.
@@ -247,7 +247,7 @@ def argMaxKernel[
     batch_size: Int
 ](
     outputs: LayoutTensor[
-        ftype, Layout.row_major(batch_size, OUTPUT), ImmutUntrackedOrigin
+        ftype, Layout.row_major(batch_size, OUTPUT), ImmUntrackedOrigin
     ],
     guesses: LayoutTensor[
         DType.uint8, Layout.row_major(batch_size), MutUntrackedOrigin
@@ -274,10 +274,10 @@ def argMaxKernel[
 def matMulBlockSumKernel[
     batch_size: Int
 ](
-    weight5_6: LayoutTensor[ftype, WeightLayouts.w56, ImmutUntrackedOrigin],
-    bias5_6: LayoutTensor[ftype, BiasLayouts.b56, ImmutUntrackedOrigin],
+    weight5_6: LayoutTensor[ftype, WeightLayouts.w56, ImmUntrackedOrigin],
+    bias5_6: LayoutTensor[ftype, BiasLayouts.b56, ImmUntrackedOrigin],
     layer5: LayoutTensor[
-        ftype, BatchedFeatureLayouts[batch_size].layer5, ImmutUntrackedOrigin
+        ftype, BatchedFeatureLayouts[batch_size].layer5, ImmUntrackedOrigin
     ],
     outputs: LayoutTensor[
         ftype, Layout.row_major(batch_size, OUTPUT), MutUntrackedOrigin
@@ -325,7 +325,7 @@ def maxPool2Kernel[
     batch_size: Int
 ](
     layer3: LayoutTensor[
-        ftype, BatchedFeatureLayouts[batch_size].layer3, ImmutUntrackedOrigin
+        ftype, BatchedFeatureLayouts[batch_size].layer3, ImmUntrackedOrigin
     ],
     layer4: LayoutTensor[
         ftype, BatchedFeatureLayouts[batch_size].layer4, MutUntrackedOrigin
@@ -361,10 +361,10 @@ def maxPool2Kernel[
 def conv3FusedKernel[
     batch_size: Int
 ](
-    weight4_5: LayoutTensor[ftype, WeightLayouts.w45, ImmutUntrackedOrigin],
-    bias4_5: LayoutTensor[ftype, BiasLayouts.b45, ImmutUntrackedOrigin],
+    weight4_5: LayoutTensor[ftype, WeightLayouts.w45, ImmUntrackedOrigin],
+    bias4_5: LayoutTensor[ftype, BiasLayouts.b45, ImmUntrackedOrigin],
     layer4: LayoutTensor[
-        ftype, BatchedFeatureLayouts[batch_size].layer4, ImmutUntrackedOrigin
+        ftype, BatchedFeatureLayouts[batch_size].layer4, ImmUntrackedOrigin
     ],
     layer5: LayoutTensor[
         ftype, BatchedFeatureLayouts[batch_size].layer5, MutUntrackedOrigin
@@ -403,10 +403,10 @@ def conv3FusedKernel[
 def conv2FusedKernel[
     batch_size: Int
 ](
-    weight2_3: LayoutTensor[ftype, WeightLayouts.w23, ImmutUntrackedOrigin],
-    bias2_3: LayoutTensor[ftype, BiasLayouts.b23, ImmutUntrackedOrigin],
+    weight2_3: LayoutTensor[ftype, WeightLayouts.w23, ImmUntrackedOrigin],
+    bias2_3: LayoutTensor[ftype, BiasLayouts.b23, ImmUntrackedOrigin],
     layer2: LayoutTensor[
-        ftype, BatchedFeatureLayouts[batch_size].layer2, ImmutUntrackedOrigin
+        ftype, BatchedFeatureLayouts[batch_size].layer2, ImmUntrackedOrigin
     ],
     layer3: LayoutTensor[
         ftype, BatchedFeatureLayouts[batch_size].layer3, MutUntrackedOrigin
@@ -483,10 +483,10 @@ def conv2FusedKernel[
 def conv1PoolFusedKernel[
     batch_size: Int
 ](
-    weight0_1: LayoutTensor[ftype, WeightLayouts.w01, ImmutUntrackedOrigin],
-    bias0_1: LayoutTensor[ftype, BiasLayouts.b01, ImmutUntrackedOrigin],
+    weight0_1: LayoutTensor[ftype, WeightLayouts.w01, ImmUntrackedOrigin],
+    bias0_1: LayoutTensor[ftype, BiasLayouts.b01, ImmUntrackedOrigin],
     input: LayoutTensor[
-        ftype, BatchedFeatureLayouts[batch_size].input, ImmutUntrackedOrigin
+        ftype, BatchedFeatureLayouts[batch_size].input, ImmUntrackedOrigin
     ],
     layer2: LayoutTensor[
         ftype, BatchedFeatureLayouts[batch_size].layer2, MutUntrackedOrigin
@@ -836,7 +836,7 @@ struct StreamSlot[batch_size: Int](Movable):
         # copy only what the span holds — enqueue_copy_from(ptr) reads the buffer's
         # FULL length from the source pointer, an OOB read for a short batch
         var dst = self.hosted_inputs.unsafe_ptr()
-        memcpy(dest=dst, src=batch.unsafe_ptr(), count=len(batch))
+        unsafe_memcpy(dest=dst, src=batch.unsafe_ptr(), count=len(batch))
         comptime full_bytes = img_sz * Self.batch_size
         if len(batch) < full_bytes:  # short tail batch: pad the rest
             # zero images normalize to NaN, but padded slots are never tallied
@@ -845,7 +845,7 @@ struct StreamSlot[batch_size: Int](Movable):
                     "Rest of GPU StreamSlot batch padded with zeros.",
                     file=stderr,
                 )
-            memset_zero(dst + len(batch), full_bytes - len(batch))
+            unsafe_memset_zero(dst + len(batch), full_bytes - len(batch))
 
         self.device_inputs.enqueue_copy_from(self.hosted_inputs)
 
@@ -1043,12 +1043,12 @@ def batchedForwardMultiStream[
     try:
         var result = _batchRun(stream_slots, data, model, kernels, num_streams)
         for s in range(num_streams):
-            (stream_slots + s).destroy_pointee()
+            (stream_slots + s).unsafe_deinit_pointee()
         stream_slots.free()
         return result
     except e:
         for s in range(num_streams):
-            (stream_slots + s).destroy_pointee()
+            (stream_slots + s).unsafe_deinit_pointee()
         stream_slots.free()
         print("batchedForwardMultiStream ERROR", e)
         raise e^

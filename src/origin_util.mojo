@@ -24,8 +24,8 @@ def untrack[
 
 def untrack_imm[
     dt: DType, l: Layout, mut: Bool, //, o: Origin[mut=mut]
-](t: LayoutTensor[dt, l, o]) -> LayoutTensor[dt, l, ImmutUntrackedOrigin]:
+](t: LayoutTensor[dt, l, o]) -> LayoutTensor[dt, l, ImmUntrackedOrigin]:
     """Immutable counterpart of `untrack` — for read-only views stored in or
     passed where an untracked origin is required (e.g. a kernel param whose
     `DeviceFunction` type must not expose `AnyOrigin`)."""
-    return rebind[LayoutTensor[dt, l, ImmutUntrackedOrigin]](t)
+    return rebind[LayoutTensor[dt, l, ImmUntrackedOrigin]](t)

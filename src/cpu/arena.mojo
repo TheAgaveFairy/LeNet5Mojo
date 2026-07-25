@@ -7,7 +7,7 @@ from constants import ftype, sftype
 from origin_util import untrack
 
 # for allocation arena
-from std.memory import memset_zero
+from std.memory import unsafe_memset_zero
 from std.sys import stderr
 from std.sys.info import size_of, align_of
 from std.testing import assert_equal, TestSuite
@@ -98,12 +98,12 @@ struct CPUBumpArenaAllocator(CPUAllocator):
 
     def wipe(mut self):
         """Zero the slab and reset the offset. Arena-specific; not in trait."""
-        memset_zero(self.buffer, self.capacity)
+        unsafe_memset_zero(self.buffer, self.capacity)
         self.offset = 0
 
     def zero(mut self):
         """Zero the whole slab; offset and live allocations are untouched."""
-        memset_zero(self.buffer, self.capacity)
+        unsafe_memset_zero(self.buffer, self.capacity)
 
 
 struct CPUSystemAllocator(CPUAllocator):
@@ -149,7 +149,7 @@ struct CPUSystemAllocator(CPUAllocator):
     def zero(mut self):
         """Zero every tracked allocation; keeps them allocated/tracked."""
         for i in range(len(self._allocations)):
-            memset_zero(self._allocations[i], self._sizes[i])
+            unsafe_memset_zero(self._allocations[i], self._sizes[i])
 
     def wipe(mut self):
         """Zero then release all tracked allocations."""

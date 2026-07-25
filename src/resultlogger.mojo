@@ -76,7 +76,7 @@ struct InferenceResult(LogEntry):
 
     var timestamp: String
     var device: String
-    var elapsed_ns: UInt  # perf_counter_ns() -> UInt
+    var elapsed_ns: Int  # perf_counter_ns() -> UInt
     var correct: Int
     var test_size: Int
     var stream_batch_size: Int
@@ -87,7 +87,7 @@ struct InferenceResult(LogEntry):
     def __init__(
         out self,
         device: String,
-        elapsed_ns: UInt,
+        elapsed_ns: Int,
         correct: Int,
         test_size: Int,
         stream_batch_size: Int,
@@ -123,7 +123,7 @@ struct TrainingResult(LogEntry):
     var timestamp: String
     var device: String
     var epoch: Int
-    var elapsed_ns: UInt
+    var elapsed_ns: Int
     var correct: Int
     var sample_size: Int
     var loss: Float32
@@ -135,7 +135,7 @@ struct TrainingResult(LogEntry):
         out self,
         device: String,
         epoch: Int,
-        elapsed_ns: UInt,
+        elapsed_ns: Int,
         correct: Int,
         sample_size: Int,
         loss: Float32,
@@ -172,7 +172,7 @@ trait MyLogger:
     def logInferenceResult(
         self,
         device: String,
-        elapsed_ns: UInt,
+        elapsed_ns: Int,
         correct: Int,
         test_size: Int,
         stream_batch_size: Int,
@@ -185,7 +185,7 @@ trait MyLogger:
         self,
         device: String,
         epoch: Int,
-        elapsed_ns: UInt,
+        elapsed_ns: Int,
         correct: Int,
         test_size: Int,
         loss: Float32,
@@ -214,7 +214,7 @@ struct ResultLogger(ImplicitlyCopyable, LeNet5Logger):
     def logInferenceResult(
         self,
         device: String,
-        elapsed_ns: UInt,
+        elapsed_ns: Int,
         correct: Int,
         test_size: Int,
         stream_batch_size: Int,
@@ -236,7 +236,7 @@ struct ResultLogger(ImplicitlyCopyable, LeNet5Logger):
         self,
         device: String,
         epoch: Int,
-        elapsed_ns: UInt,
+        elapsed_ns: Int,
         correct: Int,
         test_size: Int,
         loss: Float32,
@@ -307,7 +307,7 @@ struct MultiFileLogger(ImplicitlyCopyable, LeNet5Logger):
     def logInferenceResult(
         self,
         device: String,
-        elapsed_ns: UInt,
+        elapsed_ns: Int,
         correct: Int,
         test_size: Int,
         stream_batch_size: Int,
@@ -328,7 +328,7 @@ struct MultiFileLogger(ImplicitlyCopyable, LeNet5Logger):
         self,
         device: String,
         epoch: Int,
-        elapsed_ns: UInt,
+        elapsed_ns: Int,
         correct: Int,
         test_size: Int,
         loss: Float32,

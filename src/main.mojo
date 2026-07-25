@@ -97,7 +97,7 @@ def main() raises:
         )
         var testing_ms = infer_res.elapsed_ns // 1_000_000
         var cpu_fps = (
-            UInt(infer_res.count) * 1_000_000_000 // infer_res.elapsed_ns
+            Int(infer_res.count) * 1_000_000_000 // infer_res.elapsed_ns
         )
         var accuracy_pct = infer_res.correct * 100 // infer_res.count
         print(
@@ -149,12 +149,12 @@ def main() raises:
 struct TimingStats(Copyable, Movable):
     """Median, min, and max of a set of timed passes."""
 
-    var median_ns: UInt
-    var min_ns: UInt
-    var max_ns: UInt
+    var median_ns: Int
+    var min_ns: Int
+    var max_ns: Int
 
 
-def _timing_stats(mut times: List[UInt]) -> TimingStats:
+def _timing_stats(mut times: List[Int]) -> TimingStats:
     """Sort `times` in place and reduce to median/min/max."""
     sort(Span(times))  # default ascending sort (UInt is Comparable)
     var n = len(times)
@@ -166,7 +166,7 @@ def _timing_stats(mut times: List[UInt]) -> TimingStats:
 struct TrainingSummary(Copyable, Movable):
     """Wall-clock time of one training run."""
 
-    var elapsed_ns: UInt
+    var elapsed_ns: Int
 
 
 @fieldwise_init
@@ -175,7 +175,7 @@ struct InferenceSummary(Copyable, Movable):
 
     var correct: Int
     var count: Int
-    var elapsed_ns: UInt
+    var elapsed_ns: Int
 
 
 def runTrain(
@@ -236,7 +236,7 @@ def benchCPUInference(
     for _ in range(N_WARMUP):
         var warmup = runTest(model, data, parallel=parallel)
         benchmark.keep(warmup)
-    var times = List[UInt]()
+    var times = List[Int]()
     var correct = 0
     for i in range(N_PASSES):
         var res = runTest(model, data, parallel=parallel)
@@ -251,7 +251,7 @@ def benchCPUInference(
             )
         except e:
             print(e, file=stderr)
-    var ns_per_img = stats.median_ns // UInt(len(data))
+    var ns_per_img = stats.median_ns // len(data)
     print(
         t"  median={stats.median_ns//1_000_000}ms ({ns_per_img}ns/img),"
         t" min={stats.min_ns//1_000_000}ms, max={stats.max_ns//1_000_000}ms"
@@ -304,7 +304,7 @@ def trainAndTest(
         )
     var training_ms = train_res.elapsed_ns // 1_000_000
     var testing_ms = infer_res.elapsed_ns // 1_000_000
-    var cpu_fps = UInt(infer_res.count) * 1_000_000_000 // infer_res.elapsed_ns
+    var cpu_fps = infer_res.count * 1_000_000_000 // infer_res.elapsed_ns
     var accuracy_pct = infer_res.correct * 100 // infer_res.count
     print(
         t"alloc={alloc}, act_fn={act_name}, threads={threads}, ALPHA={ALPHA},"
@@ -362,7 +362,7 @@ def runGPUTest(
             benchmark.keep(wc)
 
         # N_PASSES timed, take median
-        var times = List[UInt]()
+        var times = List[Int]()
         var correct = 0
         for i in range(N_PASSES):
             var t = perf_counter_ns()
@@ -373,8 +373,8 @@ def runGPUTest(
             if i == 0:
                 correct = c
         var stats = _timing_stats(times)
-        var fps = UInt(n_proc) * 1_000_000_000 // stats.median_ns
-        var ns = stats.median_ns // UInt(n_proc)
+        var fps = n_proc * 1_000_000_000 // stats.median_ns
+        var ns = stats.median_ns // n_proc
         var acc = correct * 100 // n_proc
         print(
             t"batchedForwardMultiStream[s={num_streams}]:"
@@ -397,7 +397,7 @@ def runGPUTest(
             print(e, file=stderr)
 
         for s in range(num_streams):
-            (slots + s).destroy_pointee()
+            (slots + s).unsafe_deinit_pointee()
         slots.free()
 
         benchmark.keep(gpu_session)

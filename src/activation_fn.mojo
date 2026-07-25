@@ -24,7 +24,7 @@ trait ActivationFunction:
         something other than a pure elementwise map.
         """
 
-        def vectorize_closure[width: Int](i: Int) {read}:
+        def vectorize_closure[width: Int](i: Int) {imm}:
             var nums = x.ptr.load[width=width](i)
             x.ptr.store[width=width](i, Self.simdForward(nums))
 
@@ -48,7 +48,7 @@ trait ActivationFunction:
         of them — a struct only overrides it if it needs something else.
         """
 
-        def vectorize_closure[width: Int](i: Int) {read}:
+        def vectorize_closure[width: Int](i: Int) {imm}:
             var nums = x.ptr.load[width=width](i)
             var upstream = d_output.ptr.load[width=width](i)
             d_z.ptr.store[width=width](i, Self.simdBackward(nums, upstream))
@@ -58,7 +58,7 @@ trait ActivationFunction:
     @staticmethod
     @always_inline("nodebug")
     def simdForward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width]) -> SIMD[fp, width]:
         """SIMD forward pass parameterized over dtype and vector width."""
         ...
@@ -66,7 +66,7 @@ trait ActivationFunction:
     @staticmethod
     @always_inline("nodebug")
     def simdBackward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
         """SIMD backward pass parameterized over dtype and vector width.
         x is the pre-activation input, d_output is the upstream gradient.
@@ -82,7 +82,7 @@ struct ReLU(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def simdForward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width]) -> SIMD[fp, width]:
         comptime assert (
             fp.is_floating_point()
@@ -93,7 +93,7 @@ struct ReLU(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def simdBackward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
         """SCALAR FORM is "return d_output if x > 0.0 else 0.0"."""
         comptime assert (
@@ -112,7 +112,7 @@ struct Sigmoid(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def simdForward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width]) -> SIMD[fp, width]:
         comptime assert (
             fp.is_floating_point()
@@ -123,7 +123,7 @@ struct Sigmoid(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def simdBackward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
         """sigmoid'(z) = sigmoid(z) * (1 - sigmoid(z))."""
         comptime assert (
@@ -142,7 +142,7 @@ struct Tanh(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def simdForward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width]) -> SIMD[fp, width]:
         comptime assert (
             fp.is_floating_point()
@@ -152,7 +152,7 @@ struct Tanh(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def simdBackward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
         """tanh'(x) = 1 - tanh(x)^2."""
         comptime assert (
@@ -173,7 +173,7 @@ struct GELU(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def simdForward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width]) -> SIMD[fp, width]:
         comptime assert (
             fp.is_floating_point()
@@ -187,7 +187,7 @@ struct GELU(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def simdBackward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
         """(x * CDF(x))' = x'CDF(x) + xCDF'(x) = CDF(x) + xPDF(x).
 
@@ -218,7 +218,7 @@ struct GELUTanh(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def simdForward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width]) -> SIMD[fp, width]:
         comptime assert (
             fp.is_floating_point()
@@ -232,7 +232,7 @@ struct GELUTanh(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def simdBackward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
         """Defined as the following...
         k = sqrt(2 / pi)
@@ -265,7 +265,7 @@ struct GELUFast(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def _sigmoid[
-        stype: DType, width: SIMDSize
+        stype: DType, width: SIMDLength
     ](x: SIMD[stype, width]) -> SIMD[stype, width]:
         """SIMD Sigmoid that accepts any floating point type, not just ftype."""
         comptime assert (
@@ -279,7 +279,7 @@ struct GELUFast(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def simdForward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width]) -> SIMD[fp, width]:
         comptime assert (
             fp.is_floating_point()
@@ -290,7 +290,7 @@ struct GELUFast(ActivationFunction):
     @staticmethod
     @always_inline("nodebug")
     def simdBackward[
-        fp: DType, width: SIMDSize
+        fp: DType, width: SIMDLength
     ](x: SIMD[fp, width], d_output: SIMD[fp, width]) -> SIMD[fp, width]:
         """f'(1.702x) = sigmoid(1.702x)
                         + (x * 1.702 * sigmoid(1.702x) * (1 - sigmoid(1.702x))).
