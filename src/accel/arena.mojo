@@ -58,10 +58,10 @@ struct GPUBumpArenaAllocator(GPUAllocator):
         self.capacity = capacity_bytes
         self.offset = 0
 
-    def __init__(out self, *, deinit take: Self):
-        self.buffer = take.buffer^
-        self.capacity = take.capacity
-        self.offset = take.offset
+    def __init__(out self, *, deinit move: Self):
+        self.buffer = move.buffer^
+        self.capacity = move.capacity
+        self.offset = move.offset
 
     def alloc[dtype: DType](mut self, count: Int) raises -> DeviceBuffer[dtype]:
         """Bump-allocate `count` items of `dtype` as a typed sub-buffer, padding for alignment.
@@ -110,9 +110,9 @@ struct GPUSystemAllocator(GPUAllocator):
         self._ctx = ctx
         self._allocations = List[DeviceBuffer[DType.uint8]]()
 
-    def __init__(out self, *, deinit take: Self):
-        self._ctx = take._ctx
-        self._allocations = take._allocations^
+    def __init__(out self, *, deinit move: Self):
+        self._ctx = move._ctx
+        self._allocations = move._allocations^
 
     def alloc[dtype: DType](mut self, count: Int) raises -> DeviceBuffer[dtype]:
         """Create an independent `DeviceBuffer` of `count` items of `dtype` and track it.

@@ -211,19 +211,19 @@ struct LeNet5(ArenaSizable, Movable):
         _ = self.bias4_5.fill(0.0)
         _ = self.bias5_6.fill(0.0)
 
-    def __init__(out self, *, deinit existing: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move: transfer the tensor views and ownership flag; no reallocation.
         """
         print("model move")
-        self.allocator_owns_memory = existing.allocator_owns_memory
-        self.weight0_1 = existing.weight0_1
-        self.weight2_3 = existing.weight2_3
-        self.weight4_5 = existing.weight4_5
-        self.weight5_6 = existing.weight5_6
-        self.bias0_1 = existing.bias0_1
-        self.bias2_3 = existing.bias2_3
-        self.bias4_5 = existing.bias4_5
-        self.bias5_6 = existing.bias5_6
+        self.allocator_owns_memory = move.allocator_owns_memory
+        self.weight0_1 = move.weight0_1
+        self.weight2_3 = move.weight2_3
+        self.weight4_5 = move.weight4_5
+        self.weight5_6 = move.weight5_6
+        self.bias0_1 = move.bias0_1
+        self.bias2_3 = move.bias2_3
+        self.bias4_5 = move.bias4_5
+        self.bias5_6 = move.bias5_6
 
     def __del__(deinit self):
         """Free the tensors only when self allocated them; arena-backed views are
