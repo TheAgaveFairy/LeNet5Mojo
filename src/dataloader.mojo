@@ -49,7 +49,9 @@ struct MNISTDataView[
         var pptr = pixel_buffer.unsafe_ptr()
         for i in range(num_images):
             var img = images[i]
-            unsafe_memcpy(src=img.pixels.ptr, dest=pptr + offset, count=size)
+            unsafe_memcpy(
+                src=img.pixels.ptr, dest=pptr.unsafe_offset(offset), count=size
+            )
             label_buffer.unsafe_get(i) = img.label
             offset += size
         self.raw_pixels = rebind[Span[UInt8, Self.origin]](pixel_buffer)

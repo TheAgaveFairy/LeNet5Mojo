@@ -845,7 +845,9 @@ struct StreamSlot[batch_size: Int](Movable):
                     "Rest of GPU StreamSlot batch padded with zeros.",
                     file=stderr,
                 )
-            unsafe_memset_zero(dst + len(batch), full_bytes - len(batch))
+            unsafe_memset_zero(
+                dst.unsafe_offset(len(batch)), full_bytes - len(batch)
+            )
 
         self.device_inputs.enqueue_copy_from(self.hosted_inputs)
 

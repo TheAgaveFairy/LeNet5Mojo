@@ -214,7 +214,7 @@ struct LeNet5(ArenaSizable, Movable):
     def __init__(out self, *, deinit move: Self):
         """Move: transfer the tensor views and ownership flag; no reallocation.
         """
-        print("model move")
+        #print("model move")
         self.allocator_owns_memory = move.allocator_owns_memory
         self.weight0_1 = move.weight0_1
         self.weight2_3 = move.weight2_3

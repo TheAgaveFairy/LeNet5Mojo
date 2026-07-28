@@ -5,6 +5,89 @@ Check items off as they are completed.
 
 ---
 
+## Pointer/UnsafePointer migration (pre-1.0, started 2026-07-25)
+
+Mojo is merging `UnsafePointer` and `Pointer` into one `Pointer[T, ...,
+_safe: Bool]` struct. `_safe=True` pointers — what `.unsafe_ptr()` on `Span`/
+`InlineArray`/`HostBuffer`/etc. now returns — drop operator arithmetic
+(`ptr + i`) and bare `.load[width=w](i)`/`.store(...)`, requiring
+`unsafe_offset(i)` / `unsafe_load[width=w]()` / `unsafe_store(...)` instead.
+Plain `UnsafePointer[T, Origin]` type annotations keep working as-is (alias
+resolves to `_safe=False`). Paul's premise: 1.0 ships in ~3 weeks and this
+"will need to all migrate to Pointer, period" — treat as a real migration,
+not a one-off patch. Full-repo inventory done 2026-07-25 (18 `*.mojo` files
+under `src/`); see the plan file this session produced for the raw findings.
+
+- [x] **Fix the 4 live breakages** — DONE 2026-07-25. All were arithmetic/
+  `.load` applied to a `.unsafe_ptr()`-returned pointer; rewritten to
+  `unsafe_offset(...)`/`unsafe_load[width=w]()`:
+  - `dataloader.mojo:53` (`unsafe_memcpy` dest offset)
+  - `image.mojo:119` (`normalized`) and `image.mojo:157` (`_normalize`,
+    `@deprecated` — not reachable from `main.mojo`, only surfaced via
+    `pixi run buildall`'s per-file sweep, not `pixi run doit`)
+  - `accel/ops.mojo:848-849` (`unsafe_memset_zero` on `HostBuffer.unsafe_ptr()`
+    tail-padding, GPU host-staging path)
+  - Verified: `pixi run doit` compiles + runs end-to-end (CPU 96.86%, GPU
+    matches). `pixi run buildall` still fails on 5 files, but for an
+    UNRELATED pre-existing reason — see next item.
+
+- [ ] **`buildall` failure: `LayoutTensor[..., MutAnyOrigin](unsafe_ptr=...)` rejects
+  a `MutUntrackedOrigin` pointer** — surfaced 2026-07-25, NOT caused by the
+  pointer-safety fix above (different error: origin mismatch, not `_safe`).
+  Matches the already-tracked Origin migration issue (`docs/origin_migration.md`
+  — nightly no longer implicitly widens `MutUntrackedOrigin` → `MutAnyOrigin`).
+  Affects
+  `cpu/batchedops.mojo`, `tests/bench_maxpool.mojo`, `tests/ops.mojo`,
+  `tests/test_images.mojo`, `tests/test_ops.mojo` — none on the `main.mojo`
+  path, so `pixi run doit` doesn't see it. Fix is probably swapping
+  `MutAnyOrigin` → `MutUntrackedOrigin` at the `LayoutTensor[...]` call sites
+  in those 5 files (same pattern as `origin_util.mojo`'s `untrack()`), but
+  not yet investigated in depth.
+
+- [ ] **Audit the 7 `rebind[UnsafePointer[...]]` casts** — `cpu/arena.mojo`
+  (`:64,135,140`) and `dataloader.mojo` (`:190,193,212,215`). All compile
+  today (both sides still plain `UnsafePointer`). Risk: if the *bit
+  representation* changes as part of the merge (not just the API surface), a
+  `rebind` reinterprets rather than converts — could silently miscompile
+  instead of erroring. Sharpest edge: `cpu/arena.mojo:64,140` rebind the
+  return of the **bare global stdlib `alloc[T]()`**, a type outside repo
+  control. Do this once the 1.0 `Pointer` API is stable, not against a
+  moving nightly target.
+
+- [ ] **`LayoutTensor.ptr` — biggest unknown, do NOT pre-migrate against a
+  guess.** `LayoutTensor` has no source in this repo (compiled `.mojoc` in
+  the pixi env, from Modular's `layout` package). Its `.ptr` field is used
+  pervasively (~34 sites: `activation_fn.mojo`, `cpu/model.mojo`,
+  `cpu/ops.mojo`, `accel/model.mojo`, `accel/ops.mojo`, `image.mojo`,
+  `dataloader.mojo` — 15 `.load[`/`.store(`/`.bitcast[` calls that break
+  exactly like the 4 fixed sites if it happens, 9 `.free()`, 10 bracket-index,
+  8 bare pass-throughs). Whether/when this breaks is entirely Modular's call.
+  Action: watch nightly changelog / Discord for `LayoutTensor`'s `_safe`
+  status; `pixi run buildall` is the tripwire — re-run after every nightly
+  pin bump (repo already tracks nightly). If it breaks, same
+  `unsafe_offset`/`unsafe_load` rewrite applies.
+  - Paul checking Discord 2026-07-25 evening for more info — pick up here.
+
+- [ ] **Decide fate of the 8 explicit `UnsafePointer[T, Origin]` annotations**
+  — `cpu/arena.mojo` (allocator trait `:37` + both impls `:59,75-77,116,
+  122,130`) and `accel/ops.mojo` (`:598,984`, both only ever indexed with
+  `[i]`, never `.load`/arithmetic — lowest risk in the whole inventory).
+  Compile fine today. Open question: does the `UnsafePointer` name survive
+  1.0 as permanent sugar for `Pointer[..., _safe=False]`, or is it a
+  nightly-only transitional alias? Gates whether these need a mechanical
+  rename later. Blocked on the same Discord/changelog research as the item
+  above.
+
+- Side finding, not in scope for this migration but adjacent risk: ~27 bare
+  global `alloc[T](...)` calls bypass the arena abstraction entirely (17 in
+  `cpu/model.mojo`'s alternate `allocator_owns_memory=False` weight-init
+  path, 6 in `cpu/ops.mojo` scratch buffers). They feed straight into the
+  `cpu/arena.mojo:64/140` rebind casts above, so a stdlib `alloc()` signature
+  change surfaces there first. Not proposing a fix now, just flagging so it's
+  not lost.
+
+---
+
 ## Roadmap (agreed 2026-07-02, post conv3/FC GEMM wiring)
 
 Context: conv3 + FC now run `gemmFusedKernel` (commit d9242c9): conv3 1.83x, kernel

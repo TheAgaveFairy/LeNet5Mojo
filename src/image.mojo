@@ -116,7 +116,9 @@ struct Image(ImplicitlyCopyable):
             temp_buffer[i] = UInt64(self.pixels.ptr[i])
 
         def sum_closure[width: Int](i: Int) {mut}:
-            var nums = temp_buffer.unsafe_ptr().load[width=width](i)
+            var nums = temp_buffer.unsafe_ptr().unsafe_offset(i).unsafe_load[
+                width=width
+            ]()
             sum += nums.reduce_add()
             std_sum += (nums * nums).reduce_add()
 
@@ -152,7 +154,9 @@ struct Image(ImplicitlyCopyable):
             temp_buffer[i] = UInt64(raw[i])
 
         def sum_closure[width: Int](i: Int) {mut}:
-            var nums = temp_buffer.unsafe_ptr().load[width=width](i)
+            var nums = temp_buffer.unsafe_ptr().unsafe_offset(i).unsafe_load[
+                width=width
+            ]()
             sum += nums.reduce_add()
             std_sum += (nums * nums).reduce_add()
 
