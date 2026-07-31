@@ -39,7 +39,7 @@ struct Image(ImplicitlyCopyable):
     # shape, so alias it rather than re-deriving (PADDED_SIZE == LENGTH_FEATURE0).
     comptime DataLayout = FeatureLayouts.input
     comptime DataTensor = LayoutTensor[
-        ftype, Self.DataLayout, MutAnyOrigin
+        ftype, Self.DataLayout, MutUntrackedOrigin
     ]  # normalized into ftype and padded
 
     var pixels: Self.PixelTensor

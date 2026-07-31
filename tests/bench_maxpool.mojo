@@ -25,11 +25,11 @@ from std.benchmark import Bench, BenchConfig, Bencher, BenchId
 from std.benchmark.compiler import keep
 from std.sys.info import size_of
 
-comptime Tens[layout: Layout] = LayoutTensor[ftype, layout, MutAnyOrigin]
+comptime Tens[layout: Layout] = LayoutTensor[ftype, layout, MutUntrackedOrigin]
 
 
 # Deterministic, varied fill so argmax lands in different window slots (exercises the branch).
-def fillVaried(ptr: UnsafePointer[sftype, MutAnyOrigin], count: Int):
+def fillVaried(ptr: UnsafePointer[sftype, MutUntrackedOrigin], count: Int):
     for idx in range(count):
         ptr[idx] = sftype((idx * 2654435761) % 1009)
 

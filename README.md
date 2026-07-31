@@ -77,7 +77,10 @@ This project uses Mojo's first-party ecosystem throughout — not just the core 
 - **`std.gpu`** — `DeviceContext`, `DeviceBuffer`, kernel launch via `enqueue_function`, `barrier`, thread indexing (`global_idx`, `block_idx`, `thread_idx`)
 - **`std.algorithm`** — `vectorize` for SIMD-width loops, `parallelize` for multi-threaded training and testing
 
-All operations are hand-rolled in Mojo. No PyTorch, TensorFlow, JAX, or BLAS.
+All operations are hand-rolled in Mojo. No PyTorch, TensorFlow, JAX, or BLAS
+(an *optional*, opt-in PyTorch reference suite for testing is planned — see
+[Planned Improvements](#planned-improvements) — but it's dev/test-only and
+never touches the model itself).
 
 ### Compile-Time Activation Functions
 
@@ -256,6 +259,7 @@ The CPU path (`parallelize` + SIMD, hand-rolled) reaches **~28k img/s** — hone
 - **conv2 as a batched GEMM** — the natural extension of the conv3 GEMM work now that the SoA feature layout makes the operand views dense
 - **`fp16` / `bf16` dtype paths** + dtype-parity notes vs PyTorch/JAX (which default to TF32 matmuls on Ampere)
 - Pre-normalized `fp32` input mode to mirror how the libraries upload images
+- **Optional PyTorch-based op/gradient parity tests**, opt-in via `pixi run -e pytorch-tests test-pytorch-parity` — a separate pixi environment/feature, not part of the default one, so `pixi install`/`pixi shell` never pulls in Python or PyTorch (see `TESTS_PLAN.md`)
 
 *Recently landed: tail-padding (any batch size now covers the full test set — remainder images are padded and masked, no longer dropped), the fused conv1+pool1 kernel, and conv3/FC recast as GEMMs.*
 

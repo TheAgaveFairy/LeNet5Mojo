@@ -12,7 +12,7 @@ def main() raises:
 
 
 def testCV() raises:
-    comptime Tens[layout: Layout] = LayoutTensor[ftype, layout, MutAnyOrigin]
+    comptime Tens[layout: Layout] = LayoutTensor[ftype, layout, MutUntrackedOrigin]
     var arena = CPUArena((25 + 36 + 4) * size_of[ftype]())
     var k = Tens[Layout.row_major(5, 5)](arena.alloc[sftype](25)).fill(1.0)
     var i = Tens[Layout.row_major(6, 6)](arena.alloc[sftype](36)).fill(2.0)
