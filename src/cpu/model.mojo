@@ -225,7 +225,7 @@ struct LeNet5(ArenaSizable, Movable):
         self.bias4_5 = move.bias4_5
         self.bias5_6 = move.bias5_6
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Free the tensors only when self allocated them; arena-backed views are
         owned by the arena.
         """

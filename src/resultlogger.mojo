@@ -19,7 +19,7 @@ def reflectHeaders[T: AnyType]() -> String:
     comptime for i in range(reflect[T].field_count()):
         if i > 0:
             line += ","
-        line += String(names[i])
+        line += String(materialize[names[i]]())
     return line^
 
 

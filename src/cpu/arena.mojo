@@ -67,7 +67,7 @@ struct CPUBumpArenaAllocator(CPUAllocator):
         self.capacity = capacity_bytes
         self.offset = 0
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         self.buffer.free()
 
     def alloc[
@@ -122,7 +122,7 @@ struct CPUSystemAllocator(CPUAllocator):
         self._allocations = List[UnsafePointer[UInt8, MutUntrackedOrigin]]()
         self._sizes = List[Int]()
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         self.free_all()
 
     def alloc[
@@ -333,7 +333,7 @@ struct TestContainer:
     def sizeInBytes() -> Int:
         return comptime (Self.layout.size()) * size_of[sftype]()
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         pass
         # self.a.ptr.free()
         # self.sub_weights.a.ptr.free()

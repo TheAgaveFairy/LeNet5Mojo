@@ -3,7 +3,7 @@
 from layout import LayoutTensor, Layout
 from std.math import exp, sqrt, log, ceildiv
 from std.algorithm.functional import vectorize
-from std.algorithm import parallelize
+from max.algorithm import parallelize
 from std.utils.index import IndexList
 from std.memory import memcpy
 import std.benchmark as benchmark
