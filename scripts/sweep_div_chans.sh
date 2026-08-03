@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Sweep DIV_CHANS_CONV2 / DIV_CHANS_CONV3 to find the fastest combination.
 #
-# Metric: median fps from the batchedForwardMultiStream line of `-D BENCH_ONLY`.
+# Metric: median fps from the batchedForwardMultiStream line of `--bench-only`.
 # Default mode is coordinate descent (cheap): sweep conv2 with conv3 fixed, pick
 # the best, then sweep conv3 at that best conv2. Pass --grid for a full cross
 # product (slower: every conv2 x conv3 pair).
@@ -37,6 +37,25 @@ CONV3_DEFAULT=8
 # erroring, so we kill it. Override with BUILD_TIMEOUT=900 etc.
 BUILD_TIMEOUT="${BUILD_TIMEOUT:-600}"
 
+# GPU batch/stream config to measure AT. Unset = the compiled-in constants.mojo
+# defaults, i.e. the RTX 3070 tuning — unchanged behaviour on that box.
+#
+# Set these on any card whose tuning differs, because the measurement is only as
+# good as the config it runs in. On the RX 7600 the 3070 defaults (bs=100 s=12)
+# sit in the BIMODAL region documented in TODO.md — ~18.5% run-to-run spread,
+# two disjoint modes. A div_chans effect of a few percent is invisible under
+# that; you would be sampling which mode you landed in, not which divisor is
+# faster. At bs=250 s=3 the same card measures 0.12% spread, so the signal is
+# recoverable. Example:
+#   GPU_BS=250 GPU_STREAMS=3 pixi run bash scripts/sweep_div_chans.sh
+GPU_BS="${GPU_BS:-}"
+GPU_STREAMS="${GPU_STREAMS:-}"
+
+EXTRA_D=()
+[[ -n "$GPU_BS" ]] && EXTRA_D+=(-D "GPU_STREAM_BATCH_SIZE=$GPU_BS")
+EXTRA_ARGS=()
+[[ -n "$GPU_STREAMS" ]] && EXTRA_ARGS+=(--num-streams "$GPU_STREAMS")
+
 GRID=0
 [[ "${1:-}" == "--grid" ]] && GRID=1
 
@@ -50,6 +69,7 @@ OUT="results/sweep_div_chans_${STAMP}.csv"
 mkdir -p results
 echo "conv2,conv3,fps,ns_per_img,accuracy_pct,status" > "$OUT"
 echo "Writing results to $OUT"
+echo "Measuring at: bs=${GPU_BS:-<constants.mojo default>} streams=${GPU_STREAMS:-<constants.mojo default>}"
 echo
 
 # Run one config. Args: conv2 conv3.
@@ -62,8 +82,9 @@ run_one() {
   log="$(mktemp)"
   # `timeout` returns 124 on kill (compile-time explosion); other nonzero = build/run error.
   timeout "$BUILD_TIMEOUT" \
-    mojo -D BENCH_ONLY -D DIV_CHANS_CONV2="$c2" -D DIV_CHANS_CONV3="$c3" \
-      src/main.mojo >"$log" 2>&1 || rc=$?
+    mojo -D DIV_CHANS_CONV2="$c2" -D DIV_CHANS_CONV3="$c3" \
+      ${EXTRA_D[@]+"${EXTRA_D[@]}"} src/main.mojo --bench-only \
+      ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} >"$log" 2>&1 || rc=$?
 
   if (( rc == 124 )); then
     printf "  conv2=%-2s conv3=%-2s -> TIMEOUT after %ss (likely compile blowup; log %s)\n" \

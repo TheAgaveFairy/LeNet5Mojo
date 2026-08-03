@@ -22,6 +22,52 @@ ncuprofile_gpu = { cmd = "ncu --set basic --launch-count 80 --target-processes a
 gpulock = { cmd = "sudo scripts/gpu_lock.sh", cwd = "."}
 gpuunlock = { cmd = "sudo scripts/gpu_unlock.sh", cwd = "."}
 
+# ── Per-GPU tuned runs ────────────────────────────────────────────────────────
+# Same source, machine-specific knobs. `doit`/`bench` use the compiled-in
+# defaults from constants.mojo; these override them with values actually
+# MEASURED on that card by scripts/grid_search_gpu.sh.
+#
+# The tuning is per-GPU, not per-platform, so it cannot live in constants.mojo
+# or a [target.*] block — one binary, different best knobs. Hence one task per
+# card, named for the card.
+#
+# Every tuned entry carries the date and the source CSV. If you cannot point at
+# a CSV, the numbers are a guess and should say so — an untuned task that reads
+# as tuned is worse than no task, because it silently launders a default into
+# looking like a measurement.
+#
+# Retune after kernel changes:
+#   BS_VALUES="..." STREAM_VALUES="..." bash scripts/grid_search_gpu.sh
+# DIV_CHANS_CONV2/CONV3 are tuned separately (scripts/sweep_div_chans.sh) and
+# are not folded in here yet — add them per-card once measured.
+
+# TUNED — the constants.mojo defaults (GPU_STREAM_BATCH_SIZE=100,
+# NUM_GPU_STREAMS=12) ARE the RTX 3070 tuning, so this passes no overrides. It
+# exists so the tuned config is named rather than implicit: `doit` and `rtx3070`
+# run identically today, but only one of them still means "3070-tuned" after
+# someone changes a default.
+rtx3070 = { cmd = "mojo src/main.mojo", cwd = "." }
+
+# TUNED 2026-08-03 — coarse: results/grid_search_gpu_20260803_122012.csv
+#                    refine: results/grid_search_gpu_20260803_130435.csv
+# Picked on highest mean AND tightest spread: 1103954 mean @ 0.12% (three
+# samples within 1300 fps). The 3070 tuning above measures 873663 mean @ 18.5%
+# spread on THIS card, so the RDNA3 optimum is ~27% faster and far more stable —
+# the NVIDIA-tuned knobs do not transfer.
+#
+# The optimum is a PLATEAU, not a peak: everything in bs 150-300 x streams 2-3
+# lands within 2.8%, and cross-sweep drift alone is ~0.5% (the coarse sweep's
+# best, bs=200 s=2 at 1110763, beats every refinement best). Do not re-tune these
+# for sub-1% gains; the measurement cannot resolve them.
+# NOTE: streams>3 and small batches land in the BIMODAL region (see TODO.md) —
+# do not "improve" these upward without re-reading that entry.
+rx7600 = { cmd = "mojo -D GPU_STREAM_BATCH_SIZE=250 src/main.mojo --num-streams 3", cwd = "." }
+
+# UNTUNED — runs the compiled-in defaults (which are 3070 values) and says so.
+# Replace the cmd with a tuned invocation once scripts/grid_search_gpu.sh has
+# been run there, and cite the CSV like rx7600 above.
+metal   = { cmd = "echo 'metal: UNTUNED — running RTX 3070 defaults. Run scripts/grid_search_gpu.sh on this box and update pixi.toml.' >&2 && mojo src/main.mojo", cwd = "." }
+
 # Mojo shells out to `xcrun metal` to build the .metallib. xcrun resolves that
 # through the active developer dir, and a Command Line Tools instance has no
 # `metal` — you get "Metal Compiler failed to compile metallib". Point it at the
@@ -37,10 +83,44 @@ mojo = ">=1.0.0b3.dev2026073121,<2"
 pandas = ">=3.0.5,<4"
 max = ">=26.5.0.dev2026073121,<27"
 
-# Linux-only toolchain. Scoped by target rather than commented out so one
-# manifest serves both machines: the CUDA box still gets these, macOS skips
-# them. pixi resolves this at lock time, per platform — it cannot probe for an
-# actual NVIDIA GPU (see note below).
+# Linux-only, and vendor-neutral: this is the sysroot the conda `ld` links
+# against, needed on the AMD box as much as the NVIDIA one. The floor must be
+# >= the glibc symbol versions Mojo's own runtime .so files reference — at
+# 1.0.0b3.dev2026073121 that is GLIBC_2.34 (pthread_create, dlopen, sem_init).
+# Pinned at 2.28 it linked against a sysroot older than those symbols and
+# `mojo build` died with ~40 "undefined reference to ...@GLIBC_2.34" from
+# libKGENCompilerRTShared/libAsyncRT*/libNVPTX. `mojo run` never hit this: the
+# JIT resolves through the dynamic loader against system glibc at load time and
+# skips the version check entirely.
+#
+# gcc is here because `mojo build` shells out to a C compiler to drive the final
+# link, and it used to arrive as a transitive dep of cuda-toolkit — dropping the
+# toolkit turned the glibc link error into "unable to find suitable c compiler
+# for linking". Ubuntu ships no compiler by default (`gcc-N-base` is not one),
+# so nothing else supplies it. Needed on every linux-64 host, GPU vendor
+# irrelevant, hence declared here rather than arriving by accident.
+#
+# It must be the `gcc` METAPACKAGE, not `gcc_linux-64`. The mojo driver searches
+# PATH for the literal name `cc`: it ignores $CC (which pixi activation does set,
+# to the prefixed x86_64-conda-linux-gnu-cc) and never looks for `clang`.
+# gcc_linux-64 installs prefixed names only, so it does not satisfy the search;
+# the metapackage adds the unprefixed cc/gcc/c++/g++ symlinks that do. Verified
+# by symlinking `cc` onto both gcc and clang — either links fine under that name,
+# so this is a naming constraint in the driver, not a real gcc dependency.
 [target.linux-64.dependencies]
+sysroot_linux-64 = ">=2.34,<3"
+gcc = ">=14,<17"
+
+# CUDA toolchain, opt-in via the `cuda` environment: `pixi run -e cuda doit`.
+# pixi resolves at lock time and cannot probe the host for an actual NVIDIA GPU
+# (platform is as fine-grained as it gets), so vendor has to be an explicit
+# environment rather than something detected. Plain `pixi run` is the AMD/CPU
+# path and never downloads the toolkit; ROCm there comes from the system
+# package manager, not conda. Both environments share a solve group so mojo/max
+# resolve to identical versions across them.
+[feature.cuda.target.linux-64.dependencies]
 cuda-toolkit = ">=13.3.1,<14"
-sysroot_linux-64 = ">=2.28,<3"
+
+[environments]
+default = { solve-group = "main" }
+cuda = { features = ["cuda"], solve-group = "main" }

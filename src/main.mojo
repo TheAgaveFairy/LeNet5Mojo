@@ -82,7 +82,7 @@ def main() raises:
                 file=stderr,
             )
             return
-        print("BENCH_ONLY: loading '" + model_path + "'...")
+        print("--bench-only: loading '" + model_path + "'...")
         var modelCPU = LeNet5()
         modelCPU.loadFromFile[ftype](Path(model_path))
         var act_name = materialize[act_fn_name]()

@@ -247,6 +247,16 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     finer blocks multiply redundant image restaging + partial-warp overhead. Don't re-sweep
     unless block shape changes. conv2's real cost is elsewhere — next: `pixi run ncuprofile_gpu`
     stall analysis, or wait for the SoA/batched restructure to change the kernel shape entirely.
+
+- [ ] **DIV_CHANS sweeps run before 2026-08-03 are void — re-run per card**
+  - `sweep_div_chans.sh` passed `-D BENCH_ONLY`, removed 2026-06-24 (see the CLEANUP DONE note
+    below). An unknown `-D` is a silent no-op, so for ~6 weeks every config trained from scratch
+    and was measured on a fresh model rather than the saved one. Fixed 2026-08-03 to `--bench-only`.
+  - Any div_chans conclusions from that window, including the div=4 knee recorded above, were
+    measured through a training pass and may be shadowed by it. Re-sweep before trusting them.
+  - Re-run at the card's TUNED config, not the defaults — `GPU_BS`/`GPU_STREAMS` were added to the
+    script for this. On RX 7600 the compiled-in (3070) defaults sit in the bimodal region, so a
+    few-percent divisor effect is invisible there.
   - block=(chan=4, col=10, row=10) puts `local_chan` on thread_idx.x, so consecutive warp
     lanes differ by chan. Consequences: (1) `flat_idx = x*dim.y*dim.z + y*dim.z + z` makes the
     local_image staging loop (`:317-325`) read global with lanes 100 elements apart — 32-way
@@ -546,6 +556,74 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     discipline every framework (PyTorch/JAX/ONNX-RT/MAX) uses.
   - Note: a `DeviceContext` host-callback (cudaLaunchHostFunc-style) is NOT the tool here — that orders
     host work *within* a stream; the prep just needs to move to `__init__`, before the timed loop.
+
+- [ ] **`min=`/`max=` print at whole-ms truncation — too coarse to read variance** (`main.mojo:382-384`)
+  - The timing is collected at full precision (`perf_counter_ns`, `stats.{median,min,max}_ns`), but the
+    print truncates with `//1_000_000`, so the spread is reported in whole milliseconds. On AMD (RX 7600,
+    total pass ~12 ms) that is ~8% per quantum; on NVIDIA the pass is ~5-6 ms, so `min=5ms max=6ms` is a
+    ~20% quantum and conveys almost nothing. It is also truncation, not rounding — 11.9 ms prints as
+    `11ms`, biased low across the board.
+  - Measured 2026-08-02, five IDENTICAL runs (bs=100, s=12, clocks unlocked, RX 7600):
+    `830315, 804291, 805554, 910914, 805517` fps — a 13% spread with one clear outlier
+    (`min=9ms max=23ms`), all reporting the same `12ms` median except the outlier's `10ms`. The printed
+    min/max cannot distinguish "noisy run" from "faster run", which is exactly what a knee search needs.
+  - **`fps` and `ns/img` are NOT affected** — both are computed from `stats.median_ns` before truncation
+    (`main.mojo:376-377`). This is purely a display defect. `logInferenceResult` also receives
+    `median_ns` at full precision, but min/max are never logged, so the variance data exists only in the
+    truncated print and is otherwise thrown away.
+  - **Coupling with `../CNNTesting` — read before changing the format.** `bench_mojo.py:42` parses this
+    line with `r' (\d+)ms [^,]+, (\d+) fps'`, which captures the MEDIAN ms and the fps; min/max sit after
+    the match and are ignored. So:
+    - Changing `min=`/`max=` precision is SAFE — outside the regex.
+    - Changing the median `{...}ms` token is NOT. Decimals there (`12.04ms`) make `(\d+)ms` fail to match
+      at all, so `bench_mojo.py` gets no result rather than a wrong one — a loud break, but a break.
+      Land that half in both repos together.
+  - Cheapest fix that loses nothing: keep the median token exactly as-is, print min/max as µs or with
+    decimals, and add min_ns/max_ns to `logInferenceResult` so the spread survives into the CSV where a
+    sweep can actually use it.
+
+- [ ] **GPU throughput is BIMODAL per process (~23%) — not noise, and not fixed by locking clocks**
+  - Measured 2026-08-02, RX 7600 (gfx1102), bs=100 s=12, clocks LOCKED (`--setperflevel manual` +
+    `--setsclk 1`). Ten identical invocations fall into two tight, DISJOINT clusters:
+    - low  ~803-818k fps, `min=11-12ms max=14-15ms` (6 runs)
+    - high ~998-1005k fps, `min=9ms max=10-12ms`   (4 runs)
+    The FASTEST pass of a low run (11 ms) is slower than the SLOWEST pass of a high run (10 ms), and
+    passes are consistent WITHIN a process — so the mode is fixed at startup, not drift during the run.
+    Locking clocks did not change this (unlocked spanned 804-911k, same shape).
+  - Ruled out, with evidence:
+    - **GPU clocks** — anti-correlated. Sampling during runs: 994k fps at peak sclk 815 MHz vs 803k fps
+      at peak sclk 1398 MHz. The highest-clocked trial was one of the slowest.
+    - **PCIe link DPM** — `pp_dpm_pcie` reports all three states at 8.0 GT/s x8, so there is no
+      Gen3↔Gen4 switching on the host path. (The GPU's own port trains Gen4, but the switch UPSTREAM
+      port at `01:00.0` sits at 8.0 GT/s — Coffee Lake is PCIe 3.0 — so the effective link is constant.)
+    - **CPU power** — `energy_performance_preference=performance`, `no_turbo=0`,
+      `powerprofilesctl get` = performance. Already optimal. (`intel_pstate`'s governor reading
+      "powersave" is just the driver's name for its normal mode; not a finding.)
+    - **Transfer volume** — `loadBatch` takes `Span[UInt8]` (`accel/ops.mojo:809`), so a pass moves only
+      ~8-10 MB, ~1.4 ms at Gen3 x8. The 3 ms mode gap is LARGER than the entire H2D time, so it cannot
+      be a transfer effect.
+  - **It is CONFIGURATION-DEPENDENT** — the strongest clue, from the 2026-08-03 grid sweep
+    (`results/grid_search_gpu_20260803_122012.csv`, 5 bs x 6 streams x 3 reps). Spread by config:
+    - `bs=25`  streams 4/8/12/16 → 42% / 22% / 43% / 35%
+    - `bs=100` streams 4, 12     → 29%, 18%
+    - `bs=200` streams 4, 12     → 19%, 11%
+    - `bs=400` every stream count → <= 4.9%, none bimodal
+    - `streams=2` at EVERY batch size → <= 2%, never bimodal
+    Worst at small batch x many streams; gone entirely at large batch. This rules out every
+    hardware-level cause still standing (clocks, PCIe, CPU power would all be config-INdependent) and
+    localises it to the regime where per-dispatch/queue overhead dominates compute.
+  - Leading candidate is therefore HSA queue/doorbell/stream setup, not memory placement. Possibly the
+    same root cause as the `SharedSignalPool` leak under **Upstream Bug Reports to File** — that also
+    scales with dispatch count. Worth checking whether both vanish together.
+  - Still untested: arena/VRAM placement per process, host thread affinity (6 threads on a 6-core
+    i5-9600K). Lower priority now that the config-dependence points elsewhere.
+  - **Affects `../CNNTesting`.** `bench_mojo.py` runs each config ONCE (`_run_mojo`), so every Mojo
+    number in that comparison is a coin flip between the two modes — a ~23% swing attributed to whatever
+    config was being tested. Any framework comparison drawn from single runs is unsafe until this is
+    understood. Cross-framework tables should be regenerated with repeats.
+  - Interim mitigation: sweeps take BEST-of-N per config rather than a single sample, on the reading that
+    the low mode is a defect state and not a slower-but-valid configuration. Implemented in
+    `scripts/grid_search_gpu.sh` (`REPEATS`, default 3).
 
 - [x] **Sweep NUM_GPU_STREAMS past 5; re-tune the default (currently 3)** (`scripts/grid_search_gpu.sh`, `constants.mojo`)
   - RE-SWEPT 2026-07-02 after the conv3/FC GEMM landed: knee moved again, 5 → **12**
@@ -931,6 +1009,19 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
 
 ## Upstream Bug Reports to File
 
+Write-ups live in `bugreport/` (tracked in git, so they survive across machines —
+unlike `ignoreme/`, which is gitignored and is why the `shape_comptime_mwe.mojo`
+reproducer cited below exists on exactly one box). Keep this list and that directory
+in sync.
+
+- [ ] **`mojo build` only finds a compiler named `cc`** — write-up ready:
+  [`bugreport/mojo-cc-compiler-lookup.md`](bugreport/mojo-cc-compiler-lookup.md)
+  - Searches PATH for the literal name `cc`; ignores `$CC`, never tries `gcc` or `clang`.
+    Error text names nothing it looked for. Reproduces on a two-line hello world.
+    Ubuntu ships no compiler by default, so a clean clone could not `mojo build` at all
+    until `gcc` (the METAPACKAGE, for its unprefixed `cc` symlink) was added to `pixi.toml`.
+  - Needs filing against `modular/modular`. Not blocking — workaround is in the manifest.
+
 - [x] **`tensor.shape[N]()` dynamic on a struct-FIELD LayoutTensor — EXPECTED (Discord)** (`ignoreme/shape_comptime_mwe.mojo`) — RESOLVED 2026-07-01
   - `shape[N]()` folds to COMPTIME on a direct `LayoutTensor` PARAMETER but is DYNAMIC through a runtime
     struct field (`lenet.weight5_6.shape[0]()` → "cannot use a dynamic value in comptime initializer";
@@ -958,6 +1049,20 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
 - [ ] **`Scalar.from_bytes` big-endian flag — compiler issue** (`cpu/model.mojo:364`)
   - FIXME: passing a `big_endian=` flag to `from_bytes` had compiler issues, so `bytesToFType` falls back
     to the default + a manual swap (`cpu/model.mojo:433`). Make a minimal reproducer; investigate or file.
+
+- [ ] **`SharedSignalPool` leaks HSA signals on the AMD path** (`accel/ops.mojo`, multi-stream forward)
+  - Observed 2026-08-02 on RX 7600 (gfx1102, ROCm 7.1.1, Mojo `1.0.0b3.dev2026073121`). A clean
+    `pixi run doit` prints on exit:
+    `Warning: Resource leak detected by SharedSignalPool, 4121 Signals leaked.`
+    Results are correct (9682/10000, matching CPU exactly) and it is emitted at teardown, so it is
+    cosmetic for a single run — but 4121 signals for `batchedForwardMultiStream[s=12]` scales with
+    dispatch count, so anything that loops the forward pass in-process (the `--bench-only` sweeps,
+    `tests/profile_gpu.mojo`) could exhaust the pool or bloat RSS.
+  - Unknown whether ours or upstream's. Signals are created by the runtime behind `DeviceContext`,
+    not by us directly, which points upstream — but confirm we are not holding streams/buffers alive
+    past their last use first. Check whether the 12 `DeviceContext` streams get destroyed in order.
+  - Reproduce on NVIDIA before filing: if the warning is AMD-only it is an HSA-backend bug, if it fires
+    on both it is stream lifetime in our code. That single check decides where this goes.
 
 ---
 
