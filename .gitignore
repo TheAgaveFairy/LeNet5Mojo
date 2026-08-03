@@ -16,7 +16,6 @@ batchedops.mojo
 
 ignoreme/
 models/
-scripts/
 results/
 *.save
 *.bak
