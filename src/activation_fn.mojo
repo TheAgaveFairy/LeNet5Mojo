@@ -25,8 +25,8 @@ trait ActivationFunction:
         """
 
         def vectorize_closure[width: Int](i: Int) {imm}:
-            var nums = x.ptr.load[width=width](i)
-            x.ptr.store[width=width](i, Self.simdForward(nums))
+            var nums = x.ptr.unsafe_load[width=width](i)
+            x.ptr.unsafe_store[width=width](i, Self.simdForward(nums))
 
         vectorize[nelts](comptime (layout.size()), vectorize_closure)
 
@@ -49,9 +49,11 @@ trait ActivationFunction:
         """
 
         def vectorize_closure[width: Int](i: Int) {imm}:
-            var nums = x.ptr.load[width=width](i)
-            var upstream = d_output.ptr.load[width=width](i)
-            d_z.ptr.store[width=width](i, Self.simdBackward(nums, upstream))
+            var nums = x.ptr.unsafe_load[width=width](i)
+            var upstream = d_output.ptr.unsafe_load[width=width](i)
+            d_z.ptr.unsafe_store[width=width](
+                i, Self.simdBackward(nums, upstream)
+            )
 
         vectorize[nelts](comptime (layout.size()), vectorize_closure)
 

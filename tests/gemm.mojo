@@ -15,16 +15,17 @@ from std.benchmark import (
 )
 from std.benchmark.compiler import keep
 
-from std.gpu.host import (
+from max.gpu.host import (
     DeviceContext,
     DeviceBuffer,
     HostBuffer,
     DeviceFunction,
 )
-from std.gpu import thread_idx, block_idx, block_dim, barrier, global_idx
+from std.gpu import thread_idx, block_idx, block_dim, global_idx
+from max.gpu import barrier
 from std.sys import has_accelerator
-from std.gpu.primitives import block
-from std.gpu.memory import AddressSpace, async_copy_wait_all
+from max.gpu.primitives import block
+from max.gpu.memory import AddressSpace, async_copy_wait_all
 from layout.tile_io import copy_dram_to_sram_async
 
 from constants import (
@@ -197,10 +198,10 @@ def gemmGPUKernel[
     # param, so `_` (inferred-from-args) origins never get bound and no concrete
     # DeviceFunction type exists — untracked is the supported spelling (see
     # untrack_imm docstring / docs/origin_migration.md)
-    a: LayoutTensor[ftype, a_layout, ImmutUntrackedOrigin],
-    b: LayoutTensor[ftype, b_layout, ImmutUntrackedOrigin],
+    a: LayoutTensor[ftype, a_layout, ImmUntrackedOrigin],
+    b: LayoutTensor[ftype, b_layout, ImmUntrackedOrigin],
     c: LayoutTensor[ftype, c_layout, MutUntrackedOrigin],
-    bias: LayoutTensor[ftype, bias_layout, ImmutUntrackedOrigin],
+    bias: LayoutTensor[ftype, bias_layout, ImmUntrackedOrigin],
 ):
     # Tiled shared-memory GEMM: one thread per c element within a TILE x TILE
     # block. masked=True async copies zero-fill ragged edge tiles.
@@ -495,7 +496,9 @@ def benchGemms[M: Int, K: Int, N: Int](mut bench: Bench) raises:
         bt.ptr.free()
         c.ptr.free()
 
-    var measures = [ThroughputMeasure(BenchMetric.flops, flops)]
+    var measures: List[ThroughputMeasure] = [
+        ThroughputMeasure(BenchMetric.flops, flops)
+    ]
     bench.bench_function[bench_naive](
         BenchId("naive_" + suffix), measures=measures.copy()
     )
@@ -564,7 +567,9 @@ def benchGemmsGPU[
 
         b.iter_custom(launch, ctx)
 
-    var measures = [ThroughputMeasure(BenchMetric.flops, flops)]
+    var measures: List[ThroughputMeasure] = [
+        ThroughputMeasure(BenchMetric.flops, flops)
+    ]
     bench.bench_function[bench_gpu](
         BenchId("gpu_" + suffix), measures=measures.copy()
     )

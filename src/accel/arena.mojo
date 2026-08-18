@@ -3,7 +3,7 @@
 from layout import Layout, LayoutTensor
 
 from std.gpu import thread_idx
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.sys.info import size_of, align_of
 from std.sys import has_accelerator
 from std.testing import assert_equal
@@ -13,13 +13,14 @@ from std.os import abort
 comptime ftype = DType.float32
 comptime sftype = Scalar[ftype]
 
+# For testing; these dimensions are only used by this module's allocator tests.
 comptime ROWS = 4
 comptime COLS = 10
 comptime layout = Layout.row_major(ROWS, COLS)
 comptime TILE_SIZE = ROWS * COLS
 
 
-trait GPUAllocator(ImplicitlyDeletable, Movable):
+trait GPUAllocator(Deinitable, Movable):
     """Uniform device-allocator interface — mirrors CPU `CPUAllocator` (System ignores capacity).
     """
 

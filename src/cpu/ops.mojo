@@ -67,10 +67,10 @@ def crossEntropyLossSIMD[
     numerically-stable log-sum-exp. `preds` is treated as a flat vector;
     SIMD-vectorized.
     """
-    var global_max: sftype = preds.ptr[0]
+    var global_max: sftype = preds.ptr[unsafe_offset=0]
 
     def find_max[width: Int](i: Int) {imm, mut global_max}:
-        var nums = preds.ptr.load[width=width](i)
+        var nums = preds.ptr.unsafe_load[width=width](i)
         var local_max = nums.reduce_max()
         if local_max > global_max:
             global_max = local_max
@@ -80,7 +80,7 @@ def crossEntropyLossSIMD[
     var exp_sum: sftype = 0.0
 
     def calc_exp[width: Int](i: Int) {imm, mut exp_sum}:
-        var ps = preds.ptr.load[width](i)
+        var ps = preds.ptr.unsafe_load[width](i)
         var maxes = SIMD[ftype, width](global_max)
         var diff = ps - maxes
         exp_sum += exp(diff).reduce_add()
@@ -88,7 +88,7 @@ def crossEntropyLossSIMD[
     vectorize[nelts](comptime (layout.size()), calc_exp)
 
     var log_prob: sftype = rebind[sftype](
-        (preds.ptr[label] - global_max) - log(exp_sum)
+        (preds.ptr[unsafe_offset=label] - global_max) - log(exp_sum)
     )
     return -1.0 * Float32(log_prob)
 
@@ -622,10 +622,10 @@ def matmulForward[  # tiled single-threaded GEMM
                     for tj in range(TILE_SIZE):
                         var accum = SIMD[ftype, nelts](0.0)
                         comptime for tk in range(0, TILE_SIZE, nelts):
-                            var x = ta.ptr.load[width=nelts](
+                            var x = ta.ptr.unsafe_load[width=nelts](
                                 ti * TILE_SIZE + tk
                             )
-                            var y = tb.ptr.load[width=nelts](
+                            var y = tb.ptr.unsafe_load[width=nelts](
                                 tj * TILE_SIZE + tk
                             )
                             accum = x.fma(y, accum)
@@ -704,29 +704,37 @@ def trainBatchParallel(
     for i in range(batch_size):
         # doing features[i] = Feature() will try and __del__ what "was already there" - bad
         _ = """
-        (features + i).init_pointee_move(Feature(intermediate_arena))
-        (errors + i).init_pointee_move(Feature(intermediate_arena))
-        (deltas + i).init_pointee_move(LeNet5(intermediate_arena))
-        """
         (features + i).unsafe_write(Feature(intermediate_arena))
         (errors + i).unsafe_write(Feature(intermediate_arena))
         (deltas + i).unsafe_write(LeNet5(intermediate_arena))
+        """
+        features.unsafe_offset(i).unsafe_write(Feature(intermediate_arena))
+        errors.unsafe_offset(i).unsafe_write(Feature(intermediate_arena))
+        deltas.unsafe_offset(i).unsafe_write(LeNet5(intermediate_arena))
         # losses[i] = 0
         # losses[i] = 0
-        corrects[i] = 0
+        corrects[unsafe_offset=i] = 0
 
     def work(tid: Int) {imm, mut intermediate_arena, mut corrects, mut losses}:
-        features[tid].loadInput(inputs[tid])
-        model.forward(features[tid])
-        var pred = argMax(features[tid].output)
+        features[unsafe_offset=tid].loadInput(inputs[tid])
+        model.forward(features[unsafe_offset=tid])
+        var pred = argMax(features[unsafe_offset=tid].output)
         var the_label = Int(inputs[tid].label)
         if pred == the_label:
-            corrects[tid] = 1
+            corrects[unsafe_offset=tid] = 1
 
-        var loss = crossEntropyLossSIMD(features[tid].output, the_label)
-        losses[tid] = loss
-        loadTarget(features[tid], errors[tid], the_label)
-        model.backward(deltas[tid], errors[tid], features[tid])
+        var loss = crossEntropyLossSIMD(
+            features[unsafe_offset=tid].output, the_label
+        )
+        losses[unsafe_offset=tid] = loss
+        loadTarget(
+            features[unsafe_offset=tid], errors[unsafe_offset=tid], the_label
+        )
+        model.backward(
+            deltas[unsafe_offset=tid],
+            errors[unsafe_offset=tid],
+            features[unsafe_offset=tid],
+        )
 
     parallelize(work, batch_size)
 
@@ -734,9 +742,9 @@ def trainBatchParallel(
     var total_loss = Float32(0.0)
     # TODO: single threaded / atomic / critical
     for i in range(batch_size):
-        buffer.accumulateFromOther(deltas[i], 1.0)
-        correct += corrects[i]
-        total_loss += losses[i]
+        buffer.accumulateFromOther(deltas[unsafe_offset=i], 1.0)
+        correct += corrects[unsafe_offset=i]
+        total_loss += losses[unsafe_offset=i]
 
     var k: sftype = sftype(ALPHA) / sftype(batch_size)
     model.accumulateFromOther(buffer, k)
@@ -746,11 +754,11 @@ def trainBatchParallel(
     # TODO: can we get rid of these keeps()
     benchmark.keep(buffer_arena)
     benchmark.keep(intermediate_arena)
-    features.free()
-    errors.free()
-    deltas.free()
-    losses.free()
-    corrects.free()
+    features.unsafe_free()
+    errors.unsafe_free()
+    deltas.unsafe_free()
+    losses.unsafe_free()
+    corrects.unsafe_free()
 
     return Tuple[Int, Float32](correct, avg_loss)
 
@@ -912,7 +920,7 @@ def testingParallel(
 
     for i in range(batch_size):
         # doing feats[i] = Feature() will try and __del__ what "was already there" - bad
-        (feats + i).unsafe_write(Feature(feat_arena))
+        feats.unsafe_offset(i).unsafe_write(Feature(feat_arena))
     var corrects = List[Int](length=batch_size, fill=0)
 
     var n_full = len(data) // batch_size
@@ -920,7 +928,7 @@ def testingParallel(
         feat_arena.zero()
 
         def work(tid: Int) {imm, mut corrects}:
-            var pred = model.predict(feats[tid], data[i + tid])
+            var pred = model.predict(feats[unsafe_offset=tid], data[i + tid])
             var actual = Int(data[i + tid].label)
             corrects[tid] += 1 if pred == actual else 0
 
@@ -934,7 +942,7 @@ def testingParallel(
         feat_arena.zero()
         var base = n_full * batch_size
         for j in range(remainder):
-            var pred = model.predict(feats[j], data[base + j])
+            var pred = model.predict(feats[unsafe_offset=j], data[base + j])
             if pred == Int(data[base + j].label):
                 correct += 1
 

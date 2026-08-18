@@ -62,7 +62,7 @@ struct MNISTDataView[
 
     def __getitem__(
         self, start: Int, end: Int
-    ) raises -> MNISTDataView[ImmutUntrackedOrigin]:
+    ) raises -> MNISTDataView[ImmUntrackedOrigin]:
         if start < 0 or end <= start or end > len(self):
             raise Error(
                 t"MNISTDataView.__getitem__ error: invalid slice {start}:{end}",
@@ -80,10 +80,10 @@ struct MNISTDataView[
         # the real validation. rebind drops the mutable Self.origin to the immutable
         # untracked origin (see the comment above for why the sub-view must be so).
         comptime image_size = Image.PixelLayout.size()
-        var pixels_span = rebind[Span[UInt8, ImmutUntrackedOrigin]](
+        var pixels_span = rebind[Span[UInt8, ImmUntrackedOrigin]](
             self.raw_pixels[start * image_size : end * image_size]
         )
-        var labels_span = rebind[Span[UInt8, ImmutUntrackedOrigin]](
+        var labels_span = rebind[Span[UInt8, ImmUntrackedOrigin]](
             self.raw_labels[start:end]
         )
         return MNISTDataView(pixels_span, labels_span)
@@ -173,7 +173,7 @@ struct MNISTDataRepository:
                         var data_label: UInt8 = temp[0]
 
                         var img = Image(data_list, data_label, pixels_arena)
-                        labels_arena.buffer[c] = data_label
+                        labels_arena.buffer[unsafe_offset=c] = data_label
                         data.append(img^)
         except e:
             raise Error(t"Error with input MNIST {split} binary files: {e}.")
@@ -212,10 +212,12 @@ struct MNISTDataRepository:
             )
         comptime image_size_in_bytes = Image.PixelLayout.size()  # 784 bytes/image
         var p_ptr = rebind[UnsafePointer[UInt8, origin_of(self)]](
-            self._test_pixels_arena.buffer + (start * image_size_in_bytes)
+            self._test_pixels_arena.buffer.unsafe_offset(
+                start * image_size_in_bytes
+            )
         )
         var l_ptr = rebind[UnsafePointer[UInt8, origin_of(self)]](
-            self._test_labels_arena.buffer + start
+            self._test_labels_arena.buffer.unsafe_offset(start)
         )
         var pixels_span = Span(
             unsafe_ptr=p_ptr, length=(end - start) * image_size_in_bytes

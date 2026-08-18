@@ -24,7 +24,7 @@ trait ArenaSizable:
         ...
 
 
-trait CPUAllocator(ImplicitlyDeletable, Movable):
+trait CPUAllocator(Deinitable, Movable):
     """Uniform allocator interface — mirrors GPU `GPUAllocator` (System ignores capacity).
     """
 
@@ -68,7 +68,7 @@ struct CPUBumpArenaAllocator(CPUAllocator):
         self.offset = 0
 
     def __deinit__(deinit self):
-        self.buffer.free()
+        self.buffer.unsafe_free()
 
     def alloc[
         T: AnyType
@@ -86,7 +86,7 @@ struct CPUBumpArenaAllocator(CPUAllocator):
             abort("Arena out of memory! Aborting!")
             # raise Error("Arena out of memory!")
 
-        var ptr = (self.buffer + aligned_offset).bitcast[T]()
+        var ptr = self.buffer.unsafe_offset(aligned_offset).unsafe_bitcast[T]()
         self.offset = aligned_offset + size
 
         # print("allocating", String(count), get_type_name[T](), "begin", Int(ptr), "->", Int(ptr + count))
@@ -133,7 +133,7 @@ struct CPUSystemAllocator(CPUAllocator):
         var ptr = alloc[T](count)
         self._allocations.append(
             rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](
-                ptr.bitcast[UInt8]()
+                ptr.unsafe_bitcast[UInt8]()
             )
         )
         self._sizes.append(count * size_of[T]())
@@ -142,7 +142,7 @@ struct CPUSystemAllocator(CPUAllocator):
     def free_all(mut self):
         """Call free() on every tracked pointer."""
         for i in range(len(self._allocations)):
-            self._allocations[i].free()
+            self._allocations[i].unsafe_free()
         self._allocations.clear()
         self._sizes.clear()
 

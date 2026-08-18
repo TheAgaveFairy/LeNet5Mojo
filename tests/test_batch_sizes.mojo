@@ -11,7 +11,7 @@ dataset slices that don't divide evenly:
 Run: pixi run mojo -I src tests/test_batch_sizes.mojo
 """
 
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.testing import assert_equal
 
 from constants import ftype, GPU_STREAM_BATCH_SIZE
@@ -49,7 +49,7 @@ def main() raises:
 
         var slots = alloc[StreamSlot[batch_size]](num_streams)
         for s in range(num_streams):
-            (slots + s).init_pointee_move(StreamSlot[batch_size]())
+            slots.unsafe_offset(s).unsafe_write(StreamSlot[batch_size]())
 
         # n < bs, n < bs (just under), exactly one batch, partial tail,
         # several batches + tail, almost-full, full
@@ -70,7 +70,7 @@ def main() raises:
             assert_equal(gpu_correct, cpu_correct)
 
         for s in range(num_streams):
-            (slots + s).destroy_pointee()
-        slots.free()
+            slots.unsafe_offset(s).unsafe_deinit_pointee()
+        slots.unsafe_free()
 
     print("\nAll batch-size tests passed!")

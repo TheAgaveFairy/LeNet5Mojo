@@ -2,7 +2,7 @@
 
 from cpu.arena import ArenaSizable
 
-from std.gpu.host import DeviceBuffer, DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 from std.sys.info import size_of
 
 from constants import (

@@ -214,7 +214,7 @@ struct LeNet5(ArenaSizable, Movable):
     def __init__(out self, *, deinit move: Self):
         """Move: transfer the tensor views and ownership flag; no reallocation.
         """
-        #print("model move")
+        # print("model move")
         self.allocator_owns_memory = move.allocator_owns_memory
         self.weight0_1 = move.weight0_1
         self.weight2_3 = move.weight2_3
@@ -230,14 +230,14 @@ struct LeNet5(ArenaSizable, Movable):
         owned by the arena.
         """
         if not self.allocator_owns_memory:
-            self.weight0_1.ptr.free()
-            self.weight2_3.ptr.free()
-            self.weight4_5.ptr.free()
-            self.weight5_6.ptr.free()
-            self.bias0_1.ptr.free()
-            self.bias2_3.ptr.free()
-            self.bias4_5.ptr.free()
-            self.bias5_6.ptr.free()
+            self.weight0_1.ptr.unsafe_free()
+            self.weight2_3.ptr.unsafe_free()
+            self.weight4_5.ptr.unsafe_free()
+            self.weight5_6.ptr.unsafe_free()
+            self.bias0_1.ptr.unsafe_free()
+            self.bias2_3.ptr.unsafe_free()
+            self.bias4_5.ptr.unsafe_free()
+            self.bias5_6.ptr.unsafe_free()
 
     @staticmethod
     def _accumHelper[
@@ -259,10 +259,10 @@ struct LeNet5(ArenaSizable, Movable):
 
         def vectorize_closure[width: Int](i: Int) {imm}:
             var lrs = SIMD[ftype, width](lr)
-            var a_nums = accum.ptr.load[width=width](i)
-            var b_nums = other.ptr.load[width=width](i)
+            var a_nums = accum.ptr.unsafe_load[width=width](i)
+            var b_nums = other.ptr.unsafe_load[width=width](i)
             var result = a_nums + b_nums * lrs
-            accum.ptr.store[width=width](i, result)
+            accum.ptr.unsafe_store[width=width](i, result)
 
         vectorize[nelts](comptime (N), vectorize_closure)
 
@@ -303,9 +303,9 @@ struct LeNet5(ArenaSizable, Movable):
         def vectorize_closure[width: Int](i: Int) {imm}:
             comptime sixes = SIMD[ftype, width](6.0)
             var scales = SIMD[ftype, width](scale)
-            var nums = tensor.ptr.load[width=width](i)
+            var nums = tensor.ptr.unsafe_load[width=width](i)
             var result = nums * sqrt(sixes / scales)
-            tensor.ptr.store[width=width](i, result)
+            tensor.ptr.unsafe_store[width=width](i, result)
 
         vectorize[nelts](comptime (N), vectorize_closure)
 
@@ -421,14 +421,14 @@ struct LeNet5(ArenaSizable, Movable):
         )
 
         for i in range(num_elems):
-            var buffer = InlineArray[Byte, size_of[Scalar[filetype]]()](fill=0)
+            var buffer = Array[Byte, size_of[Scalar[filetype]]()](fill=0)
             comptime for bi in range(f_sz):
                 var temp_idx = i * f_sz + bi
                 buffer[bi] = bytes[temp_idx]
             # var value = Self._bytesHelper[filetype](buffer)
             # FIXME: big_endian flag was having compiler issues, investigate or file bug etc
             var value = Scalar[filetype].from_bytes(buffer)
-            tensor.ptr[i] = sftype(
+            tensor.ptr[unsafe_offset=i] = sftype(
                 value
             )  # ftype might not match file precision, that's a feature! we can convert!
 
@@ -479,7 +479,7 @@ struct LeNet5(ArenaSizable, Movable):
         endian support is incomplete (see TODO.md).
         """
         comptime fbs = size_of[ftype]()  # float byte size
-        var ptr_bytes = tensor.ptr.bitcast[UInt8]()
+        var ptr_bytes = tensor.ptr.unsafe_bitcast[UInt8]()
         var ptr_len = comptime (layout.size()) * fbs
         var temp_buf = alloc[UInt8](ptr_len)
         var bytes_span = Span(unsafe_ptr=temp_buf, length=ptr_len)
@@ -487,7 +487,10 @@ struct LeNet5(ArenaSizable, Movable):
         comptime if is_big_endian():  # TODO: maybe make this a function parameter / arg check
             for i in range(0, ptr_len, fbs):
                 comptime for j in range(fbs // 2):
-                    swap(temp_buf[i + j], temp_buf[i + (fbs - 1) - j])
+                    swap(
+                        temp_buf[unsafe_offset=i + j],
+                        temp_buf[unsafe_offset=i + (fbs - 1) - j],
+                    )
         f.write_all(bytes_span)
 
     def saveToFile(mut self, filename: Path) raises:

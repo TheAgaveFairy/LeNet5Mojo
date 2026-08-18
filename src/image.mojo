@@ -28,7 +28,7 @@ struct Image(ImplicitlyCopyable):
     # explicit channel dim [C, H, W] — matches the [C, H, W] feature/weight
     # convention. C = INPUT (1 today); .size() is unchanged so all byte math holds.
     comptime PixelLayout = Layout.row_major(INPUT, IMAGE_SIZE, IMAGE_SIZE)
-    comptime PixelStorage = InlineArray[  # TODO: remove this
+    comptime PixelStorage = Array[  # TODO: remove this
         UInt8, Self.PixelLayout.size()
     ]  # raw bytes
     comptime PixelTensor = LayoutTensor[
@@ -80,7 +80,9 @@ struct Image(ImplicitlyCopyable):
                 arena.alloc[UInt8](layout_size)
             )
         )
-        unsafe_memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
+        unsafe_memcpy(
+            src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size
+        )
 
     def __init__(
         out self, raw: Self.PixelStorage, label: UInt8, mut arena: Arena
@@ -97,7 +99,9 @@ struct Image(ImplicitlyCopyable):
                 arena.alloc[UInt8](layout_size)
             )
         )
-        unsafe_memcpy(src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size)
+        unsafe_memcpy(
+            src=raw.unsafe_ptr(), dest=self.pixels.ptr, count=layout_size
+        )
 
         # no longer normalizing at init because we don't know the end device and that's a separate task
 
@@ -111,14 +115,16 @@ struct Image(ImplicitlyCopyable):
 
         comptime N = Self.PixelTensor.layout.size()
 
-        var temp_buffer = InlineArray[UInt64, N](uninitialized=True)
+        var temp_buffer = Array[UInt64, N](uninitialized=True)
         comptime for i in range(N):
-            temp_buffer[i] = UInt64(self.pixels.ptr[i])
+            temp_buffer[i] = UInt64(self.pixels.ptr[unsafe_offset=i])
 
         def sum_closure[width: Int](i: Int) {mut}:
-            var nums = temp_buffer.unsafe_ptr().unsafe_offset(i).unsafe_load[
-                width=width
-            ]()
+            var nums = (
+                temp_buffer.unsafe_ptr()
+                .unsafe_offset(i)
+                .unsafe_load[width=width]()
+            )
             sum += nums.reduce_add()
             std_sum += (nums * nums).reduce_add()
 
@@ -132,7 +138,7 @@ struct Image(ImplicitlyCopyable):
         for r in range(IMAGE_SIZE):
             for c in range(IMAGE_SIZE):
                 var idx = r * IMAGE_SIZE + c
-                var curr = Float64(Int(self.pixels.ptr[idx]))
+                var curr = Float64(Int(self.pixels.ptr[unsafe_offset=idx]))
                 tensor[0, r + off, c + off] = ((curr - mean) / std).cast[
                     ftype
                 ]()
@@ -149,14 +155,16 @@ struct Image(ImplicitlyCopyable):
 
         comptime N = raw.size
 
-        var temp_buffer = InlineArray[UInt64, raw.size](uninitialized=True)
+        var temp_buffer = Array[UInt64, raw.size](uninitialized=True)
         comptime for i in range(raw.size):
             temp_buffer[i] = UInt64(raw[i])
 
         def sum_closure[width: Int](i: Int) {mut}:
-            var nums = temp_buffer.unsafe_ptr().unsafe_offset(i).unsafe_load[
-                width=width
-            ]()
+            var nums = (
+                temp_buffer.unsafe_ptr()
+                .unsafe_offset(i)
+                .unsafe_load[width=width]()
+            )
             sum += nums.reduce_add()
             std_sum += (nums * nums).reduce_add()
 

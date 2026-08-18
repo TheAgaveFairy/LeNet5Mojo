@@ -11,7 +11,7 @@ from std.memory import unsafe_memcpy, unsafe_memset_zero
 from std.sys import size_of, stderr
 import std.sys.defines as defines
 
-from std.gpu.host import (
+from max.gpu.host import (
     DeviceContext,
     DeviceBuffer,
     HostBuffer,
@@ -21,12 +21,12 @@ from std.gpu import (
     thread_idx,
     block_idx,
     block_dim,
-    barrier,
     global_idx,
     WARP_SIZE,
 )
-from std.gpu.primitives import block
-from std.gpu.memory import AddressSpace, async_copy_wait_all
+from max.gpu import barrier
+from max.gpu.primitives import block
+from max.gpu.memory import AddressSpace, async_copy_wait_all
 
 from constants import (
     ftype,
@@ -460,7 +460,9 @@ def conv2FusedKernel[
     while idx < local_image.size():
         # batched layer2 is row-major, so one image's slab is contiguous:
         # flat-copy from its offset instead of 3D index math per element
-        local_image.ptr[idx] = layer2.ptr[img_idx * local_image.size() + idx]
+        local_image.ptr[unsafe_offset=idx] = layer2.ptr[
+            unsafe_offset=img_idx * local_image.size() + idx
+        ]
         idx += TPB
 
     barrier()
@@ -524,7 +526,9 @@ def conv1PoolFusedKernel[
         address_space=AddressSpace.SHARED,
     ].stack_allocation()
     if flat_idx < local_kernels.size():
-        local_kernels.ptr[flat_idx] = weight0_1.ptr[flat_idx]
+        local_kernels.ptr[unsafe_offset=flat_idx] = weight0_1.ptr[
+            unsafe_offset=flat_idx
+        ]
 
     # INPUT > 1 not handled — guarded by the comptime assert above.
     var local_image = LayoutTensor[
@@ -647,7 +651,7 @@ def batchedArgMax[
     batch_size: Int
 ](
     outputs: LayoutTensor[ftype, Layout.row_major(batch_size, OUTPUT), _],
-    out guesses: InlineArray[UInt8, batch_size],
+    out guesses: Array[UInt8, batch_size],
 ):
     # TODO: take in an "actual length" argument that defaults to batch_size but allows for short batches
     guesses = type_of(guesses)(uninitialized=True)  # out arg
@@ -1010,18 +1014,20 @@ def _batchRun[
         if batch_num >= num_streams:
             var stale = batch_num - num_streams
             var stale_start = stale * batch_size
-            total_correct += stream_slots[slot_idx].getResults(  # D2H
+            total_correct += stream_slots[
+                unsafe_offset=slot_idx
+            ].getResults(  # D2H
                 data.raw_labels[stale_start : stale_start + batch_size]
             )
 
-        stream_slots[slot_idx].loadBatch(batch_span)  # H2D
-        stream_slots[slot_idx].doWork(kernels, model)  # kernels
+        stream_slots[unsafe_offset=slot_idx].loadBatch(batch_span)  # H2D
+        stream_slots[unsafe_offset=slot_idx].doWork(kernels, model)  # kernels
 
     var epilogue_start = max(0, total_batches - num_streams)
     for batch_num in range(epilogue_start, total_batches):
         var slot_idx = batch_num % num_streams
         var label_start = batch_num * batch_size
-        total_correct += stream_slots[slot_idx].getResults(
+        total_correct += stream_slots[unsafe_offset=slot_idx].getResults(
             data.raw_labels[label_start : label_start + batch_size]
         )
 
@@ -1041,7 +1047,7 @@ def batchedForwardMultiStream[
     """
     var stream_slots = alloc[StreamSlot[batch_size]](num_streams)
     for s in range(num_streams):
-        (stream_slots + s).init_pointee_move(StreamSlot[batch_size]())
+        (stream_slots + s).unsafe_write(StreamSlot[batch_size]())
     try:
         var result = _batchRun(stream_slots, data, model, kernels, num_streams)
         for s in range(num_streams):

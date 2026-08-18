@@ -78,10 +78,10 @@ DEVELOPER_DIR = "/Applications/Xcode.app/Contents/Developer"
 
 [dependencies]
 matplotlib = ">=3.11.1,<4"
-numpy = ">=2.5.1,<3"
-mojo = ">=1.0.0b3.dev2026073121,<2"
+numpy = ">=2.5.2,<3"
+mojo = ">=1.1.0.dev2026081705,<2"
 pandas = ">=3.0.5,<4"
-max = ">=26.5.0.dev2026073121,<27"
+max = ">=26.6.0.dev2026081705,<27"
 
 # Linux-only, and vendor-neutral: this is the sysroot the conda `ld` links
 # against, needed on the AMD box as much as the NVIDIA one. The floor must be

@@ -38,7 +38,7 @@ def main() raises:
         for r in range(PADDED_SIZE):
             for c in range(PADDED_SIZE):
                 flat.append(Float64(rebind[Scalar[ftype]](dtensor[0, r, c])))
-        dptr.free()
+        dptr.unsafe_free()
 
         var np_img = np.array(flat).reshape(PADDED_SIZE, PADDED_SIZE)
 
