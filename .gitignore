@@ -2,6 +2,9 @@
 .pixi
 *.egg-info
 
+# macOS finder junk
+.DS_Store
+
 batchedops.mojo
 *.pdf
 
