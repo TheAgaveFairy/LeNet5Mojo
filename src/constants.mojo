@@ -2,7 +2,6 @@
 
 from std.sys import simd_width_of
 import std.sys.defines as defines
-from std.utils.type_functions import ConditionalType
 from layout import Layout
 
 from activation_fn import *

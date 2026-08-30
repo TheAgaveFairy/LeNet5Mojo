@@ -1,4 +1,4 @@
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from std.sys import argv
 from std.benchmark.compiler import keep
 
@@ -49,10 +49,10 @@ def main() raises:
         # Absorbs JIT + lazy CUDA context init + first-launch cache warmup so the
         # timed run's first batch isn't a profiling outlier. Result discarded.
         var warm_slot = StreamSlot[batch_size]()
-        var zero_pixels = InlineArray[
-            UInt8, batch_size * IMAGE_SIZE * IMAGE_SIZE
-        ](fill=0)
-        var zero_labels = InlineArray[UInt8, batch_size](fill=0)
+        var zero_pixels = Array[UInt8, batch_size * IMAGE_SIZE * IMAGE_SIZE](
+            fill=0
+        )
+        var zero_labels = Array[UInt8, batch_size](fill=0)
         warm_slot.loadBatch(Span(zero_pixels))
         warm_slot.doWork(kernels, gpu_session.model)
         _ = warm_slot.getResults(Span(zero_labels))

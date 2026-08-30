@@ -5,6 +5,85 @@ Check items off as they are completed.
 
 ---
 
+## Highest-value improvements before interviews
+
+If you have limited time, I would prioritize these:
+
+1. Add a small independent correctness suite: operation parity, finite-difference gradients, CPU/GPU tolerances, and save/load round trips.
+
+2. Produce one reproducible benchmark command and one concise results artifact containing hardware, software versions, flags, warmup, sample count, variance, accuracy, and timing boundaries.
+
+3. Clean the public repository surface. Keep the detailed engineering diary, but move historical/completed material out of the primary TODO.
+
+4. Add an explicit authorship note explaining the prior implementation, external references, and how AI-generated contributions were reviewed. Do not apologize; demonstrate engineering control.
+
+5. Fix unsafe input boundaries and manual cleanup. Those are small changes with disproportionate value for systems roles.
+
+6. Prepare a ten-minute explanation of the fused conv1 kernel and the conv3-to-GEMM transformation using diagrams.
+
+7. Prepare a candid answer to: “Why should I care about beating TensorRT on LeNet-5?” The best answer is about understanding and controlling the whole pipeline—not claiming a general replacement for TensorRT.
+
+---
+
+## Fresh-eyes correctness / maintenance audit (2026-08-17)
+
+These came from reading the executable paths independently of the existing
+notes. They are deliberately small and testable; the normalization, resident
+benchmark, and parity-test work already tracked elsewhere is not duplicated
+here.
+
+- [ ] **Make `MNISTDataRepository.getTrainBatch` / `getTestBatch` fail before
+  unsafe pointer arithmetic on an invalid range** (`src/dataloader.mojo`)
+  - They currently print for `end <= start` or an oversized `end`, then keep
+    going and construct the spans anyway. Negative `start` is not checked.
+  - Match `MNISTDataView.__getitem__`: reject `start < 0`, `end <= start`, and
+    `end > count` by raising before calculating either pointer.
+  - Add boundary tests for negative start, reversed/empty ranges, and an end
+    one past the dataset.
+
+- [ ] **Update `tests/test_batch_sizes.mojo` to the tail-padding contract**
+  - `_batchRun` now uses `ceildiv` and processes every real image in the short
+    tail, but the test's prose and CPU oracle still use the old floor/divide
+    behavior (`processed = (n // batch_size) * batch_size`).
+  - Compare against the first `n` CPU images, including the `n < batch_size`
+    cases, and assert that the reported denominator/coverage is `n`.
+
+- [ ] **Destroy and free the scratch `Feature` array in `testingParallel`**
+  (`src/cpu/ops.mojo`)
+  - `feats = alloc[Feature](batch_size)` is initialized element-by-element but
+    never deinitialized or freed. This repeats during benchmark warmups and
+    timed passes.
+  - Make cleanup happen on both the normal and error paths; keep the arena
+    lifetime outside the feature views until they are destroyed.
+
+- [ ] **Make `runGPUTest` stream-slot cleanup exception-safe** (`src/main.mojo`)
+  - The warmup/timed path manually initializes `StreamSlot`s and only destroys
+    them at the bottom of the successful path. Mirror the cleanup discipline in
+    `batchedForwardMultiStream`, or wrap the array in an owning helper.
+
+- [ ] **Replace release-disabled model-size validation with a real load error**
+  (`src/cpu/model.mojo`, `bytesToFType` / `loadFromFile`)
+  - `bytesToFType` uses `debug_assert` before indexed reads. A malformed or
+    truncated model should fail safely in optimized builds too.
+  - Add a save/load round-trip test plus truncated and extra-byte cases.
+
+- [ ] **Numerically identify and test the training objective**
+  (`src/cpu/ops.mojo`, `softMax` / `crossEntropyLossSIMD`)
+  - The reported loss is cross-entropy, while `softMax` seeds a full
+    softmax-Jacobian-style update rather than the usual `p - one_hot(label)`
+    cross-entropy logit gradient. This may be the negative gradient of the
+    older squared-softmax objective, which would fit the additive update, but
+    the code does not establish that contract.
+  - Decide which loss is actually optimized, name it accordingly, and check a
+    tiny model/layer against finite differences before refactoring the math.
+
+- [ ] **Make `scripts/build_all.sh` work with macOS's Bash 3.2**
+  - `mapfile` is a Bash 4 feature, so the advertised all-roots build task exits
+    before invoking Mojo on a default macOS shell. Use a portable read loop or
+    explicitly provide a newer Bash through Pixi.
+
+---
+
 ## Pointer/UnsafePointer migration (pre-1.0, started 2026-07-25)
 
 Mojo is merging `UnsafePointer` and `Pointer` into one `Pointer[T, ...,
@@ -85,6 +164,64 @@ under `src/`); see the plan file this session produced for the raw findings.
   `cpu/arena.mojo:64/140` rebind casts above, so a stdlib `alloc()` signature
   change surfaces there first. Not proposing a fix now, just flagging so it's
   not lost.
+  - **That happened** — nightly `1.1.0.dev2026081405` deprecated bare `alloc[T](n)`.
+    25 live warnings; migration sketched below.
+
+### `alloc` → Layout-based `alloc` (25 warnings, sketched 2026-08-14)
+
+New signature, read off the compiler (`std/memory/alloc.mojo:712`):
+
+```mojo
+def alloc[T: AnyType, /](layout: Layout[T], /) -> Allocation[T]
+```
+
+Three things make this a trap rather than a rename:
+
+1. **`std.memory.Layout[T]` is NOT `layout.Layout`.** It's an allocation
+   descriptor — `Layout[T](count=n)` / `Layout[T](count=n, alignment=a)` —
+   unrelated to tensor shape/stride. 4 of the 5 affected files already do
+   `from layout import Layout`, so this needs
+   `from std.memory import Layout as AllocLayout`. Both coexist fine under an
+   alias (verified).
+2. **It looks like the tensor Layout finally feeds allocation. It does not.**
+   15 of the 25 sites are `alloc[sftype](comptime (WeightLayouts.w01.size()))`
+   — they already hold a real tensor `Layout` and the new signature invites
+   passing it straight through. You still have to go `.size()` → `count=`.
+   This repo has more of that pattern than any other, so it's the main hazard.
+3. **`Allocation[T]` is linear, not RAII.** Abandoning one is a *compile
+   error*, not a leak: "must be consumed before it goes out of scope.
+   Deallocate it with `dealloc(allocation^)`, or call `unsafe_leak()` to take
+   ownership of the underlying pointer."
+
+Site inventory (25): `cpu/model.mojo` ×15 (weights/biases/features, already
+Layout-sized) + `:484` (`temp_buf`); `cpu/ops.mojo:697-702,919` ×6 (per-batch
+scratch); `cpu/arena.mojo:65` (bump slab), `:133` (system allocator);
+`main.mojo:353` (`StreamSlot` array).
+
+- [ ] **Tier 0 — stopgap.** `alloc[T](n)` → `unsafe_alloc[T](n)`. Pure rename,
+  25 sites, warnings gone, zero semantic change. Use if a nightly bump needs to
+  land clean in a hurry.
+
+- [ ] **Tier 1 — real API, ownership unchanged (~22 sites).**
+  `alloc[T](n)` → `alloc(AllocLayout[T](count=n)).unsafe_leak()`. Still a raw
+  pointer, still manual `unsafe_free()`. Correct for almost everything here
+  because hand-managed lifetime is the deliberate design (see
+  `origin_util.mojo` / `docs/origin_migration.md`). Verified end-to-end on a
+  struct type through the existing `rebind[UnsafePointer[T, MutUntrackedOrigin]]`
+  pattern, so the `cpu/arena.mojo:64/140` casts flagged above still work.
+
+- [ ] **Tier 2 — actually adopt `Allocation`, 2 sites only.**
+  `CPUBumpArenaAllocator.buffer` and `CPUSystemAllocator._allocations` are the
+  only genuinely *owning* allocations in the repo. Holding `Allocation[UInt8]`
+  there makes the compiler enforce the slab is freed exactly once — a real win
+  for the one long-lived allocation. Everything else stays leaked-by-design.
+  - Caveat that limits the payoff: `Allocation` exposes only `unsafe_ptr()`.
+    No public `.count`/`.size`/`.layout` (just a private `_layout`), so
+    `CPUSystemAllocator._sizes` has to stay for `zero()` — it does NOT get
+    subsumed by the layout, contrary to first assumption.
+
+Recommendation: Tier 1 everywhere + Tier 2 on the two arena sites. Do not try
+to thread tensor `Layout`s into `alloc`.
 
 ---
 
@@ -534,6 +671,14 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
 ---
 
 ## Benchmarking / Profiling
+
+- [ ] **Audit PyTorch eager vs `torch.compile` benchmark modes**
+  - Record the exact PyTorch version, backend, compile mode, warmup/compile treatment,
+    and whether cuDNN benchmarking or CUDA Graphs are enabled for each result.
+  - Measure eager and compiled modes independently across the batch-size sweep; do not
+    assume the model is too small for compilation to matter without publishing the data.
+  - Label compile time separately from steady-state execution, and keep both results when
+    they answer different deployment questions (cold-start latency vs sustained throughput).
 
 - [ ] **Add a deliberately-bad allocator to benchmark against** (`cpu/arena.mojo`, `accel/arena.mojo`)
   - The bump-vs-system swap is ~noise on inference (both allocate once, then `zero()` a small buffer).
@@ -1056,6 +1201,11 @@ in sync.
     conservatively dynamic. FIX = read from the TYPE: `type_of(lenet.weight5_6).shape[0]()` or the layout-
     tensor alias `.shape[0]()` (both fold to comptime — verified in the MWE). NOT a bug; nothing to file.
     Superseded for the GPU kernels by the "take fields directly" refactor above (direct params dodge it).
+
+- [ ] **Ask Discord: why did `barrier` move to `max.gpu` but the id accessors stay in `std.gpu`?** (`accel/ops.mojo:20`)
+  - Nightly `1.1.0.dev2026081405` splits the old `std.gpu` import block: `thread_idx`/`block_idx`/
+    `block_dim`/`global_idx`/`WARP_SIZE` still resolve from `std.gpu`, but `barrier` (and `host`,
+    `memory`, `primitives`) only from `max.gpu`. Odd seam — is the split intentional or mid-migration?
 
 - [ ] **Ask Discord: `trait_downcast` lint not silenced by `comptime assert conforms_to`** (`resultlogger.mojo:31`)
   - Nightly `1.0.0b3.dev2026062906` warns "use `conforms_to(type_of(src), Trait)` instead in a `where`

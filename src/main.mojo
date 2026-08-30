@@ -9,7 +9,7 @@ from std.pathlib import Path
 import std.benchmark as benchmark
 import std.os as os
 from std.reflection.reflect import reflect
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 import std.sys.defines as defines
 
 from image import Image
@@ -352,7 +352,7 @@ def runGPUTest(
         # Allocate slots once — reused across warmup and timed passes
         var slots = alloc[StreamSlot[batch_size]](num_streams)
         for s in range(num_streams):
-            (slots + s).unsafe_write(StreamSlot[batch_size]())
+            slots.unsafe_offset(s).unsafe_write(StreamSlot[batch_size]())
 
         # warmup
         for _ in range(N_WARMUP):
@@ -397,7 +397,7 @@ def runGPUTest(
             print(e, file=stderr)
 
         for s in range(num_streams):
-            (slots + s).unsafe_deinit_pointee()
-        slots.free()
+            slots.unsafe_offset(s).unsafe_deinit_pointee()
+        slots.unsafe_free()
 
         benchmark.keep(gpu_session)

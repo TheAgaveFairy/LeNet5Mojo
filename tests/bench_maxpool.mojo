@@ -31,7 +31,7 @@ comptime Tens[layout: Layout] = LayoutTensor[ftype, layout, MutUntrackedOrigin]
 # Deterministic, varied fill so argmax lands in different window slots (exercises the branch).
 def fillVaried(ptr: UnsafePointer[sftype, MutUntrackedOrigin], count: Int):
     for idx in range(count):
-        ptr[idx] = sftype((idx * 2654435761) % 1009)
+        ptr[unsafe_offset=idx] = sftype((idx * 2654435761) % 1009)
 
 
 # --- branchy ("normal") variants, mirroring the production signatures --------

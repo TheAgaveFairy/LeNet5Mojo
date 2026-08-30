@@ -1,0 +1,178 @@
+LeNet5Mojo — getting the Metal/GPU path working
+Written 2026-08-02. Machine: M1 Mac, macOS 26.6 (build 25G72).
+
+*** RESOLVED 2026-08-02: TOOLCHAIN FULLY WORKING. Metal kernels now    ***
+*** compile and run on the M1 GPU. Everything below is kept as a       ***
+*** record of the fix. The sequence that worked:                       ***
+***   1. Install Xcode 26.6 (clears _XPCTypeBool crash).               ***
+***   2. sudo xcode-select -s /Applications/Xcode.app/Contents/Developer ***
+***      (it had drifted back to CommandLineTools).                    ***
+***   3. sudo xcodebuild -license accept   (record was stuck at 16.2;  ***
+***      `accept` skips the pager. Must run in a REAL Terminal --      ***
+***      sudo can't prompt under Claude Code's `!` prefix.)            ***
+***   4. xcodebuild -downloadComponent MetalToolchain  (NO sudo).      ***
+***      Installs `metal` AND `metallib`. "Failed fetching catalog"    ***
+***      on first try -- just retry, it worked 2nd time (~688MB).      ***
+***   Verify: xcrun -f metallib   (not just -f metal).                 ***
+***                                                                     ***
+*** NEW WALL (2026-08-02): GPU runs but is WRONG (~11% vs CPU 96.9%).   ***
+*** Root-caused to TWO bugs via isolation probes:                       ***
+***  (1) copy_dram_to_sram_async/async_copy_wait_all (NVIDIA cp.async)  ***
+***      does nothing on Metal -> a SYNCHRONOUS shared-mem load fixes   ***
+***      gemmFusedKernel vs a naiveCPU reference, BUT ONLY for dims<128.***
+***  (2) THE WALL: reading any LayoutTensor whose static shape has a    ***
+***      dim >= 128 returns 0 on Metal. Exact boundary 127 ok / 128 bad ***
+***      (int8 overflow). Kills the pipeline: batch=300 and conv3 K=400 ***
+***      are both >=128, so nearly every GPU read is nulled.            ***
+***      NOT fixable in repo source. Needs an upstream fix / new nightly***
+***  Minimal repro: ignoreme/metal_dim128_mwe.mojo                      ***
+***    (run: pixi run mojo -I src ignoreme/metal_dim128_mwe.mojo)       ***
+***  Sync-fix + dim-sweep probe: ignoreme/metal_gemm_syncfix_probe.mojo ***
+***  Do NOT do more kernel work until bug (2) is resolved upstream.     ***
+
+STEP 1.5 — ACCEPT THE XCODE LICENSE (current blocker)
+-----------------------------------------------------
+xcrun refuses to resolve ANY tool (metal, git, clang) with:
+    "You have not agreed to the Xcode license agreements."
+The license record still reads 16.2 while Xcode is 26.6. Check it with:
+    defaults read /Library/Preferences/com.apple.dt.Xcode \
+        IDEXcodeVersionForAgreedToGMLicense
+
+Fix -- does NOT require the GUI and does NOT require the interactive pager.
+`sudo xcodebuild -license` alone opens a pager you must scroll and type
+"agree" into. Adding `accept` skips all of that:
+
+    sudo xcodebuild -license accept
+    sudo xcodebuild -runFirstLaunch
+
+`-runFirstLaunch` installs first-launch components headlessly. If Xcode.app
+is crashing on launch, this is the likely fix -- and you never need to open
+the GUI at all.
+
+Then continue at Step 3 (downloadComponent MetalToolchain) below.
+
+===============================================================================
+HISTORICAL — the state that led here (Xcode was 16.2 at time of writing)
+===============================================================================
+
+===============================================================================
+SYMPTOM
+===============================================================================
+
+    $ pixi run doit
+    error: Metal Compiler failed to compile metallib. Please submit a bug report.
+    mojo: error: failed to run the pass manager
+
+IMPORTANT: this is the SAME error message as an older, already-fixed problem
+(xcode-select pointing at CommandLineTools). Do not assume that regressed.
+The DEVELOPER_DIR pin in pixi.toml is still correct and still needed.
+Diagnose with `xcrun -f metal` first, NOT by editing pixi.toml.
+
+
+===============================================================================
+ROOT CAUSE (three facts, all verified 2026-08-02)
+===============================================================================
+
+1. macOS is fine now. 26.6 clears Mojo's macOS 15+ floor for Apple Silicon GPU.
+   The old "blocked by macOS 14" problem is RESOLVED. Not the issue anymore.
+
+2. Xcode 16.2 cannot run on macOS 26. Any xcodebuild call that loads CoreDevice
+   aborts with:
+       Symbol not found: _XPCTypeBool
+       Referenced from: .../CoreDevice.framework/.../CoreDevice
+       Expected in:     .../Mercury.framework/.../Mercury
+   Because `xcrun -find` shells out to xcodebuild, EVERY tool lookup fails --
+   including git and clang, system-wide.
+
+   Gotcha: `xcodebuild -version` still works (it doesn't load CoreDevice).
+   Do NOT use it as a health check. Use `xcodebuild -showComponents` or
+   `xcrun -f metal` instead.
+
+3. There is no `metal` compiler anywhere on this machine. Not in Xcode, not in
+   CommandLineTools, not in the pixi env. Since Xcode 16 the Metal compiler is
+   a SEPARATE downloadable component. Local CommandLineTools are at 15.3
+   (Aug 2024) and ship no metal either.
+
+So the fix is `xcodebuild -downloadComponent MetalToolchain` -- except that
+can't run, because xcodebuild is the broken thing. Hence: Xcode must be
+upgraded to 26.x first.
+
+
+===============================================================================
+THE FIX
+===============================================================================
+
+Step 1 — Install Xcode 26.x
+---------------------------
+App Store is the usual route but was refusing to log in (2026-08-02).
+
+ALTERNATIVE that avoids the App Store entirely -- direct .xip download:
+    https://developer.apple.com/download/all/?q=xcode
+Sign in with a free Apple Developer account (same Apple ID, different login
+flow -- usually works when the App Store is misbehaving). Download Xcode 26.x,
+then unxip it and put it at /Applications/Xcode.app.
+
+Either route: Xcode must end up at /Applications/Xcode.app so that the
+DEVELOPER_DIR pin in pixi.toml stays valid (App Store updates in place; a
+manual .xip install means replacing the old 16.2 bundle yourself).
+
+Step 2 — Point the toolchain at it
+----------------------------------
+    sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+Step 3 — Install the Metal toolchain
+------------------------------------
+    xcodebuild -downloadComponent MetalToolchain
+
+Step 4 — Verify BEFORE touching any Mojo code
+---------------------------------------------
+    sw_vers                 # expect 26.6+
+    xcodebuild -version     # expect 26.x
+    xcrun -f metal          # MUST print a real path -- this is the gate
+    xcrun -f git            # should also work again
+
+Step 5 — Run it
+---------------
+    pixi run doit
+
+
+===============================================================================
+OPTIONAL STOPGAP (while the Xcode download runs)
+===============================================================================
+
+git and clang are currently broken system-wide because xcode-select points at
+the broken Xcode 16.2. To get them back without disturbing the Xcode plan:
+
+    sudo xcode-select -s /Library/Developer/CommandLineTools
+
+Remember to re-point at Xcode (Step 2) afterward. This does NOT get you metal.
+
+There is also a newer CommandLineTools available if you want a modern CLT:
+    softwareupdate --install "Command Line Tools for Xcode 26.6-26.6"
+(920MB, no Apple ID needed). Also does NOT get you metal on its own -- CLT has
+not shipped the metal compiler since Xcode 15.
+
+
+===============================================================================
+WHAT COMES AFTER THE TOOLCHAIN IS FIXED
+===============================================================================
+
+Getting metal to resolve is necessary but probably not sufficient. The first
+real code suspect is gemmFusedKernel in src/accel/ops.mojo, specifically:
+
+    copy_dram_to_sram_async
+    async_copy_wait_all
+
+Those map to NVIDIA's cp.async, which has NO direct Metal equivalent, so that
+kernel likely needs a rewrite regardless of toolchain state.
+
+Also note: the five Modular skills listed in skills-lock.json (mojo-syntax,
+mojo-gpu-fundamentals, import-model, mojo-python-interop, new-modular-project)
+are NOT actually installed -- there is no .claude/skills directory in this
+repo. Worth fetching from github.com/modular/skills before doing kernel work.
+
+The CPU path is unaffected by all of this and runs fine
+(~96.9% accuracy, ~13k fps).
+
+Docs: https://mojolang.org/docs/requirements
+      https://forum.modular.com/t/apple-silicon-gpu-support-in-mojo/2295

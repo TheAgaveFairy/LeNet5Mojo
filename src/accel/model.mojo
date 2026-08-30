@@ -2,7 +2,7 @@
 
 from layout import LayoutTensor
 
-from std.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host import DeviceContext, DeviceBuffer
 from std.sys import size_of
 
 from cpu.model import LeNet5
@@ -136,7 +136,9 @@ struct LeNet5GPUBuffers(ArenaSizable):
                             w45g_host[
                                 k * LAYER5 + oc
                             ] = cpu_model.weight4_5.ptr[
-                                ((ic * LAYER5 + oc) * LENGTH_KERNEL + kw)
+                                unsafe_offset=(
+                                    (ic * LAYER5 + oc) * LENGTH_KERNEL + kw
+                                )
                                 * LENGTH_KERNEL
                                 + kh
                             ]
