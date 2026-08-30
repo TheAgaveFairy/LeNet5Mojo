@@ -48,20 +48,12 @@ gpuunlock = { cmd = "sudo scripts/gpu_unlock.sh", cwd = "."}
 # someone changes a default.
 rtx3070 = { cmd = "mojo src/main.mojo", cwd = "." }
 
-# TUNED 2026-08-03 — coarse: results/grid_search_gpu_20260803_122012.csv
-#                    refine: results/grid_search_gpu_20260803_130435.csv
-# Picked on highest mean AND tightest spread: 1103954 mean @ 0.12% (three
-# samples within 1300 fps). The 3070 tuning above measures 873663 mean @ 18.5%
-# spread on THIS card, so the RDNA3 optimum is ~27% faster and far more stable —
-# the NVIDIA-tuned knobs do not transfer.
-#
-# The optimum is a PLATEAU, not a peak: everything in bs 150-300 x streams 2-3
-# lands within 2.8%, and cross-sweep drift alone is ~0.5% (the coarse sweep's
-# best, bs=200 s=2 at 1110763, beats every refinement best). Do not re-tune these
-# for sub-1% gains; the measurement cannot resolve them.
-# NOTE: streams>3 and small batches land in the BIMODAL region (see TODO.md) —
-# do not "improve" these upward without re-reading that entry.
-rx7600 = { cmd = "mojo -D GPU_STREAM_BATCH_SIZE=250 src/main.mojo --num-streams 3", cwd = "." }
+# TUNED 2026-08-03 — results/grid_search_gpu_20260803_*.csv
+# bs=500 s=2 -> 1133797 fps @ 1.8%. Peak of a constant-eff_batch sweep that
+# isolated stream count from batch size: s=1 -> s=2 is +23%, s>=4 is 12-18%
+# worse at the SAME eff_batch, so 2 streams is the knee, not a plateau edge.
+# The 3070 tuning above measures ~874k on this card; NVIDIA knobs do not transfer.
+rx7600 = { cmd = "mojo -D GPU_STREAM_BATCH_SIZE=500 src/main.mojo --num-streams 2", cwd = "." }
 
 # UNTUNED — runs the compiled-in defaults (which are 3070 values) and says so.
 # Replace the cmd with a tuned invocation once scripts/grid_search_gpu.sh has

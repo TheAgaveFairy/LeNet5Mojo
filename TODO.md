@@ -514,6 +514,25 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
 
 ---
 
+## Build / Portability
+
+- [ ] **Pin `--mcpu=x86-64-v3` when a binary has to run on another machine**
+  (2026-08-04) — `mojo build`'s `--target-cpu`/`--mcpu` defaults to the HOST
+  CPU. A `main` built on the 3070 box baked in AVX-512 and died with SIGILL on
+  the i5-9600K (Coffee Lake, AVX2 only), in `std::subprocess::run` — stdlib
+  code the compiler auto-vectorized, not our kernels. `--mcpu=x86-64-v3`
+  (AVX2+FMA+BMI, the common baseline) fixes it: 607 `zmm` refs → 0, runs clean.
+  Costs AVX-512 on the box that has it, so don't pin it for CPU benchmark runs.
+  Equivalently: build on the OLDEST machine — same rule covers glibc.
+  Not wired into a pixi task yet.
+
+- [ ] **The GPU half of "one binary, multiple platforms" is a separate,
+  bigger question** — `--target-accelerator` takes one arch; a runtime
+  `load_function(asm: String)` path exists but trades away comptime
+  kernel-arg checking. Parked; start fresh.
+
+---
+
 ## Benchmarking / Profiling
 
 - [ ] **Add a deliberately-bad allocator to benchmark against** (`cpu/arena.mojo`, `accel/arena.mojo`)
@@ -612,9 +631,16 @@ epilogue/prologue ordering, _batchRun collect/epilogue bookkeeping all check out
     Worst at small batch x many streams; gone entirely at large batch. This rules out every
     hardware-level cause still standing (clocks, PCIe, CPU power would all be config-INdependent) and
     localises it to the regime where per-dispatch/queue overhead dominates compute.
-  - Leading candidate is therefore HSA queue/doorbell/stream setup, not memory placement. Possibly the
-    same root cause as the `SharedSignalPool` leak under **Upstream Bug Reports to File** — that also
-    scales with dispatch count. Worth checking whether both vanish together.
+  - **DID NOT REPRODUCE 2026-08-03 evening.** `bs=200 s=4` measured 19.2% spread in the morning sweep
+    and 1.1% that evening (969788/980598/972185); every config in that re-test was stable. So the
+    config-dependence above is NOT the driver, or not the only one — it was inferred from a single
+    sweep's spread pattern and the first re-test of a previously-bimodal config broke it.
+  - Difference between the two runs was machine state, not config: the morning sweep started from a
+    cold boot with the card idling between configs (rocm-smi reported runtime-suspend), the evening one
+    followed hours of continuous load. Suspect wake-from-suspend / first-dispatch cost rather than
+    anything about (bs, streams). Untested.
+  - Practical consequence: warm the GPU before any benchmark run and discard early iterations. Do not
+    trust a spread measured on a freshly booted machine.
   - Still untested: arena/VRAM placement per process, host thread affinity (6 threads on a 6-core
     i5-9600K). Lower priority now that the config-dependence points elsewhere.
   - **Affects `../CNNTesting`.** `bench_mojo.py` runs each config ONCE (`_run_mojo`), so every Mojo
