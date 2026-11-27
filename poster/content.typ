@@ -37,7 +37,7 @@
           #set par(leading: 0.46em, spacing: 0.30em)
           #text(size: 23pt, weight: 700)[Paul Dutton]
           #h(0.14in)
-          #text(size: 20pt, fill: MUTED)[paul.dutton\@my.utsa.edu · github.com/TheAgaveFairy]
+          #text(size: 20pt, fill: MUTED)[paul\@creativenothing.dev · github.com/TheAgaveFairy]
           #linebreak()
           #text(size: 21pt, weight: 700, fill: MOJO)[
             Open to ML systems, GPU kernel, driver, and edge-inference roles.
@@ -285,8 +285,8 @@ struct ReLU(ActivationFunction):
         #text(size: 19pt, weight: 800, fill: CRIMS)[Allocators matter sometimes]
         #linebreak()
         #text(size: 16pt)[
-          Pinned memory made training \~20% faster on CPU and
-          \~15–20% on GPU. Avoiding allocations > fancy allocators.
+          An arena made CPU training \~20% faster; pinned host
+          buffers sped GPU inference \~15–20%. Avoiding allocations > fancy allocators.
         ]
       ],
       [
@@ -311,12 +311,12 @@ struct ReLU(ActivationFunction):
         #grid(columns: (1fr, 1fr), column-gutter: 0.14in,
           align(center, stack(
             spacing: 0.06in,
-            image("figures/qr_lenet5.svg", width: 1.05in),
+            image("figures/qr_lenet5.svg", width: 0.92in),
             text(size: 12.5pt, fill: MUTED)[main],
           )),
           align(center, stack(
             spacing: 0.06in,
-            image("figures/qr_cnntest.svg", width: 1.05in),
+            image("figures/qr_cnntest.svg", width: 0.92in),
             text(size: 12.5pt, fill: MUTED)[bench],
           )),
         )

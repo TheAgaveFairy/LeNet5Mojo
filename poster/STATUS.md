@@ -91,6 +91,21 @@ print shop's fonts. Text stays vector; an equivalent PNG needs ~7200×10800.
 
 ## Still open
 
+- **Verification pass, 2026-11-26.** Every number in bands B–F and figs 1–4 was
+  re-traced to `CNNTesting/results/results.csv`, `results_rx7600.csv` +
+  `rx7600_poster_summary.txt` (branch `amd-rocm`), `KERNEL_COMPARISON.md`,
+  `MAX.md`, and `LeNet5Mojo/TODO.md`; all match. Fixed: the allocator claim
+  (the CPU ~20% was the *arena*, the GPU 15–20% was *pinned memory* on
+  inference — GPU training does not exist) and the clipped QR labels.
+  Not independently verifiable from files:
+  - "GPU clocks locked" for the RTX 3070 rows — `results.csv` predates the
+    provenance columns; the lock rests on Paul's recollection (CNNTesting TODO P0).
+  - "2.8 MB standalone binary" — no recorded measurement; rebuild and `ls -l`.
+  - The CPU ~20% arena figure is flagged "still needs re-verifying" in ideas.typ.
+- **The `bench` QR points at a private repo.** `TheAgaveFairy/CNNTesting` is
+  private, so the QR (and every "traces to CNNTesting" claim) 404s for readers.
+  Make it public or retarget the QR.
+
 - **Metal** — compiler bug, filed. Table row says `see repo`.
 - **MAX conv3d probe** — `CNNTesting/TODO.md` P0: express conv3 as a degenerate
   3D conv to see whether it reaches `dispatch_1x1x1_matmul_conv3d`. A positive

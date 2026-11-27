@@ -20,17 +20,18 @@ A high-performance LeNet-5 Convolutional Neural Network built entirely from scra
 
 ## Performance Highlights
 
-Streaming MNIST inference on an RTX 3070, full 10,000-image test set:
+Streaming MNIST inference on an RTX 3070 (fp32, GPU clocks locked), full 10,000-image test set:
 
-- **~1.47M images/sec** peak GPU throughput — the **fastest** implementation measured, edging out ONNX-RT + TensorRT (~1.42M) and clear of JAX/XLA (~1.19M), PyTorch, and ONNX Runtime CUDA
-- Even **single-stream** (no copy/compute overlap), the custom kernels hit **~1.33M img/s** — behind only their own multi-stream mode and TensorRT, and ahead of *every* other framework
-- **~1.9× the best hand-tuned MAX Engine config** (and ~12× its default graph) — hand-written Mojo kernels beat Modular's own compiler at small-CNN inference
-- **Matched accuracy** — 96.86% (9686/10000), identical to the PyTorch and JAX reference models
-- **Custom GPU kernels** written in pure Mojo (no CUDA C, cuDNN, or BLAS), supporting NVidia, AMD, and Apple
+- **Up to 1.48× faster than TensorRT below batch 512** (batch 8: 141k vs 95k img/s), and **lowest single-image latency** measured: **50.6 µs** vs 61.0 µs for TensorRT (1.21×) and 168.5 µs for PyTorch (3.3×)
+- **Tied with TensorRT at peak** — 1.46M vs 1.42M img/s; the +3.0% margin is inside the ±10% session-to-session variance, so it is not claimed as a win. Clear of JAX/XLA (1.22M), PyTorch (0.80M), and ONNX Runtime CUDA (0.78M)
+- Even **single-stream** (no copy/compute overlap), the custom kernels hit **1.33M img/s** — ahead of every framework except TensorRT
+- **Portable**: the same source runs on an **AMD RX 7600** at 1.11M img/s, 1.96× PyTorch-ROCm (1.68× single-stream), with Mojo and PyTorch agreeing image-for-image. Apple Metal is blocked on a compiler bug
+- **Matched accuracy** — 96.86% (9686/10000) on NVIDIA, identical to the PyTorch and JAX reference models
+- **Custom GPU kernels** written in pure Mojo — no CUDA C, HIP, cuDNN, or BLAS
 
 Two optimizations drove the latest jump — **fusing conv1 + activation + pool1 into one kernel** (layer1 never touches global memory) and **recasting conv3 as a batched GEMM**. See [Key GPU Optimizations](#key-gpu-optimizations) for the details.
 
-*Only the compute-only ("data resident in VRAM") variants remain ahead; see [Performance Comparison](#performance-comparison) for the full table and methodology.*
+*With inputs already resident in VRAM, JAX leads at 1.50M img/s; LeNet5Mojo does not have a resident mode yet. See [Performance Comparison](#performance-comparison) for the full tables and methodology.*
 
 ## Architecture
 
@@ -54,25 +55,29 @@ The 84-unit penultimate layer and some skip connections from the original LeCun 
 ## Project Structure
 
 ```
-├── main.mojo              # Entry point: CPU train + test, GPU inference, logging
-├── constants.mojo         # Architecture dims, dtype, compile-time activation selection
-├── activation_fn.mojo     # ActivationFunction trait + ReLU, GELU, GELUTanh, GELUFast, Sigmoid, Tanh
-├── dataloader.mojo        # MNISTDataRepository, MNISTDataView (SoA arena view)
-├── image.mojo             # Image struct: raw UInt8 pixels + per-image normalization
-├── resultlogger.mojo      # CSV logging for training epochs and inference results
-├── cpu/
-│   ├── arena.mojo         # CPUBumpArenaAllocator, CPUSystemAllocator + unit tests
-│   ├── model.mojo         # LeNet5 and Feature structs (weights + intermediates)
-│   └── ops.mojo           # Forward, backward, parallel training, parallel testing
-├── accel/
-│   ├── arena.mojo         # GPUBumpArenaAllocator, GPUSystemAllocator + unit tests
-│   ├── feature.mojo       # FeatureGPU / FeatureGPUBuffers (per-image intermediate buffers)
-│   ├── model.mojo         # LeNet5GPU, LeNet5GPUBuffers, DeviceSession
-│   └── ops.mojo           # All GPU kernels and the batched inference pipeline
+├── src/
+│   ├── main.mojo          # Entry point: CPU train + test, GPU inference, logging
+│   ├── cli.mojo           # Runtime flags (--num-streams, --bench-only, ...)
+│   ├── constants.mojo     # Architecture dims, dtype, compile-time activation selection
+│   ├── activation_fn.mojo # ActivationFunction trait + ReLU, GELU, GELUTanh, GELUFast, Sigmoid, Tanh
+│   ├── dataloader.mojo    # MNISTDataRepository, MNISTDataView (SoA arena view)
+│   ├── image.mojo         # Image struct: raw UInt8 pixels + per-image normalization
+│   ├── resultlogger.mojo  # CSV logging for training epochs and inference results
+│   ├── cpu/
+│   │   ├── arena.mojo     # CPUBumpArenaAllocator, CPUSystemAllocator + unit tests
+│   │   ├── model.mojo     # LeNet5 and Feature structs (weights + intermediates)
+│   │   └── ops.mojo       # Forward, backward, parallel training, parallel testing
+│   └── accel/
+│       ├── arena.mojo     # GPUBumpArenaAllocator, GPUSystemAllocator + unit tests
+│       ├── feature.mojo   # FeatureGPU / FeatureGPUBuffers (per-image intermediate buffers)
+│       ├── model.mojo     # LeNet5GPU, LeNet5GPUBuffers, DeviceSession
+│       └── ops.mojo       # All GPU kernels and the batched inference pipeline
+├── tests/                 # Op tests, batch-size tests, standalone GEMM bench, GPU profiling
+├── scripts/               # GPU clock locking, grid search, sweeps
+├── docs/                  # Design notes: GPU pipeline, benchmarking, activation tuning
 ├── data/
 │   └── *-ubyte            # MNIST binary files (standard IDX format)
-├── models/
-│   └── model*.dat         # Pre-trained model weights
+├── models/                # Trained weights land here (gitignored; see models/README.md)
 └── poster/
     ├── poster.pdf         # Project poster (start here)
     ├── *.typ              # Typst source; build with `python build.py`
@@ -137,7 +142,7 @@ Kernels use `LayoutTensor` for type-safe indexing and `comptime for` for inner-l
 
 ### Key GPU Optimizations
 
-Two rewrites account for most of the recent throughput gain from ~1.17M to ~1.47M img/s.
+Two rewrites account for most of the recent throughput gain, to a ~1.46M img/s peak.
 
 #### Conv1 + activation + pool1, fused into one kernel
 
@@ -173,15 +178,16 @@ Recasting conv3 as a GEMM also feeds larger, better-shaped launches to the GPU, 
 
 ### Prerequisites
 
-- [Pixi](https://prefix.dev/) package manager (manages Mojo + dependencies)
+- [Pixi](https://prefix.dev/) package manager (manages Mojo + dependencies). Use a recent pixi: older ones (e.g. v0.61) cannot read `pixi.lock`, silently re-solve to a newer Mojo than the code targets, and the build then fails. Run `pixi self-update` if `pixi install --locked` errors.
 - NVIDIA or AMD or Apple GPU (optional — CPU-only works without one)
 - MNIST dataset files in `data/` (standard IDX format, download from [Yann LeCun's site](http://yann.lecun.com/exdb/mnist/))
 
 ### Installation
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/TheAgaveFairy/LeNet5Mojo.git
 cd LeNet5Mojo
+pixi install --locked
 pixi shell
 ```
 
@@ -209,7 +215,7 @@ pixi run formatall
 
 ## Performance Comparison
 
-Benchmarked against PyTorch, JAX, ONNX Runtime (incl. TensorRT), MAX Engine, and NumPy on the full **10,000-image MNIST test set**. Throughput is the median over the set — **higher is better**.
+Benchmarked against PyTorch, JAX, ONNX Runtime (incl. TensorRT), MAX Engine, and NumPy on the full **10,000-image MNIST test set** with the same fp32 weights. Throughput is the median over repeated passes — **higher is better**. The harness and raw results live in a companion benchmark repo; every number below is from its latest RTX 3070 run (the same data the [poster](poster/poster.pdf) uses).
 
 ### GPU — streaming inference (peak throughput)
 
@@ -217,44 +223,56 @@ Each row is that framework's best throughput across the batch-size sweep.
 
 | Framework | Backend | Throughput (img/s) | Accuracy | Config |
 |-----------|---------|-------------------:|:--------:|--------|
-| **LeNet5Mojo** | **GPU, 12 streams** | **1,472,445** | **96.86%** | bs=125×12 |
-| ONNX-RT + TensorRT | GPU | 1,417,848 | 96.48% | bs=2048 |
-| **LeNet5Mojo** | **GPU, single stream** | **1,325,875** | **96.86%** | bs=2000 |
-| JAX | XLA | 1,187,210 | 96.86% | bs=2048 |
-| PyTorch (eager) | CUDA | 791,256 | 96.86% | bs=2048 |
-| MAX Engine (FC-RS + resident pool) | GPU | 789,986 | 96.86%* | bs=2048 |
-| ONNX Runtime | GPU | 782,434 | 96.48% | bs=2048 |
-| MAX Engine (default graph) | GPU | 123,919 | 96.86%* | bs=2048 |
+| **LeNet5Mojo** | **GPU, 12 streams** | **1,458,512** | **96.86%** | bs=200×12 |
+| ONNX-RT + TensorRT | GPU | 1,415,433 | 96.48% | bs=2048 |
+| **LeNet5Mojo** | **GPU, single stream** | **1,334,828** | **96.86%** | bs=2000 |
+| JAX | XLA | 1,223,198 | 96.86% | bs=2048 |
+| PyTorch (eager) | CUDA | 799,863 | 96.86% | bs=2048 |
+| ONNX Runtime | GPU | 783,990 | 96.48% | bs=2048 |
 
-*LeNet5Mojo, PyTorch, and JAX all reach 96.86% (9686/10000); the ONNX-exported model lands at 96.48%. \* MAX Engine's large-batch runs drop the remainder images (accuracy over a smaller denominator).*
+*LeNet5Mojo, PyTorch, and JAX all reach 96.86% (9686/10000); the ONNX-exported model lands at 96.48%.* The top two rows are a statistical tie: +3.0% is inside the ±10% session-to-session variance observed even with clocks locked. The real separation is at small batch, where Mojo leads TensorRT by up to **1.48×** (batch 8: 141,105 vs 95,170 img/s).
+
+**MAX Engine is deliberately not in this table.** Its tuned GPU configuration (FCRS filter layout + reshaped pools) swung 3.4× between sessions at the same MAX version (~790k → ~253k img/s), so no single end-to-end number is trustworthy yet. The kernel-level comparison is stable and more informative: per image, Mojo's kernels take **~1,425 ns**, MAX's cuDNN path **~1,670 ns**, and MAX's default graph **~5,966 ns** — 68% of which is a single conv3 launch whose 1×1 output leaves one active thread per block. Expressing conv3 as a matmul inside the MAX graph recovered **3.0×** (174k → 518k img/s).
 
 ### GPU — single-image latency (batch size 1)
 
-Peak throughput is a *saturation* metric (large batch, pipeline full). Single-request **latency** is the orthogonal axis: one image, `batch_size=1`, nothing to hide launch overhead behind. Time per image = 1000 / (bs=1 throughput):
+Peak throughput is a *saturation* metric (large batch, pipeline full). Single-request **latency** is the orthogonal axis: one image, `batch_size=1`, nothing to hide launch overhead behind. Time per image = 1 / (bs=1 throughput):
 
 | Framework | Backend | Latency per image |
 |-----------|---------|------------------:|
-| **LeNet5Mojo** (single stream) | GPU | **~49 µs** |
-| ONNX-RT + TensorRT | GPU | ~61 µs |
-| ONNX Runtime | GPU | ~126 µs |
-| PyTorch (eager) | CUDA | ~183 µs |
-| JAX | XLA | ~370 µs |
-| MAX Engine (FC-RS + resident pool) | GPU | ~614 µs |
-| MAX Engine (default graph) | GPU | ~1,553 µs |
+| **LeNet5Mojo** (single stream) | GPU | **50.6 µs** |
+| ONNX-RT + TensorRT | GPU | 61.0 µs |
+| ONNX Runtime | GPU | 126.0 µs |
+| PyTorch (eager) | CUDA | 168.5 µs |
+| MAX Engine (FCRS + reshaped pools) | GPU | 269.1 µs |
+| JAX | XLA | 327.5 µs |
+| MAX Engine (default graph) | GPU | ~1,577 µs |
 
-LeNet5Mojo also has the **lowest single-image latency** in the set — the same lean, launch-overhead-light pipeline that wins throughput also wins responsiveness.
+LeNet5Mojo has the **lowest single-image latency** in the set — the same lean, launch-overhead-light pipeline that keeps up at peak also wins responsiveness.
+
+### AMD — RX 7600 (ROCm)
+
+The same Mojo source, recompiled for `gfx1102` — no HIP, no per-vendor branches:
+
+| | Throughput (img/s) | Accuracy |
+|---|---:|:---:|
+| **LeNet5Mojo** (3 streams) | **1,112,286** | 9682/10000 |
+| LeNet5Mojo (single stream) | 951,898 | 9682/10000 |
+| PyTorch (ROCm, best of 5 modes) | 568,205 | 9682/10000 |
+
+Mojo and PyTorch load the same weights file and agree **image for image**. 1.96× multi-stream, **1.68× stream-for-stream**. AMD clocks were not locked; both series ran in the same session, so the ratios hold but absolute numbers carry boost variance. *(The AMD box used a differently trained weights file than the NVIDIA box, so accuracy is not comparable across GPUs.)*
 
 **Methodology / fairness notes:**
 - **Streaming scenario** (the apples-to-apples default): images are copied host→device *inside* the timed loop. LeNet5Mojo uploads raw `uint8` and normalizes on-GPU — ~4× less PCIe traffic than the libraries' pre-normalized `fp32`.
-- *12 streams* = ping-pong overlap of the H2D copy with compute; *single stream* matches the single-stream libraries for a stricter comparison — and, at ~1.33M img/s, still beats every framework except TensorRT.
-- Even the plain single-stream run tops PyTorch, ONNX Runtime, and JAX; the fused conv1+pool1 and GEMM-based conv3/FC are what push the multi-stream peak past TensorRT.
-- **Compute-only** ("dataset already resident in VRAM") numbers are tracked separately and remain the only configs ahead of LeNet5Mojo's streaming peak. A resident mode for LeNet5Mojo is in progress; until then it isn't in the headline table.
+- *12 streams* = ping-pong overlap of the H2D copy with compute; *single stream* matches the single-stream libraries for a stricter comparison. "Batch" for the multi-stream rows is the effective batch (`batch_size × num_streams`, images in flight).
+- NVIDIA runs used `bench-locked` (GPU clocks pinned). Those result rows predate the harness's provenance columns, so the lock state is recorded in the run notes rather than stamped per row.
+- **Compute-only** ("dataset already resident in VRAM") numbers are tracked separately; there JAX leads at 1.50M img/s. A resident mode for LeNet5Mojo is planned; until then it isn't in the headline table.
 
 ### CPU
 
-The CPU path (`parallelize` + SIMD, hand-rolled) reaches **~28k img/s** — honest about it: this trails vendor-tuned CPU backends like ONNX Runtime / MLAS (~436k img/s peak), MAX Engine (~185k), and PyTorch (~125k). CPU was not the optimization focus; the GPU kernels are where the work went.
+The CPU path (`parallelize` + SIMD, hand-rolled) reaches **~28k img/s** — honest about it: this trails vendor-tuned CPU backends like ONNX Runtime / MLAS (~470k img/s peak), MAX Engine (~213k), and PyTorch (~163k). CPU was not the optimization focus; the GPU kernels are where the work went.
 
-*AMD Ryzen 7600X / NVidia RTX 3070 8GB. `fp32`, full 10k test set, median of repeated runs.*
+*NVIDIA rows: RTX 3070 8GB. AMD rows: RX 7600 + Intel i5-9600K. `fp32`, full 10k test set.*
 
 ## Current Limitations
 

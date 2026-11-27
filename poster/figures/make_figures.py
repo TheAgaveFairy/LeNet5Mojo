@@ -274,7 +274,7 @@ def fig3():
 
 
 # ============================================================== FIGURE 4 ====
-# SOURCE: LeNet5Mojo/TODO.md:552 stream re-sweep, batch 100, clocks locked.
+# SOURCE: LeNet5Mojo/TODO.md ("RE-SWEPT 2026-07-02") stream re-sweep, batch 100, clocks locked.
 F4_X = [1, 5, 8, 12, 16]
 F4_Y = [None, 1.20e6, 1.30e6, 1.42e6, 1.42e6]
 

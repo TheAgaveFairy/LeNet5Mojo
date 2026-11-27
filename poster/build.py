@@ -15,13 +15,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 TYPST = "/snap/bin/typst"
-# segno for the QR codes is not in the pixi env; build.py points at wherever it
-# was unpacked. Override with QR_PYTHONPATH if that moves.
-QR_PYTHONPATH = os.environ.get(
-    "QR_PYTHONPATH",
-    "/tmp/claude-1000/-home-paul-dutton-Documents-GitHub-LeNet5Mojo/"
-    "370af679-93ba-45d0-9b79-75fe364b6ef4/scratchpad/pylibs",
-)
+# segno (QR codes) is not in the pixi env. The QR SVGs are committed, so this
+# only matters when regenerating them: delete figures/qr_*.svg and either set
+# QR_PYTHONPATH to a directory containing segno, or run
+#   pixi exec -s segno -s python python figures/make_qr.py
+QR_PYTHONPATH = os.environ.get("QR_PYTHONPATH", "")
 
 
 def run(cmd, **kw):
