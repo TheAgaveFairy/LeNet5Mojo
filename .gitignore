@@ -19,7 +19,10 @@ batchedops.mojo
 
 ignoreme/
 models/
-poster/
+# poster: track source + final PDF, not scratch renders or the stale plan
+poster/build/
+poster/PLAN.md
+!poster/poster.pdf
 results/
 *.save
 *.bak

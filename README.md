@@ -2,6 +2,14 @@
 
 A high-performance LeNet-5 Convolutional Neural Network built entirely from scratch in [Mojo🔥](https://www.modular.com/mojo) with custom CPU and GPU kernels — featuring compile-time swappable activation functions, custom arena allocators, and the Modular/MAX ecosystem throughout.
 
+## 📄 Project Poster
+
+**The quickest way into this project is the one-page poster: [`poster/poster.pdf`](poster/poster.pdf).** It covers the benchmarks, kernel design, portability results, and MAX findings.
+
+[![LeNet-5 in Pure Mojo: project poster (click for the full-resolution PDF)](poster/poster-preview.png)](poster/poster.pdf)
+
+*Click the image for the full-resolution vector PDF. Typst source and figure scripts are in [`poster/`](poster/).*
+
 ## Project Motivation
 
 - **Learn CNNs from first principles** — every component hand-rolled: forward pass, backpropagation, weight updates, cross-entropy loss, softmax
@@ -63,8 +71,12 @@ The 84-unit penultimate layer and some skip connections from the original LeCun 
 │   └── ops.mojo           # All GPU kernels and the batched inference pipeline
 ├── data/
 │   └── *-ubyte            # MNIST binary files (standard IDX format)
-└── models/
-    └── model*.dat         # Pre-trained model weights
+├── models/
+│   └── model*.dat         # Pre-trained model weights
+└── poster/
+    ├── poster.pdf         # Project poster (start here)
+    ├── *.typ              # Typst source; build with `python build.py`
+    └── figures/           # Chart + QR generation scripts
 ```
 
 ## Technical Implementation
